@@ -9,7 +9,7 @@
 | 항목 | 상태 |
 | --- | --- |
 | 모듈 구현 및 연결 (질문 생성 → 응답 → 추출 → 판정 → 공개 → State 반영) | 완료 |
-| 단위·통합 테스트 | 721개 통과 (LLM 호출은 가짜 client 사용) |
+| 단위·통합 테스트 | 724개 통과 (LLM 호출은 가짜 client 사용) |
 | 실행 갈래 | C0(Defender 없음), C1(공개 전 Defender), C1S(무상태 Defender 대조군) |
 | 위험 계산 백엔드 | `risk_defender`(이유진 파트, 기본) / `ontology`(D1 Stage 3 계층 + D1 Stage 11 Defender) |
 | Privacy Coverage 기록 (D1 Stage 9) | 턴별 판정과 세션 요약을 trace에 기록 |
@@ -102,7 +102,7 @@ python -m adapters.prepare_reference    # 기준 집단: 원본 300명 + 합성 
 
 ```bash
 python -m core.llm_client               # 모델 응답이 오는지 확인
-python -m pytest -q                     # 721 passed
+python -m pytest -q                     # 724 passed
 python -m ontology                      # 기준 집단이 온톨로지로 전부 풀리는지 점검 (LLM 호출 없음)
 ```
 

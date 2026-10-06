@@ -230,7 +230,7 @@ def render(report: RunReport) -> str:
         ["질문 보정 (자료 범위 안내 / QI 고른 배분)",
          f"{'켜짐' if (config.get('fuzzer') or {}).get('target_scope_note_sha256') else '꺼짐 또는 기록 없음'} / "
          f"{_dash((config.get('fuzzer') or {}).get('balance_qis'))}"],
-        ["끝난 세션 / 턴", f"{len(sessions)} / {sum(s.turns for s in sessions)}"],
+        ["끝난 세션 / 턴", f"{len(sessions)} / {sum(s.turns for s in sessions)} (오류로 끝난 대상 포함)"],
         ["정답 대조(k_val)", "있음" if report.validated else "없음 (python -m validation 실행 전)"],
     ])
     if report.unfinished_turns:
@@ -238,6 +238,15 @@ def render(report: RunReport) -> str:
     if report.superseded:
         lines += ["", f"참고: 같은 대상·갈래를 다시 돌린 기록이 있어 앞의 세션 {report.superseded}개는 집계에서 뺐습니다 "
                   "(대상·갈래마다 마지막으로 끝난 세션만 씁니다)."]
+    broken = [s for s in sessions if s.stop_reason == "LLM_ERROR"]
+    if broken:
+        lines += ["", f"주의: LLM 호출 오류로 중간에 끝난 세션이 {len(broken)}개 있습니다 (API 한도 초과, 연결 실패 등): "
+                  + ", ".join(f"{s.target_id}/{s.arm}({s.turns}턴)" for s in broken)
+                  + ". 턴이 모자란 결과이므로 해당 대상의 세션은 아래 표에서 모두 뺐습니다 "
+                  "(같은 질문을 받은 다른 갈래 포함). "
+                  "원인을 해결한 뒤 같은 명령에 --resume을 붙여 다시 돌리면 이 대상들만 다시 실행합니다."]
+        incomplete = {s.target_id for s in broken}
+        sessions = [s for s in sessions if s.target_id not in incomplete]
     lines += _outcome_section(report)
 
     lines += ["", "## 갈래별 요약", ""]
@@ -331,7 +340,8 @@ def _violated(session: SessionStats, validated: bool) -> bool:
 
 def _outcome_section(report: RunReport) -> list[str]:
     """대상별로 갈래의 결과를 나란히 놓고, 갈래 조합별 대상 수를 센다. 대상이 둘 이상일 때만 만든다."""
-    sessions = [s for s in report.sessions if s.session_key is None]
+    incomplete = {s.target_id for s in report.sessions if s.stop_reason == "LLM_ERROR"}
+    sessions = [s for s in report.sessions if s.session_key is None and s.target_id not in incomplete]
     targets = _ordered(s.target_id for s in sessions)
     arms = _ordered(s.arm for s in sessions)
     if len(targets) < 2:

@@ -45,7 +45,7 @@ from ontology.normalizer import OntologyNormalizer
 from orchestrator.release_gate import Arm, Condition, GateConfig, ObservationNormalizer, ReleaseGate
 from orchestrator.rewriter import ResponseRewriter, RewriterConfig
 from orchestrator.run_log import RunLogger
-from orchestrator.session import SessionParts, SessionResult, SessionRunner, TurnRecord
+from orchestrator.session import SessionParts, SessionResult, SessionRunner, StopReason, TurnRecord
 from qi_extractor.extractor import ExtractorConfig, QIExtractor
 from target_llm.responder import TargetConfig, TargetResponder
 from target_llm.retriever import Retriever
@@ -264,12 +264,15 @@ def completed_targets(trace_path: Path, arm_labels: Sequence[str]) -> set[str]:
     """
     input : trace_path (이전 실행의 trace.jsonl. 없어도 된다), arm_labels (이번에 돌릴 갈래)
     output : 그 갈래들이 모두 끝까지 기록된(session_end가 있는) 대상 ID
+
+    LLM 오류로 끝난 세션(API 한도 초과, 연결 실패 등)은 끝난 것으로 치지 않는다. 그 대상은 다시 돌린다.
     """
     if not Path(trace_path).exists():
         return set()
     finished: dict[str, set[str]] = {}
     for session in iter_sessions(trace_path):
-        if session.finished and session.head.get("session_key") is None:
+        if session.finished and session.head.get("session_key") is None \
+                and session.end.get("stop_reason") != StopReason.LLM_ERROR.value:
             finished.setdefault(session.head["target_id"], set()).add(arm_of(session.head))
     return {target_id for target_id, arms in finished.items() if set(arm_labels) <= arms}
 
