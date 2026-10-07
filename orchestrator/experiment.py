@@ -80,6 +80,8 @@ class ExperimentConfig:
                          중간에 멈춘 대상은 첫 갈래부터 다시 돌린다 (집계는 대상·갈래마다 마지막으로 끝난 세션만 쓴다)
     stop_on_violation  → True면 실행 중 k가 1 <= k < k_req가 된 턴에서 세션을 끝낸다 (그 뒤 턴의 LLM 호출을 아낀다).
                          paired_questions에서는 질문을 만드는 첫 갈래에만 적용하고, 나머지 갈래는 그 질문들을 끝까지 받는다
+    stop_run_on_llm_error → 세션이 LLM 호출 오류로 끝나면 남은 갈래·대상을 돌리지 않고 실행을 멈출지 (기본 True).
+                         원인을 해결한 뒤 --resume으로 이어 돌린다
     fuzzer             → 질문 생성 설정 (자료 범위 안내, 변형 결과 검사, QI 고른 배분). None이면 기본값
     target / extractor / rewriter → 각 LLM 호출의 prompt 버전·temperature
     output_root        → 결과를 둘 상위 폴더 (기본 <프로젝트>/runs)
@@ -97,6 +99,7 @@ class ExperimentConfig:
     paired_questions: bool = False
     resume: bool = False
     stop_on_violation: bool = False
+    stop_run_on_llm_error: bool = True
     fuzzer: FuzzerConfig | None = None
     target: TargetConfig = TargetConfig()
     extractor: ExtractorConfig = ExtractorConfig()
@@ -261,6 +264,9 @@ def run_experiment(
             results.append(result)
             if lead is None:
                 lead = result
+            if result.stop_reason is StopReason.LLM_ERROR and config.stop_run_on_llm_error:
+                # API 한도 초과·연결 실패는 다음 대상에서도 그대로 실패한다. 0턴짜리 세션을 줄줄이 남기지 않고 멈춘다
+                return results
     return results
 
 

@@ -28,6 +28,7 @@ from normalizer.normalizer import NormalizedObservation
 from orchestrator.coverage import CoverageEvent, CoverageRegistry
 from orchestrator.disclosure import DisclosureLedger, qi_relation, state_id
 from orchestrator.release_gate import Arm, Condition, ObservationNormalizer, ReleaseDecision, ReleaseGate
+from orchestrator.utility import TurnUtility, turn_utility
 from qi_extractor.extractor import ExtractionError, QIExtractor
 from qi_extractor.schema import ExtractionResult
 from target_llm.responder import TargetOutput, TargetResponder
@@ -94,6 +95,14 @@ class TurnRecord:
     def state_id_after(self) -> str:
         return state_id(self.commit.state_after)
 
+    @property
+    def utility(self) -> TurnUtility:
+        """원 응답 대비 공개 응답의 유용성 지표 (orchestrator/utility.py). Defender가 손대지 않았으면 유사도 1.0이다."""
+        return turn_utility(
+            self.target.raw_candidate_response, self.release.released_response,
+            (obs.attribute for obs in self.raw_normalized if obs.is_mapped),
+            (obs.attribute for obs in self.release.released_observations if obs.is_mapped))
+
     def to_trace_dict(self) -> dict[str, Any]:
         return {
             "turn": self.turn,
@@ -103,6 +112,7 @@ class TurnRecord:
             "raw_extraction_error": self.raw_extraction_error,
             "raw_normalized": [obs.to_log_dict() for obs in self.raw_normalized],
             "release": self.release.to_log_dict(),
+            "utility": self.utility.to_log_dict(),
             "commit": self.commit.to_log_dict(),
             "disclosed_before": self.disclosed_before,
             "disclosed_after": self.disclosed_after,

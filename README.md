@@ -9,7 +9,7 @@
 | 항목 | 상태 |
 | --- | --- |
 | 모듈 구현 및 연결 (질문 생성 → 응답 → 추출 → 판정 → 공개 → State 반영) | 완료 |
-| 단위·통합 테스트 | 747개 통과 (LLM 호출은 가짜 client 사용) |
+| 단위·통합 테스트 | 768개 통과 (LLM 호출은 가짜 client 사용) |
 | 실행 갈래 | C0(Defender 없음), C1(공개 전 Defender), C1S(무상태 Defender 대조군) |
 | 위험 계산 백엔드 | `risk_defender`(이유진 파트, 기본) / `ontology`(D1 Stage 3 계층 + D1 Stage 11 Defender) |
 | Privacy Coverage 기록 (D1 Stage 9) | 턴별 판정과 세션 요약을 trace에 기록 |
@@ -18,6 +18,8 @@
 | Exact Replay (D1 Stage 13) | `python -m orchestrator.replay` (보관된 질문을 새 세션에서 그대로 재실행) |
 | 실행 집계 | `python -m orchestrator.report` (대상이 여럿이면 대상별 표와 갈래별 위반 조합 포함) |
 | 기록된 응답으로 다시 계산 | `python -m orchestrator.recompute` (코드를 고친 뒤 LLM을 거의 부르지 않고 결과 재확인) |
+| 유용성 지표 | 원 응답 대비 공개 응답의 유사도·길이비·QI 유지율 (`orchestrator/utility.py`, LLM 호출 없음). 로그의 `utility_score`에 유사도를 기록 |
+| 실행 비교와 짝 검정 | `python -m orchestrator.report … --compare 파일` (설정별 비교표, exact McNemar) |
 | 대상 선정 | `python -m validation.select_targets` (사람 라벨로 층을 나눠 추첨) |
 | C2·C3 (경량 언러닝 규칙 생성·주입) | 미구현 |
 | 변형 재공격 (D1 Stage 14), Interesting 질문의 Seed 승격 | 미구현 |
@@ -103,7 +105,7 @@ python -m adapters.prepare_reference    # 기준 집단: 원본 300명 + 합성 
 
 ```bash
 python -m core.llm_client               # 모델 응답이 오는지 확인
-python -m pytest -q                     # 747 passed
+python -m pytest -q                     # 768 passed
 python -m ontology                      # 기준 집단이 온톨로지로 전부 풀리는지 점검 (LLM 호출 없음)
 ```
 
@@ -133,6 +135,7 @@ python -m orchestrator --target pers1 --arms C0 C1 C1S --backend ontology --turn
 | `--targets-file` | 없음 | 대상 목록 파일(`python -m validation.select_targets` 결과). 주면 `--target` 대신 쓴다 |
 | `--resume` | 꺼짐 | 같은 `--experiment-id`의 이전 기록에서 모든 갈래가 끝난 대상은 건너뛰고 나머지만 돌린다 |
 | `--stop-on-violation` | 꺼짐 | 실행 중 k가 k_req 아래(1 이상)로 내려간 턴에서 그 대상의 질문을 끝낸다. k가 0이 된 경우에는 끝내지 않는다 |
+| (자동) | 켜짐 | 세션이 LLM 호출 오류(API 한도 초과 등)로 끝나면 남은 대상을 돌리지 않고 멈춘다. 원인을 해결한 뒤 `--resume`으로 이어 돌린다 |
 | `--no-residual-check` | 꺼짐 | 고쳐 쓴 응답에 지운 값의 근거 문구가 남았는지 검사하지 않는다 |
 | `--paired` | 꺼짐 | 대상마다 첫 갈래가 만든 질문 순서를 나머지 갈래에 그대로 던진다. 갈래를 비교할 때는 켜는 것을 권장 |
 | `--plain-mutation` | 꺼짐 | 질문 생성의 보정(Target 자료 범위 안내, 변형 결과의 자료 출처 검사, QI 고른 배분)을 끈다. 이전 동작과 비교할 때만 사용 |
@@ -167,25 +170,49 @@ python -m orchestrator.report run_multi10 --targets-file runs/target_selection.j
 
 **비용.** `--paired`에서는 대상 1명에 질문 생성·Target·추출이 턴마다 한 번씩이라 12턴이면 약 36회이고, Defender가 개입한 턴마다 재작성과 재추출이 더 듭니다. 실행을 시작할 때 예상 호출 수가 출력됩니다.
 
-### 코드를 고친 뒤: 다시 돌리지 않고 다시 계산하기
+### 이미 돌린 실행을 다시 쓰기: 다시 계산, 설정 비교, 유용성
 
-정규화 규칙, 직업 대응표, 추출 검증, Defender 판정을 고쳤을 때는 실험을 새로 돌릴 필요가 없습니다. 원래 실행의 trace에 질문, Target 원 응답, 추출기 출력 원문이 남아 있으므로 그것을 그대로 넣어 지금 코드로 다시 계산합니다.
+LLM 호출의 대부분은 질문 생성, Target 응답, 원 응답 추출에 듭니다. 이 셋은 trace에 그대로 남아 있으므로, 그 뒤 단계(정규화, 위험 계산, Defender 판정)만 바꾸는 시험은 새로 돌리지 않고 기록을 다시 넣어 계산합니다.
 
 ```bash
-python -m orchestrator.recompute --source run_multi10            # runs/run_multi10__recomputed/ 에 저장
-python -m validation run_multi10__recomputed
-python -m orchestrator.report run_multi10__recomputed --targets-file runs/target_selection.json
+# 1) 코드를 고친 뒤 같은 설정으로 다시 계산
+python -m orchestrator.recompute --source run_multi10
+
+# 2) 같은 대화에 다른 기준을 적용 (결과 폴더 이름에 바꾼 설정이 붙는다)
+python -m orchestrator.recompute --source run_multi10 --threshold 4        # k_req 5  → run_multi10__recomputed_t4
+python -m orchestrator.recompute --source run_multi10 --threshold 9        # k_req 10 → …_t9
+python -m orchestrator.recompute --source run_multi10 --min-confidence 4   # → …_c4
+python -m orchestrator.recompute --source run_multi10 --backend risk_defender   # → …_rd
+
+# 3) 정답 대조 후 한 표로 비교
+python -m validation run_multi10__recomputed run_multi10__recomputed_t4 run_multi10__recomputed_t9
+python -m orchestrator.report run_multi10__recomputed run_multi10__recomputed_t4 run_multi10__recomputed_t9 \
+    --compare runs/comparison.md
 ```
 
-| | 새로 실행 | 다시 계산 | 다시 계산 `--offline` |
-| --- | --- | --- | --- |
-| 질문 생성, Target, 원 응답 추출 | LLM 호출 | 기록 사용 | 기록 사용 |
-| 정규화, 위험 계산, Defender 판정 | 지금 코드 | 지금 코드 | 지금 코드 |
-| 재작성과 재추출 (Defender가 개입한 턴) | LLM 호출 | LLM 호출 | 거절로 처리 |
+**LLM을 얼마나 부르는가.** 재작성 결과와 고쳐 쓴 응답의 재추출 출력도 trace에 남기므로, 같은 지시가 다시 나오면 그것도 기록을 씁니다. 기록에 없는 경우에만 부릅니다.
 
-10명 × 12턴 실행 기준으로 새 실행은 LLM을 약 380회 부르고, 다시 계산은 Defender가 개입한 턴만큼(약 20회) 부릅니다. `--offline`은 한 번도 부르지 않지만 C1에서 고쳐 써야 할 턴을 통째로 막은 것으로 계산하므로 C1의 k가 실제보다 크게 나옵니다. C0와 C1S의 결과는 영향이 없습니다.
+| 상황 | LLM 호출 |
+| --- | --- |
+| 이 기능이 들어간 뒤의 실행을 같은 설정으로 다시 계산 | 0회 |
+| 그 전 실행(재추출 출력이 trace에 없음)을 다시 계산 | Defender가 개입한 턴의 재추출만. 10명 × 12턴 기준 약 20회 |
+| 설정을 바꿔 Defender의 판정이 달라진 턴 | 그 턴의 재작성 + 재추출 |
+| `--offline` | 0회. 기록에 없는 재작성·재추출이 필요한 턴은 거절로 처리하므로 C1이 실제보다 보수적으로 나온다. C0는 영향 없음 |
 
-질문 생성(Fuzzer 프롬프트, 변형 검사)이나 Target 프롬프트를 바꿨을 때는 질문과 응답 자체가 달라지므로 새로 돌려야 합니다.
+참고로 10명 × 12턴을 새로 돌리면 약 380회입니다. 질문 생성(Fuzzer 프롬프트, 변형 검사)이나 Target 프롬프트를 바꿨을 때는 질문과 응답 자체가 달라지므로 새로 돌려야 합니다.
+
+**유용성 지표.** Defender가 응답을 고친 대가를 LLM 없이 잽니다. `report.md`의 "유용성" 절에 갈래별로 나옵니다.
+
+| 지표 | 뜻 |
+| --- | --- |
+| 유사도 | 원 응답과 공개 응답의 글자 3-gram 코사인 유사도 (0~1). 그대로 공개했으면 1.0. `experiment_log.csv`의 `utility_score` |
+| 길이비 | 공개 응답 길이 / 원 응답 길이 |
+| QI 유지율 | 원 응답에서 표준 값으로 풀린 QI 종류 중 공개 응답에 남은 비율 |
+| 바닥값 | 서로 다른 질문에 대한 원 응답끼리의 평균 유사도. 유사도가 이보다 낮으면 무관한 답 수준 |
+
+유사도는 글자 겹침을 재는 값이라 뜻이 보존됐는지를 직접 말해 주지 않습니다. 9월 PoC 보고서가 임베딩 유사도를 바닥값과 비교해 상대 판정만 한 것과 같은 한계이며, 절대적인 유용성 평가(사람 평가, LLM 판정)는 하지 않았습니다.
+
+**짝 검정.** 대상이 둘 이상이면 갈래 쌍마다 같은 대상에서 위반 여부가 어떻게 갈렸는지와 exact McNemar p값을 냅니다. 대상 10명에서는 갈린 대상이 3~4명이라 p가 0.125~0.25로 나옵니다. 차이가 없다는 뜻이 아니라 표본이 모자라다는 뜻입니다.
 
 ### 질문이 Target에 맞도록 하는 장치
 
@@ -287,6 +314,7 @@ python -m adapters.check_fuzzer                 # Seed 선택과 두 턴 변형
 | 재작성 뒤 잔여 단서 | 지운 값의 근거 문구가 글자 그대로 남으면 다시 고침 | 재추출이 놓친 인용문을 막기 위함. 한 문구가 지울 값과 남길 값의 근거를 겸하면 남길 값의 근거도 빠진다. 표현을 바꿔 남긴 단서는 잡지 못한다 |
 | 두 구간에 걸친 나이 | 미해석 | "30대 후반~40대 초반", "25-32세"처럼 10년 구간 둘에 걸친 추정은 State에 넣지 않는다. 10명 실행에서 8명에게 나왔다. 값 하나에 node 하나만 두는 구조라서이며, 넣으려면 State 형식을 바꿔야 한다 |
 | 관계 상태 계층 | 6개 범주가 서로 무관 | 이혼한 사람을 "현재 독신"이라고 한 답이 틀린 값(SINGLE)으로 들어간다. "배우자 없음" 같은 묶음 단계를 둘지 D1 계층 담당과 결정 필요 |
+| 추출기 출력 해석 | 전체 JSON이 깨져도 읽히는 항목은 건짐 | 근거 문구 안의 따옴표 등으로 한 항목이 깨진 경우. 읽히지 않는 항목의 관찰은 잃는다 |
 | 검증의 범위 | State에 들어간 QI만 | 정규화하지 못한 공개분은 `k_val`에도 반영되지 않음 |
 
 ## 브랜치와 커밋 규칙

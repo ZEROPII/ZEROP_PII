@@ -52,25 +52,71 @@ def k_path(result):
 
 # ── 다시 계산 ─────────────────────────────────────────────
 
-def test_recompute_reproduces_the_run_without_target_or_mutation_calls(tmp_path, registry):
+def test_offline_recompute_reproduces_every_arm_without_any_llm_call(tmp_path, registry):
+    """원 응답 추출, 재작성, 고쳐 쓴 응답의 재추출이 모두 기록에 있다. 설정이 같으면 한 번도 부르지 않고 같은 결과가 나온다."""
     source, first, population = original(tmp_path, registry)
-    client = RoleClient([])                                  # Target 대본이 비어 있다: 부르면 오류가 난다
-    _, results, stats = again(tmp_path, source, population, client=client)
+    _, results, stats = again(tmp_path, source, population, client=None)
+    assert stats.live_calls == 0
     assert [k_path(r) for r in results] == [k_path(r) for r in first]
     assert [[t.attack.query for t in r.turns] for r in results] == [[t.attack.query for t in r.turns] for r in first]
+    assert [[t.release.path for t in r.turns] for r in results] == [[t.release.path for t in r.turns] for r in first]
+    assert [[t.release.released_response for t in r.turns] for r in results] == \
+           [[t.release.released_response for t in r.turns] for r in first]
+
+
+def test_recompute_never_calls_target_or_mutation_llm(tmp_path, registry):
+    source, _, population = original(tmp_path, registry)
+    client = RoleClient([])                                  # Target 대본이 비어 있다: 부르면 오류가 난다
+    again(tmp_path, source, population, client=client)
     assert client.count("target") == 0 and client.count("fuzzer") == 0
-    assert client.count("rewriter") == stats.live_calls - client.count("extractor") > 0
-    assert stats.recorded_hits == 6                          # 원 응답 추출은 갈래마다 기록을 다시 쓴다 (3턴 × 2갈래)
 
 
-def test_offline_recompute_calls_nothing_and_refuses_where_a_rewrite_was_needed(tmp_path, registry):
+def strip_reextraction_outputs(source):
+    """재추출 출력을 남기기 전의 trace처럼 만든다 (run_multi10 같은 예전 실행)."""
+    trace = source.run_dir / TRACE_FILE_NAME
+    lines = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
+    for item in lines:
+        for round_item in (item.get("release") or {}).get("rounds") or []:
+            round_item.pop("extraction_raw_output", None)
+    trace.write_text("\n".join(json.dumps(item, ensure_ascii=False) for item in lines) + "\n", encoding="utf-8")
+
+
+def test_old_trace_needs_only_reextraction_calls(tmp_path, registry):
+    """예전 trace에는 재추출 출력이 없다. 재작성 결과는 다시 쓰고, 고쳐 쓴 응답의 추출만 실제로 부른다."""
     source, first, population = original(tmp_path, registry)
+    strip_reextraction_outputs(source)
+    client = RoleClient([])
+    _, results, stats = again(tmp_path, source, population, client=client)
+    assert [k_path(r) for r in results] == [k_path(r) for r in first]
+    assert client.count("rewriter") == 0 and client.count("extractor") == stats.live_calls > 0
+
+
+def test_offline_recompute_of_old_trace_refuses_where_reextraction_is_missing(tmp_path, registry):
+    source, first, population = original(tmp_path, registry)
+    strip_reextraction_outputs(source)
     _, (c0, c1), stats = again(tmp_path, source, population, client=None)
     assert stats.live_calls == 0
     assert k_path(c0) == k_path(first[0])                    # Defender가 없는 갈래는 그대로다
     rewritten = [t.turn for t in first[1].turns if t.release.path is ReleasePath.REWRITTEN]
     assert rewritten and [t.turn for t in c1.turns if t.release.path is ReleasePath.REFUSAL] == rewritten
     assert c1.k_min >= first[1].k_min                        # 통째로 막았으므로 더 보수적이다
+
+
+def test_changed_threshold_changes_the_defenders_decisions(tmp_path, registry):
+    """위험 기준을 낮추면(k_req 4 → 2) Defender가 덜 개입한다. 같은 대화에서 C1의 k가 더 내려간다."""
+    from orchestrator.recompute import apply_overrides
+
+    source, first, population = original(tmp_path, registry)
+    dialogues = load_dialogues(source.run_dir)
+    config = config_from_source(load_source_config(source.run_dir), experiment_id="src__recomputed", arms=ARMS,
+                                output_root=tmp_path)
+    config, suffix = apply_overrides(config, threshold=1)
+    assert suffix == "_t1" and config.risk.k_req == 2
+    client = RoleClient([])
+    (c0, c1), _ = recompute(dialogues, config, population=population, retriever=OneCommentRetriever(), client=client)
+    assert k_path(c0) == k_path(first[0])
+    assert c1.k_min < first[1].k_min and c1.k_min >= 2
+    assert apply_overrides(config) == (config, "")           # 바꾼 것이 없으면 꼬리표도 없다
 
 
 def test_recompute_applies_the_current_rules_to_recorded_extractor_output(tmp_path, registry):

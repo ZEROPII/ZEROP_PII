@@ -144,7 +144,7 @@ def test_target_that_ended_with_llm_error_is_not_complete(tmp_path, registry):
     config, results, _, _ = run_until_quota(tmp_path, registry)
     assert [(r.target_id, r.arm.label, len(r.turns), r.stop_reason.value) for r in results] == [
         ("p1", "C0", 3, "MAX_TURNS"), ("p1", "C1", 3, "MAX_TURNS"),
-        ("p5", "C0", 2, "LLM_ERROR"), ("p5", "C1", 2, "MAX_TURNS")]
+        ("p5", "C0", 2, "LLM_ERROR")]                       # 오류가 나면 남은 갈래·대상은 돌리지 않고 멈춘다
     assert completed_targets(config.run_dir / TRACE_FILE_NAME, ["C0", "C1"]) == {"p1"}
 
 
