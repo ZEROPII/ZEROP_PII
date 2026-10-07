@@ -288,13 +288,21 @@ def render(report: RunReport) -> str:
         ["대상", "갈래", "추출 실패 턴", "근거 불일치로 버린 관찰", "MAPPED", "PENDING", "UNMAPPED", "State에 반영된 관찰 (QI별)"],
         [[_name(s), s.arm, s.extraction_failures, s.rejected_observations, s.statuses["MAPPED"], s.statuses["PENDING"],
           s.statuses["UNMAPPED"], _counts(s.committed_by_qi)] for s in sessions])
-    unresolved = [(s, row) for s in sessions for row in s.unresolved]
-    if unresolved:
-        lines += ["", f"공개됐지만 정규화하지 못한 관찰 {len(unresolved)}건"
-                  + (f" (앞 {MAX_UNRESOLVED_ROWS}건만 표시)" if len(unresolved) > MAX_UNRESOLVED_ROWS else "") + ":", ""]
+    # 같은 원 응답을 함께 쓰는 갈래에서는 같은 관찰이 갈래 수만큼 반복된다. 한 줄로 묶고 갈래를 나란히 적는다
+    merged: dict[tuple[Any, ...], list[str]] = {}
+    for s in sessions:
+        for row in s.unresolved:
+            key = (_name(s), row["turn"], row["attribute"], row["raw_value"], row["value_en"], row["status"], row["reason"])
+            merged.setdefault(key, []).append(s.arm)
+    if merged:
+        total = sum(len(arms) for arms in merged.values())
+        by_reason = Counter((key[2], key[6]) for key in merged)
+        lines += ["", f"공개됐지만 정규화하지 못한 관찰 {total}건 (갈래 간 같은 관찰을 묶으면 {len(merged)}가지)"
+                  + (f", 앞 {MAX_UNRESOLVED_ROWS}가지만 표시" if len(merged) > MAX_UNRESOLVED_ROWS else "") + ":", ""]
         lines += _table(["대상", "갈래", "턴", "QI", "응답의 표현", "추출기 표준 표기", "상태", "이유"],
-                        [[_name(s), s.arm, row["turn"], row["attribute"], row["raw_value"], row["value_en"],
-                          row["status"], row["reason"]] for s, row in unresolved[:MAX_UNRESOLVED_ROWS]])
+                        [[key[0], "·".join(arms), *key[1:]] for key, arms in list(merged.items())[:MAX_UNRESOLVED_ROWS]])
+        lines += ["", "QI·이유별 (묶은 뒤): " + ", ".join(f"{qi} {reason} {count}" for (qi, reason), count
+                                                         in by_reason.most_common())]
 
     lines += ["", "## 공격 쪽", ""]
     lines += _table(

@@ -37,6 +37,7 @@ class StopReason(str, Enum):
     MAX_TURNS = "MAX_TURNS"
     NO_APPLICABLE_ACTION = "NO_APPLICABLE_ACTION"
     LLM_ERROR = "LLM_ERROR"
+    VIOLATION_REACHED = "VIOLATION_REACHED"     # stop_on_violation: 실행 중 k가 요구 익명성 아래로 내려가 끝냄
 
 
 @dataclass(frozen=True)
@@ -172,9 +173,13 @@ class SessionRunner:
         self._coverage = CoverageRegistry()
 
     def run(self, target_id: str, *, max_turns: int,
-            on_turn: Callable[[TurnRecord], None] | None = None) -> SessionResult:
+            on_turn: Callable[[TurnRecord], None] | None = None,
+            stop_on_violation: bool = False) -> SessionResult:
         """
-        input : target_id, max_turns (Target 호출 상한), on_turn (턴이 끝날 때마다 불리는 함수. 로그 기록용)
+        input : target_id, max_turns (Target 호출 상한), on_turn (턴이 끝날 때마다 불리는 함수. 로그 기록용),
+                stop_on_violation (실행 중 k가 1 <= k < k_req가 된 턴에서 세션을 끝낼지. 그 뒤의 턴은 결과에 쓰지 않으므로
+                                   호출을 아낀다. k가 0이 된 경우에는 끝내지 않는다 — 틀린 값 때문일 수 있고,
+                                   맞는 값만으로 본 위반은 그 뒤에 날 수 있다)
         output : SessionResult
 
         턴마다 on_turn을 불러 바로 기록하므로, 중간에 멈춰도 그때까지의 턴은 파일에 남는다.
@@ -199,6 +204,9 @@ class SessionRunner:
             records.append(record)
             if on_turn is not None:
                 on_turn(record)
+            if stop_on_violation and 1 <= record.commit.k_after < self._risk.config.k_req:
+                stop_reason, stop_detail = StopReason.VIOLATION_REACHED, f"k={record.commit.k_after}"
+                break
 
         return SessionResult(target_id, self._arm, tuple(records), stop_reason, stop_detail,
                              k_initial, self._risk.k_current, self._coverage.summary())

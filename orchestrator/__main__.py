@@ -65,6 +65,7 @@ def main() -> None:
         rewriter=RewriterConfig(prompt_version=args.rewriter_prompt),
         paired_questions=args.paired,
         resume=args.resume,
+        stop_on_violation=args.stop_on_violation,
         fuzzer=(FuzzerConfig(target_scope_note=None, out_of_scope_sources=(), balance_qis=False)
                 if args.plain_mutation else None),
     )
@@ -146,6 +147,9 @@ def _parse_args() -> argparse.Namespace:
                         help="대상 목록 파일 (python -m validation.select_targets가 만든 JSON). 주면 --target 대신 쓴다")
     parser.add_argument("--resume", action="store_true",
                         help="같은 --experiment-id의 이전 기록에서 모든 갈래가 끝난 대상은 건너뛰고 나머지만 돌린다")
+    parser.add_argument("--stop-on-violation", action="store_true",
+                        help="실행 중 k가 k_req 아래(1 이상)로 내려간 턴에서 그 대상의 질문을 끝낸다 (호출 절약). "
+                             "k가 0이 된 경우에는 끝내지 않는다")
     parser.add_argument("--no-residual-check", action="store_true",
                         help="고쳐 쓴 응답에 지운 값의 근거 문구가 남았는지 검사하지 않는다 (Part 10까지의 동작)")
     parser.add_argument("--arms", "--conditions", dest="arms", nargs="+", default=["C0", "C1"],

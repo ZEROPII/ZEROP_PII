@@ -78,6 +78,8 @@ class ExperimentConfig:
                          나머지 갈래의 공격자는 자기 갈래의 응답에 반응하지 않으므로 적응형 공격의 결과는 아니다
     resume             → True면 같은 experiment_id의 이전 기록에서 모든 갈래가 끝난 대상은 건너뛴다.
                          중간에 멈춘 대상은 첫 갈래부터 다시 돌린다 (집계는 대상·갈래마다 마지막으로 끝난 세션만 쓴다)
+    stop_on_violation  → True면 실행 중 k가 1 <= k < k_req가 된 턴에서 세션을 끝낸다 (그 뒤 턴의 LLM 호출을 아낀다).
+                         paired_questions에서는 질문을 만드는 첫 갈래에만 적용하고, 나머지 갈래는 그 질문들을 끝까지 받는다
     fuzzer             → 질문 생성 설정 (자료 범위 안내, 변형 결과 검사, QI 고른 배분). None이면 기본값
     target / extractor / rewriter → 각 LLM 호출의 prompt 버전·temperature
     output_root        → 결과를 둘 상위 폴더 (기본 <프로젝트>/runs)
@@ -94,6 +96,7 @@ class ExperimentConfig:
     restrict_seeds_to_counted_qis: bool = True
     paired_questions: bool = False
     resume: bool = False
+    stop_on_violation: bool = False
     fuzzer: FuzzerConfig | None = None
     target: TargetConfig = TargetConfig()
     extractor: ExtractorConfig = ExtractorConfig()
@@ -252,7 +255,8 @@ def run_experiment(
                 if on_turn is not None:
                     on_turn(target_id, arm, record)
 
-            result = runner.run(target_id, max_turns=max_turns, on_turn=handle)
+            result = runner.run(target_id, max_turns=max_turns, on_turn=handle,
+                                stop_on_violation=config.stop_on_violation and not paired)
             logger.log_session_end(result, extra=extra)
             results.append(result)
             if lead is None:
@@ -343,6 +347,7 @@ def describe_run(config: ExperimentConfig, population: ReferencePopulation, retr
             "max_stale_turns": config.max_stale_turns,
             "restrict_seeds_to_counted_qis": config.restrict_seeds_to_counted_qis,
             "paired_questions": config.paired_questions,
+            "stop_on_violation": config.stop_on_violation,
             "shared_raw_responses": config.paired_questions,
             **fuzzer_config_of(config).describes,
             "system_prompt_file": str(FUZZER_SYSTEM_PROMPT_FILE.relative_to(PROJECT_ROOT)),

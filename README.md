@@ -9,7 +9,7 @@
 | 항목 | 상태 |
 | --- | --- |
 | 모듈 구현 및 연결 (질문 생성 → 응답 → 추출 → 판정 → 공개 → State 반영) | 완료 |
-| 단위·통합 테스트 | 724개 통과 (LLM 호출은 가짜 client 사용) |
+| 단위·통합 테스트 | 747개 통과 (LLM 호출은 가짜 client 사용) |
 | 실행 갈래 | C0(Defender 없음), C1(공개 전 Defender), C1S(무상태 Defender 대조군) |
 | 위험 계산 백엔드 | `risk_defender`(이유진 파트, 기본) / `ontology`(D1 Stage 3 계층 + D1 Stage 11 Defender) |
 | Privacy Coverage 기록 (D1 Stage 9) | 턴별 판정과 세션 요약을 trace에 기록 |
@@ -17,6 +17,7 @@
 | 정답(GT) 대조 평가 `k_val` | `python -m validation` (실행이 끝난 뒤 따로 돌림. 실행 중 코드는 정답을 읽지 않음) |
 | Exact Replay (D1 Stage 13) | `python -m orchestrator.replay` (보관된 질문을 새 세션에서 그대로 재실행) |
 | 실행 집계 | `python -m orchestrator.report` (대상이 여럿이면 대상별 표와 갈래별 위반 조합 포함) |
+| 기록된 응답으로 다시 계산 | `python -m orchestrator.recompute` (코드를 고친 뒤 LLM을 거의 부르지 않고 결과 재확인) |
 | 대상 선정 | `python -m validation.select_targets` (사람 라벨로 층을 나눠 추첨) |
 | C2·C3 (경량 언러닝 규칙 생성·주입) | 미구현 |
 | 변형 재공격 (D1 Stage 14), Interesting 질문의 Seed 승격 | 미구현 |
@@ -102,7 +103,7 @@ python -m adapters.prepare_reference    # 기준 집단: 원본 300명 + 합성 
 
 ```bash
 python -m core.llm_client               # 모델 응답이 오는지 확인
-python -m pytest -q                     # 724 passed
+python -m pytest -q                     # 747 passed
 python -m ontology                      # 기준 집단이 온톨로지로 전부 풀리는지 점검 (LLM 호출 없음)
 ```
 
@@ -131,6 +132,7 @@ python -m orchestrator --target pers1 --arms C0 C1 C1S --backend ontology --turn
 | `--all-seeds` | 꺼짐 | 켜면 k에 들어가지 않는 QI를 묻는 Seed도 고른다 (기본은 백엔드가 세는 QI를 노리는 Seed만) |
 | `--targets-file` | 없음 | 대상 목록 파일(`python -m validation.select_targets` 결과). 주면 `--target` 대신 쓴다 |
 | `--resume` | 꺼짐 | 같은 `--experiment-id`의 이전 기록에서 모든 갈래가 끝난 대상은 건너뛰고 나머지만 돌린다 |
+| `--stop-on-violation` | 꺼짐 | 실행 중 k가 k_req 아래(1 이상)로 내려간 턴에서 그 대상의 질문을 끝낸다. k가 0이 된 경우에는 끝내지 않는다 |
 | `--no-residual-check` | 꺼짐 | 고쳐 쓴 응답에 지운 값의 근거 문구가 남았는지 검사하지 않는다 |
 | `--paired` | 꺼짐 | 대상마다 첫 갈래가 만든 질문 순서를 나머지 갈래에 그대로 던진다. 갈래를 비교할 때는 켜는 것을 권장 |
 | `--plain-mutation` | 꺼짐 | 질문 생성의 보정(Target 자료 범위 안내, 변형 결과의 자료 출처 검사, QI 고른 배분)을 끈다. 이전 동작과 비교할 때만 사용 |
@@ -164,6 +166,26 @@ python -m orchestrator.report run_multi10 --targets-file runs/target_selection.j
 이 도구는 정답 profile을 읽으므로 `validation/` 아래에 있고, 실행 중 코드에는 대상 ID만 넘어갑니다.
 
 **비용.** `--paired`에서는 대상 1명에 질문 생성·Target·추출이 턴마다 한 번씩이라 12턴이면 약 36회이고, Defender가 개입한 턴마다 재작성과 재추출이 더 듭니다. 실행을 시작할 때 예상 호출 수가 출력됩니다.
+
+### 코드를 고친 뒤: 다시 돌리지 않고 다시 계산하기
+
+정규화 규칙, 직업 대응표, 추출 검증, Defender 판정을 고쳤을 때는 실험을 새로 돌릴 필요가 없습니다. 원래 실행의 trace에 질문, Target 원 응답, 추출기 출력 원문이 남아 있으므로 그것을 그대로 넣어 지금 코드로 다시 계산합니다.
+
+```bash
+python -m orchestrator.recompute --source run_multi10            # runs/run_multi10__recomputed/ 에 저장
+python -m validation run_multi10__recomputed
+python -m orchestrator.report run_multi10__recomputed --targets-file runs/target_selection.json
+```
+
+| | 새로 실행 | 다시 계산 | 다시 계산 `--offline` |
+| --- | --- | --- | --- |
+| 질문 생성, Target, 원 응답 추출 | LLM 호출 | 기록 사용 | 기록 사용 |
+| 정규화, 위험 계산, Defender 판정 | 지금 코드 | 지금 코드 | 지금 코드 |
+| 재작성과 재추출 (Defender가 개입한 턴) | LLM 호출 | LLM 호출 | 거절로 처리 |
+
+10명 × 12턴 실행 기준으로 새 실행은 LLM을 약 380회 부르고, 다시 계산은 Defender가 개입한 턴만큼(약 20회) 부릅니다. `--offline`은 한 번도 부르지 않지만 C1에서 고쳐 써야 할 턴을 통째로 막은 것으로 계산하므로 C1의 k가 실제보다 크게 나옵니다. C0와 C1S의 결과는 영향이 없습니다.
+
+질문 생성(Fuzzer 프롬프트, 변형 검사)이나 Target 프롬프트를 바꿨을 때는 질문과 응답 자체가 달라지므로 새로 돌려야 합니다.
 
 ### 질문이 Target에 맞도록 하는 장치
 
@@ -249,7 +271,7 @@ python -m adapters.check_fuzzer                 # Seed 선택과 두 턴 변형
 | 기준 집단 | 30만 명 | 국가명·관계 상태 표기가 일부 섞여 있음 |
 | k 계산 대상 QI | 기본 백엔드 5개 / `ontology` 8개 | 기본 백엔드에서 SEX, INC, POB는 추출·기록만 함 |
 | 일반화 계층 | 기본은 `risk_defender` 계층 | D1 Stage 3 계층은 `--backend ontology`로 사용 |
-| 직업 → ISCO 대응표 | `ontology/data/occp_alias_v0.1.csv` (206행) | 기계 초안. 75행은 사람 검토 필요 (`python -m ontology --show-review`) |
+| 직업 → ISCO 대응표 | `ontology/data/occp_alias_v0.1.csv` (217행) | 기계 초안. 77행은 사람 검토 필요 (`python -m ontology --show-review`) |
 | 억제 시점 | 백엔드마다 다름 | `risk_defender`는 k ≤ 3이면 일반화 없이 억제, D1은 일반화를 먼저 시도 |
 | Target 검색 | persona 코멘트 전체 | 임베딩 top-k 검색은 미적용 |
 | Seed | 117개, 개발 모드 | 사람 검토 전이라 본 실험 모드에서는 적재 거부 |
@@ -263,6 +285,8 @@ python -m adapters.check_fuzzer                 # Seed 선택과 두 턴 변형
 | 추측성 값 | State에 그대로 반영 | Target이 근거가 약한 추정(소득, 관계 상태 등)을 답하면 틀린 값이 State에 들어가고, 이후 Defender 판정이 그 State를 기준으로 이뤄짐. 실행 후 `k_val`로 가려냄. `--min-confidence`로 줄일 수 있으나 맞는 값도 함께 빠질 수 있음 |
 | State 충돌 | 먼저 들어간 값 유지 | 나중에 더 확실한 값이 나와도 바뀌지 않음. 정책 결정 필요 |
 | 재작성 뒤 잔여 단서 | 지운 값의 근거 문구가 글자 그대로 남으면 다시 고침 | 재추출이 놓친 인용문을 막기 위함. 한 문구가 지울 값과 남길 값의 근거를 겸하면 남길 값의 근거도 빠진다. 표현을 바꿔 남긴 단서는 잡지 못한다 |
+| 두 구간에 걸친 나이 | 미해석 | "30대 후반~40대 초반", "25-32세"처럼 10년 구간 둘에 걸친 추정은 State에 넣지 않는다. 10명 실행에서 8명에게 나왔다. 값 하나에 node 하나만 두는 구조라서이며, 넣으려면 State 형식을 바꿔야 한다 |
+| 관계 상태 계층 | 6개 범주가 서로 무관 | 이혼한 사람을 "현재 독신"이라고 한 답이 틀린 값(SINGLE)으로 들어간다. "배우자 없음" 같은 묶음 단계를 둘지 D1 계층 담당과 결정 필요 |
 | 검증의 범위 | State에 들어간 QI만 | 정규화하지 못한 공개분은 `k_val`에도 반영되지 않음 |
 
 ## 브랜치와 커밋 규칙
