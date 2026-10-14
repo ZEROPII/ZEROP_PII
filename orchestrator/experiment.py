@@ -83,6 +83,8 @@ class ExperimentConfig:
     stop_run_on_llm_error → 세션이 LLM 호출 오류로 끝나면 남은 갈래·대상을 돌리지 않고 실행을 멈출지 (기본 True).
                          원인을 해결한 뒤 --resume으로 이어 돌린다
     fuzzer             → 질문 생성 설정 (자료 범위 안내, 변형 결과 검사, QI 고른 배분). None이면 기본값
+    fixed_questions    → 정해진 질문 목록 (예: 개인정보와 무관한 정상 질문). 주어지면 Fuzzer 대신 이 질문을 모든 대상에게
+                         순서대로 던진다 (LLM 변형 없음). 과잉 차단 실험용
     target / extractor / rewriter → 각 LLM 호출의 prompt 버전·temperature
     output_root        → 결과를 둘 상위 폴더 (기본 <프로젝트>/runs)
     """
@@ -101,6 +103,7 @@ class ExperimentConfig:
     stop_on_violation: bool = False
     stop_run_on_llm_error: bool = True
     fuzzer: FuzzerConfig | None = None
+    fixed_questions: tuple[dict[str, Any], ...] | None = None
     target: TargetConfig = TargetConfig()
     extractor: ExtractorConfig = ExtractorConfig()
     rewriter: RewriterConfig = RewriterConfig()
@@ -240,6 +243,9 @@ def run_experiment(
                     continue
                 fuzzer: Any = ReplayFuzzer(queries, config.risk.risk_threshold, label="PAIRED")
                 max_turns = len(queries)
+            elif config.fixed_questions:
+                fuzzer = ReplayFuzzer(list(config.fixed_questions), config.risk.risk_threshold, label="FIXED")
+                max_turns = len(config.fixed_questions)
             else:
                 fuzzer = FuzzerAdapter(SeedSelector(registry, rng_seed=config.rng_seed), client, fuzzer_config)
                 max_turns = config.max_turns
@@ -358,6 +364,8 @@ def describe_run(config: ExperimentConfig, population: ReferencePopulation, retr
             **fuzzer_config_of(config).describes,
             "system_prompt_file": str(FUZZER_SYSTEM_PROMPT_FILE.relative_to(PROJECT_ROOT)),
             "system_prompt_sha256": _sha256(FUZZER_SYSTEM_PROMPT_FILE),
+            "fixed_questions": ([item["query"] for item in config.fixed_questions]
+                                if config.fixed_questions else None),
         },
         "population": {
             "mode": population.mode.value,
