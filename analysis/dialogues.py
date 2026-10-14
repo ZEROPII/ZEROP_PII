@@ -34,6 +34,7 @@ class LiveArm:
     states: tuple[dict[str, str], ...]
     paths: tuple[str, ...]
     rewrite_ms: tuple[float, ...]
+    texts: tuple[tuple[str, str], ...] = ()    # 턴마다 (원래 답변, 실제로 내보낸 답변)
 
 
 @dataclass(frozen=True)
@@ -141,14 +142,16 @@ def load_dialogues(run_dir: Path) -> tuple[RunInfo, list[Dialogue]]:
             other_session = latest.get((target_id, other))
             if other_session is None:
                 continue
-            states, paths, rewrite_ms = [], [], []
+            states, paths, rewrite_ms, texts = [], [], [], []
             for item in other_session.turns:
+                texts.append((str((item.get("target") or {}).get("raw_candidate_response") or ""),
+                              str((item.get("release") or {}).get("released_response") or "")))
                 states.append(dict(((item.get("commit") or {}).get("state_after")) or {}))
                 release = item.get("release") or {}
                 paths.append(str(release.get("path") or "ALLOWED"))
                 rewrite_ms.extend(float(((r.get("rewrite") or {}).get("latency_ms")) or 0.0)
                                   for r in release.get("rounds") or ())
-            live[other] = LiveArm(tuple(states), tuple(paths), tuple(rewrite_ms))
+            live[other] = LiveArm(tuple(states), tuple(paths), tuple(rewrite_ms), tuple(texts))
         dialogues.append(Dialogue(info.run_id, target_id, tuple(turns), live))
     return info, dialogues
 

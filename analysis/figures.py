@@ -30,9 +30,9 @@ TEXT = {
         "C0": "방어 없음 (C0)", "C1S": "턴별 방어 (C1S)", "C1": "누적 방어 (C1)",
         "C1-g0": "누적 방어, 억제만", "STATIC": "고정 일반화",
         "turn": "대화 턴", "k": "남은 후보 수 k (로그)", "kreq": "평가 기준 k = {k}",
-        "share": "위반한 대상의 누적 비율", "retention": "정보 유지율 (%)", "violation": "위반 대상 비율 (%)",
+        "share": "위반한 대상의 누적 비율", "retention": "공개 QI 유지율 (%)", "violation": "위반 대상 비율 (%)",
         "fig1a": "(a) 턴별 후보 수 (중앙값, 사분위 범위)", "fig1b": "(b) 위반 도달 누적 비율",
-        "fig2a": "(a) 보호–유용성 평면", "fig2b": "(b) 누적 방어의 운영 k_req", "optimum": "최적 운영점", "knee": "무릎점", "protection": "보호: 모든 대상이 보장받은 최소 후보 수 k (로그)",
+        "fig2a": "(a) 보호–유용성 평면", "fig2b": "(b) 누적 방어의 운영 k_req", "optimum": "최적 운영점", "preserved": "원문 그대로 나간 답 (%)", "knee": "무릎점", "protection": "보호: 모든 대상이 보장받은 최소 후보 수 k (로그)",
         "fig3a": "(a) 기준 집단", "fig3b": "(b) 추출 누락 비율", "fig3c": "(c) 최대 일반화 단계",
         "miss": "Defender가 놓친 관찰 비율 (%)", "kop": "Defender 운영 k_req", "gen": "최대 일반화 단계", "unlimited": "제한 없음",
         "suppress_only": "억제만",
@@ -41,10 +41,10 @@ TEXT = {
         "C0": "No defense (C0)", "C1S": "Per-turn (C1S)", "C1": "Cumulative (C1)",
         "C1-g0": "Cumulative, suppress only", "STATIC": "Static generalization",
         "turn": "Turn", "k": "Remaining candidates k (log)", "kreq": "evaluation k = {k}",
-        "share": "Cumulative share violated", "retention": "Information retention (%)",
+        "share": "Cumulative share violated", "retention": "Disclosed QI retention (%)",
         "violation": "Targets violated (%)",
         "fig1a": "(a) Candidates per turn (median, IQR)", "fig1b": "(b) Cumulative violation",
-        "fig2a": "(a) Privacy–utility plane", "fig2b": "(b) Operating k_req of C1", "optimum": "optimum", "knee": "knee", "protection": "Protection: worst-case minimum k (log)",
+        "fig2a": "(a) Privacy–utility plane", "fig2b": "(b) Operating k_req of C1", "optimum": "optimum", "preserved": "Answers released unchanged (%)", "knee": "knee", "protection": "Protection: worst-case minimum k (log)",
         "fig3a": "(a) Reference population", "fig3b": "(b) Extraction misses", "fig3c": "(c) Max generalization",
         "miss": "Observations missed by Defender (%)", "kop": "Defender k_req", "gen": "Max generalization steps", "unlimited": "unlimited",
         "suppress_only": "suppress only",
@@ -165,6 +165,8 @@ def fig2(series: dict[str, list[dict]], optimum: dict | None, eval_k: int, lang:
                label=t["violation"])
     right.plot(ks, [p["retention"] for p in c1], color=STYLE["C1"]["color"], marker="s", markersize=3.5,
                linewidth=1.3, label=t["retention"])
+    right.plot(ks, [p["preserved"] for p in c1], color="#009E73", marker="^", markersize=3.5, linewidth=1.3,
+               label=t["preserved"])
     c1s = [p for p in series.get("C1S") or [] if p.get("k_req")]
     if c1s:
         right.plot([p["k_req"] for p in c1s], [p["violation"] for p in c1s], color="#B00020", linestyle=":",
