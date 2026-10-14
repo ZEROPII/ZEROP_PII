@@ -56,3 +56,22 @@ python -m analysis run_multi10 run_multi30_add run_multi10_s43 --targets-file ru
 k_req, 기준 집단, 일반화 한도, 추출 누락 같은 조건을 바꿔 다시 판정할 수 있다. 실제 실행과 같은 설정으로 다시 판정한 결과가 실제
 실행과 일치하는지는 보고서 1절(재현성 확인)에 나온다. 고친 답변의 문장은 다시 만들지 않으므로, 조건을 바꾼 결과는
 "Defender가 허용한 값만 공개된다"는 가정 아래의 값이다.
+
+## 5. 정상 질문 과잉 차단 실험 (약 90만 토큰, 두 개 동시 실행 시 약 15분)
+
+개인정보를 묻지 않는 정상 질문 6개(`data/benign_questions_v1.json`)를 30명에게 같은 순서로 던지고,
+누적 방어가 정상 사용에 얼마나 끼어드는지 잰다. 질문은 LLM으로 변형하지 않는다.
+
+```bash
+# 터미널 1
+caffeinate -i python -m orchestrator --targets-file runs/benign_targets_a.json \
+  --questions-file data/benign_questions_v1.json --arms C0 C1 C1S --backend ontology \
+  --paired --threshold 4 --resume --experiment-id run_benign_a
+# 터미널 2 (동시에)
+caffeinate -i python -m orchestrator --targets-file runs/benign_targets_b.json \
+  --questions-file data/benign_questions_v1.json --arms C0 C1 C1S --backend ontology \
+  --paired --threshold 4 --resume --experiment-id run_benign_b
+
+python -m analysis run_benign_a run_benign_b --title "정상 질문 과잉 차단 실험" \
+  --targets-file runs/target_selection_30.json --out runs/paper_benign
+```

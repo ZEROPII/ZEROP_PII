@@ -43,6 +43,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--bootstrap", dest="resamples", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--lang", choices=["auto", "ko", "en"], default="auto", help="그림 글자 (auto: 한글 글꼴이 있으면 ko)")
+    parser.add_argument("--title", default=None, help="보고서 제목 (예: 정상 질문 과잉 차단 실험)")
     parser.add_argument("--quick", action="store_true", help="빠른 점검용 (부트스트랩 500회, 누락 반복 3회)")
     args = parser.parse_args(argv)
 
@@ -107,7 +108,7 @@ def main(argv: list[str] | None = None) -> int:
 
     out = Path(args.out) if args.out else runs_root / f"paper_{infos[0].run_id}"
     builder = PaperBuilder(settings, infos, dialogues, plan, results, consistency, context, strata, out, args.lang,
-                           plan_info={"path": args.plan, "sha256_16": plan_hash, "data": plan_data,
+                           title=args.title, plan_info={"path": args.plan, "sha256_16": plan_hash, "data": plan_data,
                                       "deviations": deviations})
     report = builder.build()
     print(f"\n완료 ({time.time() - started:.0f}s): {report}")

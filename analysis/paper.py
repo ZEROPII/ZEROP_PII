@@ -66,7 +66,8 @@ class PaperBuilder:
     def __init__(self, settings: Settings, runs: Sequence[RunInfo], dialogues: Sequence[Dialogue], plan: Plan,
                  results: dict[Condition, list[UnitResult]], consistency: dict[Condition, list[UnitResult]],
                  context: Context, strata: dict[str, str], out: Path, lang: str,
-                 plan_info: dict[str, Any] | None = None) -> None:
+                 plan_info: dict[str, Any] | None = None, title: str | None = None) -> None:
+        self.title = title or "논문용 분석 결과"
         self.plan_info = plan_info or {}
         self.s, self.runs, self.dialogues, self.plan = settings, runs, dialogues, plan
         self.results, self.consistency, self.context = results, consistency, context
@@ -123,7 +124,7 @@ class PaperBuilder:
         deviations = self.plan_info.get("deviations") or {}
         if deviations:
             rows.append(["계획과 다른 설정", "; ".join(f"{k}: 계획 {v['plan']} → 사용 {v['used']}" for k, v in deviations.items())])
-        return "# 논문용 분석 결과\n\n" + _table(["항목", "값"], rows)
+        return f"# {self.title}\n\n" + _table(["항목", "값"], rows)
 
     # ── 2. 재현성: 실제 실행과의 일치 ───────────────────
 

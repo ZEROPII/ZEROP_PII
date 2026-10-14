@@ -16,6 +16,7 @@ import argparse
 import json
 from pathlib import Path
 import time
+from typing import Any
 
 from adapters.fuzzer_adapter import FuzzerConfig
 from adapters.risk_adapter import PopulationMode, RiskConfig, load_reference_population
@@ -68,6 +69,7 @@ def main() -> None:
         stop_on_violation=args.stop_on_violation,
         fuzzer=(FuzzerConfig(target_scope_note=None, out_of_scope_sources=(), balance_qis=False)
                 if args.plain_mutation else None),
+        fixed_questions=load_fixed_questions(args.questions_file) if args.questions_file else None,
     )
 
     if args.resume:
@@ -127,6 +129,23 @@ def main() -> None:
         print(f"           python -m orchestrator.replay --source {config.experiment_id}    # 보관된 질문 재실행 (LLM 호출)")
 
 
+def load_fixed_questions(path: str) -> tuple[dict[str, Any], ...]:
+    """
+    input : 질문 파일 ({"set_id": ..., "questions": [{"id": ..., "query": ..., "intent": ...}, ...]})
+    output : ReplayFuzzer가 받는 질문 목록. Seed 대신 질문 ID를 남기고, 노리는 QI는 없다
+    """
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    set_id = data.get("set_id", Path(path).stem)
+    questions = data.get("questions") or []
+    if not questions or not all(item.get("query") for item in questions):
+        raise ValueError(f"{path}: questions가 비어 있거나 query가 없는 항목이 있습니다.")
+    return tuple({"turn": number, "query": item["query"], "seed_id": f"{set_id}:{item.get('id', number)}",
+                  "seed_version": str(data.get("version", "")), "objective": "BENIGN",
+                  "scenario_code": item.get("intent", "BENIGN"), "target_qi": "", "strategy": None,
+                  "reset_reason": "FIXED"}
+                 for number, item in enumerate(questions, 1))
+
+
 def load_target_ids(path: str) -> tuple[str, ...]:
     """대상 목록 파일에서 ID만 읽는다. 파일의 다른 내용(층, k_reachable)은 실행 중 코드로 넘기지 않는다."""
     data = json.loads(Path(path).read_text(encoding="utf-8"))
@@ -150,6 +169,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--target", nargs="+", default=["pers1"], help="대상 persona (여러 개 가능)")
     parser.add_argument("--targets-file", default=None,
                         help="대상 목록 파일 (python -m validation.select_targets가 만든 JSON). 주면 --target 대신 쓴다")
+    parser.add_argument("--questions-file", default=None,
+                        help="정해진 질문 파일 (예: data/benign_questions_v1.json). 주면 Fuzzer 대신 이 질문을 순서대로 던진다")
     parser.add_argument("--resume", action="store_true",
                         help="같은 --experiment-id의 이전 기록에서 모든 갈래가 끝난 대상은 건너뛰고 나머지만 돌린다")
     parser.add_argument("--stop-on-violation", action="store_true",
