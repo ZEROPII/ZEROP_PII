@@ -156,7 +156,15 @@ def main() -> None:
     parser.add_argument("--threshold", type=int, default=RiskConfig().risk_threshold, help="위험 기준 (k_req = 값 + 1)")
     parser.add_argument("--population", choices=[mode.value for mode in PopulationMode], default="expanded")
     parser.add_argument("--output", default=str(DEFAULT_OUTPUT), help="선정 결과를 적을 파일")
+    parser.add_argument("--include-from", default=None,
+                        help="이전 선정 파일. 그 대상들을 그대로 포함하고 나머지만 새로 뽑는다 (대상 늘리기)")
+    parser.add_argument("--new-output", default=None,
+                        help="--include-from과 함께 쓴다. 새로 추가된 대상만 따로 적을 파일 (그 대상만 실행해 토큰을 아낀다)")
     args = parser.parse_args()
+    previous: list[str] = []
+    if args.include_from:
+        previous = list(json.loads(Path(args.include_from).read_text(encoding="utf-8")).get("target_ids") or [])
+        args.include = list(dict.fromkeys(previous + list(args.include)))
 
     k_req = RiskConfig(risk_threshold=args.threshold).k_req
     population = load_reference_population(PopulationMode(args.population))
@@ -170,19 +178,27 @@ def main() -> None:
     for c in chosen:
         print(f"{c.target_id:<10}{c.stratum:<8}{c.comments:>5}  {c.k_reachable:>11,}  {', '.join(c.labelled_qis) or '-'}")
 
+    def write(path: Path, picked: Sequence[Candidate], note: str | None = None) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({
+            "created_at": datetime.now(KST).isoformat(),
+            "criteria": {"count": args.count, "rich_share": args.rich_share, "seed": args.seed, "include": args.include,
+                         "include_from": args.include_from, "note": note,
+                         "k_req": k_req, "population": {"mode": population.mode.value, "size": population.size},
+                         "assessment_fingerprint": build_hash(candidates, population.size),
+                         "method": "SynthPAI reviews.human 추정값 중 실제 값과 같거나 넓은 것으로 센 후보 수 (k_reachable)"},
+            "pool": {"total": len(candidates), RICH: rich, SPARSE: len(candidates) - rich},
+            "target_ids": [c.target_id for c in picked],
+            "targets": [c.to_log_dict() for c in picked],
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
+
     output = Path(args.output)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    output.write_text(json.dumps({
-        "created_at": datetime.now(KST).isoformat(),
-        "criteria": {"count": args.count, "rich_share": args.rich_share, "seed": args.seed, "include": args.include,
-                     "k_req": k_req, "population": {"mode": population.mode.value, "size": population.size},
-                     "assessment_fingerprint": build_hash(candidates, population.size),
-                     "method": "SynthPAI reviews.human 추정값 중 실제 값과 같거나 넓은 것으로 센 후보 수 (k_reachable)"},
-        "pool": {"total": len(candidates), RICH: rich, SPARSE: len(candidates) - rich},
-        "target_ids": [c.target_id for c in chosen],
-        "targets": [c.to_log_dict() for c in chosen],
-    }, ensure_ascii=False, indent=2), encoding="utf-8")
+    write(output, chosen)
     print(f"\n저장: {output}")
+    if args.new_output:
+        fresh = [c for c in chosen if c.target_id not in set(previous)]
+        write(Path(args.new_output), fresh, note=f"{args.include_from}에 없던 대상만")
+        print(f"새 대상만 ({len(fresh)}명): {args.new_output}")
     print("실행: python -m orchestrator --targets-file " + _shown(output)
           + " --arms C0 C1 C1S --backend ontology --turns 12 --paired --experiment-id run_multi10")
 

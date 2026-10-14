@@ -57,8 +57,9 @@ class OntologyRiskSession:
     counted_qis = QI_TYPE_SET
 
     def __init__(self, index: PopulationIndex, target_id: str, session_id: str,
-                 config: RiskConfig = RiskConfig()) -> None:
+                 config: RiskConfig = RiskConfig(), *, max_generalization: int | None = None) -> None:
         self._index = index
+        self._max_generalization = max_generalization   # 민감도 분석용 (None = 제한 없음, 실험 기본값)
         self._ontology = index.ontology
         self._config = config
         self._target_id = target_id
@@ -103,7 +104,8 @@ class OntologyRiskSession:
         return self._ontology.relation(existing, candidate)
 
     def fresh(self) -> "OntologyRiskSession":
-        return OntologyRiskSession(self._index, self._target_id, self._session_id, self._config)
+        return OntologyRiskSession(self._index, self._target_id, self._session_id, self._config,
+                                   max_generalization=self._max_generalization)
 
     # ── 선별 ─────────────────────────────────────────────
 
@@ -138,7 +140,8 @@ class OntologyRiskSession:
         _, delta_by_qi, conflicts = self._apply(self._state, selection.accepted)
 
         delta = [DeltaItem(qi.source or "", qi.qi_type, str(qi.value)) for qi in delta_by_qi.values()]
-        plan = plan_release(self._index, self._state, delta, k_req=self._config.k_req)
+        plan = plan_release(self._index, self._state, delta, k_req=self._config.k_req,
+                            max_generalization=self._max_generalization)
 
         plan_by_qi = {item.attribute: item for item in plan.items}
         conflict_ids = [qi.source or "" for qi in conflicts]

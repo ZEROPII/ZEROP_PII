@@ -91,10 +91,13 @@ def plan_release(
     delta: Sequence[DeltaItem],
     *,
     k_req: int,
+    max_generalization: int | None = None,
 ) -> DefensePlan:
     """
     input : index (기준 집단 색인), state ({QI → 이미 공개된 node}), delta (새 공개분. QI당 하나),
-            k_req (요구 익명성. 하한은 min(k_req, 지금 k))
+            k_req (요구 익명성. 하한은 min(k_req, 지금 k)),
+            max_generalization (한 값을 위로 올릴 수 있는 최대 단계. None이면 제한 없음, 0이면 일반화 없이 억제만.
+                                민감도 분석용이며 기본 동작은 바꾸지 않는다)
     output : DefensePlan
     """
     attributes = [item.attribute for item in delta]
@@ -109,7 +112,7 @@ def plan_release(
     k_floor = min(k_req, k_before)
 
     # QI별로 내놓을 수 있는 node를 구체적인 것부터 나열한다. 마지막 칸 None이 억제다.
-    ladders: list[list[str | None]] = [_ladder(index, state, item) for item in delta]
+    ladders: list[list[str | None]] = [_limit(_ladder(index, state, item), max_generalization) for item in delta]
 
     def k_of(config: Sequence[int]) -> int:
         constraints = dict(state)
@@ -165,6 +168,15 @@ def _ladder(index: PopulationIndex, state: Mapping[str, str], item: DeltaItem) -
         ladder.append(ancestor)
     ladder.append(None)
     return ladder
+
+
+def _limit(ladder: list[str | None], max_generalization: int | None) -> list[str | None]:
+    """일반화 단계를 max_generalization까지로 줄인다. 마지막 칸(억제)은 항상 남긴다."""
+    if max_generalization is None:
+        return ladder
+    if max_generalization < 0:
+        raise ValueError("max_generalization은 0 이상이어야 합니다.")
+    return ladder[:-1][:max_generalization + 1] + [None]
 
 
 def _result(delta, ladders, config, k_before, k_raw, k_floor, k_planned, depth, examined, reason) -> DefensePlan:
