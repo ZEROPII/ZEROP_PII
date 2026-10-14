@@ -36,6 +36,10 @@ def _p(value: float) -> str:
     return f"{value:.4f}" if value >= 1e-4 else f"{value:.1e}"
 
 
+def _ratio(numerator: float, denominator: float) -> float:
+    return numerator / denominator if denominator else math.nan
+
+
 def _num(value: float, digits: int = 0) -> str:
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return "-"
@@ -86,7 +90,7 @@ class PaperBuilder:
     def build(self) -> Path:
         self.out.mkdir(parents=True, exist_ok=True)
         sections = [self._header(), self._consistency(), self._hypotheses(), self._main(), self._decisions(),
-                    self._qi_utility(), self._tradeoff(), self._population(), self._miss(), self._generalization(), self._matched_k(), self._turn_length(),
+                    self._qi_utility(), self._extractor(), self._answer_utility(), self._tradeoff(), self._population(), self._miss(), self._generalization(), self._matched_k(), self._turn_length(),
                     self._stability(), self._power(), self._overhead(), self._figures(), self._cautions()]
         self._per_unit_csv()
         report = self.out / "paper_report.md"
@@ -207,13 +211,13 @@ class PaperBuilder:
         return ("## 3. 본 결과 (표 1)\n\n"
                 f"설정: 기준 집단 {self.s.main_population}, Defender k_req = 평가 기준 = {self.s.eval_k}.\n\n"
                 + _table(["갈래", "위반 대상", "95% CI", "최소 k_val 중앙값 [사분위]", "첫 위반 턴(중앙값)",
-                          "위험 턴 비율", "원문 유지 턴", "정보 유지율", "개입/거절 턴"], rows)
+                          "위험 턴 비율", "원문 유지 턴", "공개 QI 유지율", "개입/거절 턴"], rows)
                 + "\n\n짝 비교 (같은 대상, 같은 질문)\n\n"
                 + _table(["비교", "위반 비율 차이 [95% CI]", "한쪽만 위반 (앞/뒤)", "exact McNemar p",
                           "log10 최소 k 차이(뒤−앞) 중앙값 [95% CI]", "Wilcoxon p: 최소 k", "Wilcoxon p: 위험 턴 비율"], pairs)
                 + "\n\n- 위험 턴 비율: 전체 턴 중 그 턴의 누적 공개 상태가 평가 기준 미만이었던 턴의 비율. "
                   "대상 수가 적을 때 위반 여부(대상 단위)보다 촘촘한 지표다.\n"
-                  "- 정보 유지율: 새로 공개될 뻔한 정보 중 공개된 정도 (그대로 1, 한 단계 일반화는 부분, 억제 0).\n"
+                  "- 공개 QI 유지율: 새로 공개될 뻔한 정보 중 공개된 정도 (그대로 1, 한 단계 일반화는 부분, 억제 0).\n"
                   "- log10 최소 k 차이: 대상마다 두 조건의 최소 후보 수를 로그로 비교한 값. 1이면 10배 차이.")
 
     # ── 사전 계획한 가설 검정 ───────────────────────────
@@ -280,8 +284,113 @@ class PaperBuilder:
         rows = [[qi, retention[qi][1], _pct(retention[qi][0])] for qi in order if qi in retention]
         self.files.append(_write_csv(self.out / "tables" / "qi_retention.csv",
                                      [{"qi": r[0], "new_disclosures": r[1], "retention": retention[r[0]][0]} for r in rows]))
-        return ("### 3.2 QI별 정보 유지율 (누적 방어)\n\n어떤 종류의 정보가 주로 가려졌는지 본다.\n\n"
+        return ("### 3.2 QI별 공개 유지율 (누적 방어)\n\n어떤 종류의 정보가 주로 가려졌는지 본다.\n\n"
                 + _table(["QI", "새 공개분 수", "유지율"], rows))
+
+    # ── 추출기 정확도 ────────────────────────────────────
+
+    def _extractor(self) -> str:
+        """원래 답변에서 뽑은 관찰을 정답과 대조한다 (갈래와 무관. 질문 갈래의 기록 기준)."""
+        from validation.validator import Verdict
+
+        validator = self.context.validator(self.s.main_population)
+        order = ["AGE", "SEX", "LOC", "POB", "EDU", "OCCP", "INC", "REL"]
+        counts: dict[str, dict[str, int]] = {qi: {"total": 0, "unmapped": 0, "correct": 0, "less": 0, "wrong": 0}
+                                             for qi in order}
+        for dialogue in self.dialogues:
+            for position, _ in enumerate(dialogue.turns):
+                for obs in self.context.observations(dialogue, position, self.s.normalization):
+                    row = counts.setdefault(obs.attribute, {"total": 0, "unmapped": 0, "correct": 0, "less": 0, "wrong": 0})
+                    row["total"] += 1
+                    if not obs.is_mapped or not obs.canonical_value or obs.canonical_value not in self.bank.ontology:
+                        row["unmapped"] += 1
+                        continue
+                    verdict = validator.validate(dialogue.target_id, {obs.attribute: obs.canonical_value}).verdicts.get(obs.attribute)
+                    if verdict is Verdict.CORRECT:
+                        row["correct"] += 1
+                    elif verdict is Verdict.LESS_PRECISE:
+                        row["less"] += 1
+                    else:
+                        row["wrong"] += 1
+        rows, csv_rows = [], []
+        totals = {"total": 0, "unmapped": 0, "correct": 0, "less": 0, "wrong": 0}
+        for qi in order + [q for q in counts if q not in order]:
+            c = counts.get(qi)
+            if not c or not c["total"]:
+                continue
+            for key in totals:
+                totals[key] += c[key]
+            mapped = c["total"] - c["unmapped"]
+            csv_rows.append({"qi": qi, **c, "precision": _ratio(c["correct"] + c["less"], mapped)})
+            rows.append([qi, c["total"], _pct(_ratio(c["unmapped"], c["total"])), _pct(_ratio(c["correct"], mapped)),
+                         _pct(_ratio(c["less"], mapped)), _pct(_ratio(c["wrong"], mapped)),
+                         _pct(_ratio(c["correct"] + c["less"], mapped))])
+        mapped = totals["total"] - totals["unmapped"]
+        rows.append(["**전체**", totals["total"], _pct(_ratio(totals["unmapped"], totals["total"])),
+                     _pct(_ratio(totals["correct"], mapped)), _pct(_ratio(totals["less"], mapped)),
+                     _pct(_ratio(totals["wrong"], mapped)), f"**{_pct(_ratio(totals['correct'] + totals['less'], mapped))}**"])
+        csv_rows.append({"qi": "ALL", **totals, "precision": _ratio(totals["correct"] + totals["less"], mapped)})
+        self.files.append(_write_csv(self.out / "tables" / "extractor_accuracy.csv", csv_rows))
+        return ("### 3.3 정보 추출기의 정확도 (표 1-2)\n\n원래 답변에서 추출한 정보 하나하나를 대상의 정답과 대조했다. "
+                "Defender와 위험 계산은 모두 이 추출 결과 위에서 동작하므로, 추출이 틀리면 과잉 차단이나 위험 과소평가로 이어진다.\n\n"
+                + _table(["QI", "추출 건수", "표준 값으로 못 바꿈", "정확", "맞지만 덜 구체적", "틀림",
+                          "정밀도 (정확 + 덜 구체적)"], rows)
+                + "\n\n- 나이는 '30대 후반~40대 초반'처럼 10년 단위를 걸치는 범위로 답한 경우가 많다. 누적 State는 QI마다 값 하나만 "
+                  "담기 때문에 이런 범위는 표준 값으로 바꾸지 않고 계산에서 뺐다 (보수적 처리). 그래서 나이의 '못 바꿈' 비율이 높다.\n"
+                  "- '틀림'은 대부분 추출 오류가 아니라 대상 AI가 글을 읽고 잘못 추측한 값이다. 공격자도 같은 답을 보므로 "
+                  "틀린 값은 실제 위험을 키우지 않지만, Defender는 정답을 모르기 때문에 이 값도 믿고 계산한다 "
+                  "(3.1절의 과잉 차단 원인).\n"
+                  "- 재현율(답변에 있었는데 놓친 정보의 비율)은 답변마다 사람이 정답을 달아야 해서 재지 않았다. 놓친 경우의 영향은 5.2절 "
+                  "모의로 대신한다.")
+
+    # ── 실제 재작성 답변의 품질 ──────────────────────────
+
+    def _answer_utility(self) -> str:
+        from orchestrator.utility import similarity, similarity_floor
+
+        pairs: dict[str, list[tuple[str, str, str]]] = {"C1": [], "C1S": []}
+        raws: list[str] = []
+        for dialogue in self.dialogues:
+            for arm in pairs:
+                live = dialogue.live.get(arm)
+                if not live:
+                    continue
+                for path, (raw, released) in zip(live.paths, live.texts):
+                    pairs[arm].append((path, raw, released))
+                    if arm == "C1" and raw:
+                        raws.append(raw)
+        if not pairs["C1"]:
+            return "### 3.4 실제로 내보낸 답변의 품질\n\n실제 실행 기록에 방어 갈래가 없어 건너뛰었다."
+        floor = similarity_floor(raws) if len(raws) > 1 else None
+        rows, csv_rows = [], []
+        for arm, items in pairs.items():
+            if not items:
+                continue
+            for label, chosen in (("전체 턴", items),
+                                  ("고친 턴", [x for x in items if x[0] == "REWRITTEN"]),
+                                  ("거절한 턴", [x for x in items if x[0] == "REFUSAL"])):
+                if not chosen:
+                    continue
+                sims = [similarity(raw, out) for _, raw, out in chosen if raw]
+                lens = [len(out) / len(raw) for _, raw, out in chosen if raw]
+                row = {"arm": arm, "turns": label, "n": len(chosen), "similarity": mean(sims) if sims else math.nan,
+                       "length_ratio": mean(lens) if lens else math.nan}
+                csv_rows.append(row)
+                rows.append([arm, label, row["n"], f"{row['similarity']:.3f}", f"{row['length_ratio']:.2f}"])
+            unchanged = sum(1 for path, _, _ in items if path not in ("REWRITTEN", "REFUSAL"))
+            csv_rows.append({"arm": arm, "turns": "원문 그대로 나간 턴 비율", "n": len(items),
+                             "similarity": unchanged / len(items), "length_ratio": math.nan})
+        self.files.append(_write_csv(self.out / "tables" / "answer_utility.csv", csv_rows))
+        preserved = {r["arm"]: r["similarity"] for r in csv_rows if r["turns"] == "원문 그대로 나간 턴 비율"}
+        return ("### 3.4 실제로 내보낸 답변의 품질 (표 1-3)\n\n실제 실행(실행 당시 기준 집단)에서 사용자가 받은 답을 원래 답과 비교했다. "
+                "정상 사용자 관점의 유용성 지표다. 공개 QI 유지율(3.2절)이 '개인정보가 얼마나 남았는가'라면, 이 표는 "
+                "'답변 자체가 얼마나 그대로 전달됐는가'를 본다.\n\n"
+                + _table(["갈래", "대상 턴", "턴 수", "원래 답과의 유사도 (글자 3-gram)", "길이 비율"], rows)
+                + "\n\n- 원문 그대로 나간 턴 비율: "
+                + ", ".join(f"{arm} {_pct(value)}" for arm, value in preserved.items())
+                + (f"\n- 바닥값 (서로 다른 질문에 대한 원래 답변끼리의 유사도): {floor:.3f}. 고친 답의 유사도가 이보다 높으면 원래 답의 "
+                   "내용이 상당 부분 남아 있다는 뜻이다." if floor is not None else "")
+                + "\n- 유사도는 글자 겹침이라 뜻의 보존을 직접 재지는 않는다. 정상 질문에 대한 과잉 차단은 별도 실험으로 확인해야 한다.")
 
     # ── 표본 크기 계산 ──────────────────────────────────
 
@@ -341,11 +450,11 @@ class PaperBuilder:
             return [p["label"], _num(p["worst_k"]), _num(p["median_k"]), f"{p['retention']:.1f}%",
                     f"{p['preserved']:.1f}%", f"{p['violation']:.1f}%", f"{p['zero_match']} / {p['below_floor']}"]
 
-        header = ["설정", "최악 대상의 최소 k", "최소 k 중앙값", "정보 유지율", "원문 유지 턴",
+        header = ["설정", "최악 대상의 최소 k", "최소 k 중앙값", "공개 QI 유지율", "원문 유지 턴",
                   f"위반 (k<{self.s.eval_k})", "개입 이유 0명/기준미달"]
         notes = []
         if self.optimum:
-            notes.append(f"- **최적 운영점 (사전 규칙)**: 평가 기준 위반 0%를 달성한 설정 중 정보 유지율이 가장 높은 것 = "
+            notes.append(f"- **최적 운영점 (사전 규칙)**: 평가 기준 위반 0%를 달성한 설정 중 공개 QI 유지율이 가장 높은 것 = "
                          f"**{self.optimum['label']}** (유지율 {self.optimum['retention']:.1f}%, 최악 대상 k "
                          f"{self.optimum['worst_k']:,.0f}). 이보다 낮추면 위반이 생기고, 높이면 보호 요건은 같은데 정보만 줄어든다.")
         if self.knee_point:
@@ -356,7 +465,7 @@ class PaperBuilder:
         notes.append("- 고정 일반화(G)는 위험과 무관하게 모든 새 값을 올리므로, 같은 보호 수준에서 정보를 얼마나 더 잃는지 비교한다.")
         return ("## 4. 보호–유용성 균형 (표 2, 그림 2)\n\n"
                 f"Defender의 운영 k_req만 바꿔 같은 기록을 다시 판정했다. 보호는 '최악 대상의 최소 k'(모든 대상이 대화 내내 "
-                f"보장받은 최소 후보 수), 유용성은 정보 유지율이다. 위반 열은 평가 기준(k < {self.s.eval_k})으로 셌다.\n\n"
+                f"보장받은 최소 후보 수), 유용성은 공개 QI 유지율이다. 위반 열은 평가 기준(k < {self.s.eval_k})으로 셌다.\n\n"
                 "누적 방어 (C1)\n\n" + _table(header, [row(p) for p in c1])
                 + "\n\n누적 방어, 억제만 (일반화 없이 값을 빼기만 함)\n\n" + _table(header, [row(p) for p in series["C1-g0"]])
                 + "\n\n턴별 방어 (C1S)\n\n" + _table(header, [row(p) for p in series["C1S"]])
@@ -386,7 +495,7 @@ class PaperBuilder:
         self.files.append(_write_csv(self.out / "tables" / "population_check.csv", check))
         check_rows = [[r["population"], f"{r['size']:,}", f"{100 * r['same_country_rate']:.1f}%"] for r in check]
         return ("## 5. 민감도 (표 3, 그림 3)\n\n### 5.1 기준 집단\n\n"
-                + _table(["기준 집단", "인원", "C0 위반", "C1S 위반", "C1 위반", "C1 정보 유지율", "C0 최소 k 중앙값",
+                + _table(["기준 집단", "인원", "C0 위반", "C1S 위반", "C1 위반", "C1 공개 QI 유지율", "C0 최소 k 중앙값",
                           "C1 최소 k 중앙값"], rows)
                 + "\n\n기준 집단의 현실성 점검: 출생 국가와 거주 국가가 같은 사람의 비율 "
                   f"(원본 300명 = {100 * self.bank.same_country_rate:.1f}%)\n\n"
@@ -411,7 +520,7 @@ class PaperBuilder:
         self.files.append(_write_csv(self.out / "tables" / "sensitivity_miss.csv", csv_rows))
         return ("### 5.2 추출 누락\n\nDefender가 원래 답변의 관찰 중 일부를 보지 못했다고 가정했다. 못 본 값은 그대로 공개되고 "
                 "공격자는 그것까지 본다. 비율마다 누락을 무작위로 정한 반복의 평균과 2.5–97.5 백분위다.\n\n"
-                + _table(["누락 비율", "반복", "C1 위반 대상 (평균)", "반복 간 범위", "정보 유지율"], rows)
+                + _table(["누락 비율", "반복", "C1 위반 대상 (평균)", "반복 간 범위", "공개 QI 유지율"], rows)
                 + f"\n\n참고: 방어 없음(C0)의 위반 비율 = {self.miss_reference:.1f}%")
 
     def _generalization(self) -> str:
@@ -438,7 +547,7 @@ class PaperBuilder:
                 cells.append(f"{r['retention_pct']:.1f}% / {_num(r['worst_min_k'])} / {r['generalized']}·{r['suppressed']}")
             rows.append(cells)
         return ("### 5.3 최대 일반화 단계\n\nDefender가 값을 한 단계씩 넓힐 수 있는 한도를 바꿨다. 칸마다 "
-                "정보 유지율 / 최악 대상의 최소 k / 일반화·억제 횟수다.\n\n"
+                "공개 QI 유지율 / 최악 대상의 최소 k / 일반화·억제 횟수다.\n\n"
                 + _table(["최대 단계"] + [f"운영 k_req {k}" for k in ks], rows)
                 + "\n\n- 일반화가 억제보다 늘 정보를 더 남기는 것은 아니다. 앞 턴에서 넓혀서 남긴 값이 뒤 턴의 공개를 더 막을 수 "
                   "있기 때문이다 (경로 의존).")
@@ -462,7 +571,7 @@ class PaperBuilder:
         self.files.append(_write_csv(self.out / "tables" / "sensitivity_k.csv", csv_rows))
         return ("### 5.4 기준 k\n\nDefender가 지키는 값과 위반을 세는 평가 기준을 같은 k로 맞춰 바꿨다. "
                 "어떤 k를 요구 수준으로 정하든 결론이 같은지 본다.\n\n"
-                + _table(["기준 집단", "k", "C0 위반", "C1S 위반", "C1 위반", "C0 대 C1 McNemar p", "C1 정보 유지율"], rows))
+                + _table(["기준 집단", "k", "C0 위반", "C1S 위반", "C1 위반", "C0 대 C1 McNemar p", "C1 공개 QI 유지율"], rows))
 
     def _turn_length(self) -> str:
         rows, csv_rows = [], []
@@ -554,10 +663,10 @@ class PaperBuilder:
         return ("## 8. 그림\n\n"
                 "- `figures/fig1_risk_trajectory` (a) 턴마다 남은 후보 수의 중앙값과 사분위 범위, 붉은 점선이 평가 기준. "
                 "(b) 턴 t까지 한 번이라도 기준 아래로 내려간 대상의 비율.\n"
-                "- `figures/fig2_privacy_utility` (a) 가로 정보 유지율, 세로 위반 대상 비율. **오른쪽 아래**가 좋은 방향이다. "
-                "같은 유지율에서 더 아래에 있는 방식이 더 나은 방어다. (b) 운영 k_req에 따른 위반 비율과 정보 유지율. 붉은 선이 최적 운영점.\n"
+                "- `figures/fig2_privacy_utility` (a) 가로 공개 QI 유지율, 세로 위반 대상 비율. **오른쪽 아래**가 좋은 방향이다. "
+                "같은 유지율에서 더 아래에 있는 방식이 더 나은 방어다. (b) 운영 k_req에 따른 위반 비율과 공개 QI 유지율. 붉은 선이 최적 운영점.\n"
                 "- `figures/fig3_sensitivity` (a) 기준 집단을 바꿨을 때 갈래별 위반 비율 (b) Defender가 관찰을 놓친 비율에 따른 "
-                "누적 방어의 위반 비율 (c) 일반화 허용 단계에 따른 정보 유지율과 위반 비율.\n\n"
+                "누적 방어의 위반 비율 (c) 일반화 허용 단계에 따른 공개 QI 유지율과 위반 비율.\n\n"
                 "PNG(300dpi)와 PDF(벡터) 두 형식으로 저장했다.")
 
     # ── 9. 해석 시 주의 ─────────────────────────────────
