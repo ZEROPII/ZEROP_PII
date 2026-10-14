@@ -1,0 +1,60 @@
+{
+  "plan_version": "v1",
+  "fixed_at": "2026-10-14",
+  "purpose": "논문 본 결과를 새 실행(대상 추가·반복) 전에 고정한다. 결과를 본 뒤 기준을 바꾸지 않기 위한 사전 계획이다.",
+  "settings": {
+    "eval_k": 5,
+    "main_population": "synthpai-300",
+    "k_sweep": [
+      2,
+      3,
+      5,
+      10,
+      20,
+      50,
+      100,
+      200
+    ],
+    "populations": [
+      "synthpai-300",
+      "indep-3000",
+      "indep-30000",
+      "indep-300000",
+      "joint-300000"
+    ],
+    "static_levels": [
+      1,
+      2,
+      3
+    ],
+    "generalization": [
+      0,
+      1,
+      2
+    ],
+    "generalization_k": [
+      5,
+      20,
+      50,
+      100
+    ],
+    "miss_rates": [
+      0.0,
+      0.1,
+      0.2,
+      0.3,
+      0.5
+    ],
+    "miss_seeds": 20,
+    "normalization": "current",
+    "resamples": 5000,
+    "seed": 7
+  },
+  "rationale": {
+    "eval_k": "논문과 설계서(2026-09-24 의사결정 보고서)의 k_req = 5. 1 <= k < 5를 위반으로 센다.",
+    "main_population": "설계서가 결과를 보기 전에 확정한 기준 집단 P_ref = SynthPAI 300명. 30만 명 확장 집단은 속성 간 관계가 끊어져 있어 민감도 분석으로 보고한다.",
+    "primary_hypothesis": "주 기준 집단에서 누적 방어(C1)의 위반 대상 비율이 방어 없음(C0)보다 낮다. exact McNemar 양측, alpha 0.05.",
+    "secondary": "C1S 대 C1 (McNemar), 대상별 log10 최소 k_val과 위험 턴 비율의 짝 Wilcoxon, 다른 기준 집단에서의 C0 대 C1 (Holm 보정).",
+    "optimum_rule": "최적 운영점: 평가 기준(k_req 5) 위반 0%를 달성한 운영 k_req 중 정보 유지율이 가장 높은 설정 (동률이면 낮은 k_req). 보호 요건을 지키는 최소 비용 지점이다. log k 대 정보 유지율의 Kneedle 무릎점은 참고로만 보고한다."
+  }
+}

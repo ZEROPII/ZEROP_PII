@@ -5,6 +5,8 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
+import json
 import sys
 import time
 from pathlib import Path
@@ -18,38 +20,55 @@ from analysis.simulate import Context
 DEFAULT_RUNS_ROOT = Path(__file__).resolve().parent.parent / "runs"
 
 
+DEFAULT_PLAN = Path(__file__).resolve().parent.parent / "docs" / "analysis_plan_v1.json"
+
+
 def main(argv: list[str] | None = None) -> int:
-    defaults = Settings()
     parser = argparse.ArgumentParser(description="논문용 표와 그림을 기록만으로 만든다 (LLM 호출 없음)")
     parser.add_argument("runs", nargs="+", help="runs/ 아래 실행 폴더 이름 (여러 개면 대상을 합친다. 반복 실행도 가능)")
     parser.add_argument("--runs-root", default=str(DEFAULT_RUNS_ROOT))
     parser.add_argument("--out", default=None, help="결과 폴더 (기본: runs/paper_<첫 실행>)")
+    parser.add_argument("--plan", default=str(DEFAULT_PLAN) if DEFAULT_PLAN.exists() else None,
+                        help="사전 분석 계획 파일 (기본: docs/analysis_plan_v1.json). 아래 옵션으로 바꾸면 보고서에 '계획과 다름'으로 적힌다")
     parser.add_argument("--targets-file", nargs="*", default=[], help="대상 층(rich/sparse)을 읽을 target_selection 파일들")
-    parser.add_argument("--eval-k", type=int, default=defaults.eval_k, help="위반 평가 기준 (기본 5 = 논문 기준)")
-    parser.add_argument("--main-population", default=defaults.main_population)
-    parser.add_argument("--k-sweep", type=int, nargs="+", default=list(defaults.k_sweep))
-    parser.add_argument("--populations", nargs="+", default=list(defaults.populations))
-    parser.add_argument("--static-levels", type=int, nargs="+", default=list(defaults.static_levels))
-    parser.add_argument("--generalization", type=int, nargs="+", default=list(defaults.generalization))
-    parser.add_argument("--miss-rates", type=float, nargs="+", default=list(defaults.miss_rates))
-    parser.add_argument("--miss-seeds", type=int, default=defaults.miss_seeds)
-    parser.add_argument("--normalization", choices=["current", "recorded"], default=defaults.normalization)
-    parser.add_argument("--bootstrap", type=int, default=defaults.resamples)
-    parser.add_argument("--seed", type=int, default=defaults.seed)
+    parser.add_argument("--eval-k", type=int, default=None, help="위반 평가 기준 (계획 기본 5)")
+    parser.add_argument("--main-population", default=None)
+    parser.add_argument("--k-sweep", type=int, nargs="+", default=None)
+    parser.add_argument("--populations", nargs="+", default=None)
+    parser.add_argument("--static-levels", type=int, nargs="+", default=None)
+    parser.add_argument("--generalization", type=int, nargs="+", default=None)
+    parser.add_argument("--miss-rates", type=float, nargs="+", default=None)
+    parser.add_argument("--miss-seeds", type=int, default=None)
+    parser.add_argument("--normalization", choices=["current", "recorded"], default=None)
+    parser.add_argument("--bootstrap", dest="resamples", type=int, default=None)
+    parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--lang", choices=["auto", "ko", "en"], default="auto", help="그림 글자 (auto: 한글 글꼴이 있으면 ko)")
     parser.add_argument("--quick", action="store_true", help="빠른 점검용 (부트스트랩 500회, 누락 반복 3회)")
     args = parser.parse_args(argv)
 
-    populations = list(dict.fromkeys(args.populations + [args.main_population]))
-    for name in populations:
+    plan_data, plan_hash = {}, None
+    if args.plan:
+        plan_path = Path(args.plan)
+        plan_data = json.loads(plan_path.read_text(encoding="utf-8"))
+        plan_hash = hashlib.sha256(plan_path.read_bytes()).hexdigest()[:16]
+    values = {**Settings().to_dict(), **(plan_data.get("settings") or {})}
+    planned = dict(values)
+    for name in ("eval_k", "main_population", "k_sweep", "populations", "static_levels", "generalization",
+                 "miss_rates", "miss_seeds", "normalization", "resamples", "seed"):
+        given = getattr(args, name)
+        if given is not None:
+            values[name] = given
+    if args.quick:
+        values["resamples"], values["miss_seeds"] = 500, 3
+    values["populations"] = list(dict.fromkeys(list(values["populations"]) + [values["main_population"]]))
+    values["miss_rates"] = sorted(set([0.0] + list(values["miss_rates"])))
+    values["k_sweep"] = sorted(set(values["k_sweep"]))
+    for name in values["populations"]:
         PopulationSpec.parse(name)
-    settings = Settings(
-        eval_k=args.eval_k, main_population=args.main_population, k_sweep=tuple(sorted(set(args.k_sweep))),
-        populations=tuple(populations), static_levels=tuple(args.static_levels),
-        generalization=tuple(args.generalization), miss_rates=tuple(sorted(set([0.0] + args.miss_rates))),
-        miss_seeds=3 if args.quick else args.miss_seeds, normalization=args.normalization,
-        resamples=500 if args.quick else args.bootstrap, seed=args.seed,
-    )
+    settings = Settings(**{k: (tuple(v) if isinstance(v, list) else v) for k, v in values.items()
+                           if k in Settings.__dataclass_fields__})
+    deviations = {k: {"plan": planned[k], "used": values[k]} for k in planned
+                  if k in values and not _same(planned[k], values[k])}
 
     runs_root = Path(args.runs_root)
     infos, dialogues = [], []
@@ -87,11 +106,19 @@ def main(argv: list[str] | None = None) -> int:
             consistency.setdefault(condition, []).extend(execute(own, [condition], context)[condition])
 
     out = Path(args.out) if args.out else runs_root / f"paper_{infos[0].run_id}"
-    builder = PaperBuilder(settings, infos, dialogues, plan, results, consistency, context, strata, out, args.lang)
+    builder = PaperBuilder(settings, infos, dialogues, plan, results, consistency, context, strata, out, args.lang,
+                           plan_info={"path": args.plan, "sha256_16": plan_hash, "data": plan_data,
+                                      "deviations": deviations})
     report = builder.build()
     print(f"\n완료 ({time.time() - started:.0f}s): {report}")
     print(f"표: {out / 'tables'}  그림: {out / 'figures'}  재현 정보: {out / 'manifest.json'}")
     return 0
+
+
+def _same(a, b) -> bool:
+    if isinstance(a, (list, tuple)) and isinstance(b, (list, tuple)):
+        return sorted(map(str, a)) == sorted(map(str, b))
+    return a == b
 
 
 if __name__ == "__main__":

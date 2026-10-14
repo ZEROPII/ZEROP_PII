@@ -54,7 +54,9 @@ def _table(header: Sequence[str], rows: Sequence[Sequence[Any]]) -> str:
 class PaperBuilder:
     def __init__(self, settings: Settings, runs: Sequence[RunInfo], dialogues: Sequence[Dialogue], plan: Plan,
                  results: dict[Condition, list[UnitResult]], consistency: dict[Condition, list[UnitResult]],
-                 context: Context, strata: dict[str, str], out: Path, lang: str) -> None:
+                 context: Context, strata: dict[str, str], out: Path, lang: str,
+                 plan_info: dict[str, Any] | None = None) -> None:
+        self.plan_info = plan_info or {}
         self.s, self.runs, self.dialogues, self.plan = settings, runs, dialogues, plan
         self.results, self.consistency, self.context = results, consistency, context
         self.strata, self.out, self.lang = strata, out, lang
@@ -76,9 +78,9 @@ class PaperBuilder:
 
     def build(self) -> Path:
         self.out.mkdir(parents=True, exist_ok=True)
-        sections = [self._header(), self._consistency(), self._main(), self._tradeoff(), self._population(),
-                    self._miss(), self._generalization(), self._stability(), self._overhead(), self._figures(),
-                    self._cautions()]
+        sections = [self._header(), self._consistency(), self._hypotheses(), self._main(), self._decisions(),
+                    self._qi_utility(), self._tradeoff(), self._population(), self._miss(), self._generalization(),
+                    self._stability(), self._power(), self._overhead(), self._figures(), self._cautions()]
         self._per_unit_csv()
         report = self.out / "paper_report.md"
         report.write_text("\n\n".join(sections) + "\n", encoding="utf-8")
@@ -104,7 +106,12 @@ class PaperBuilder:
             ["정규화", "현재 해석 규칙으로 다시 정규화" if self.s.normalization == "current" else "실행 당시 정규화 그대로"],
             ["부트스트랩", f"{self.s.resamples:,}회, 대상 단위 묶음 추출, 난수 {self.s.seed}"],
             ["LLM 호출", "0회 (기록만으로 계산)"],
+            ["사전 분석 계획", f"{Path(self.plan_info['path']).name} (sha256 {self.plan_info.get('sha256_16')})"
+             if self.plan_info.get("path") else "없음"],
         ]
+        deviations = self.plan_info.get("deviations") or {}
+        if deviations:
+            rows.append(["계획과 다른 설정", "; ".join(f"{k}: 계획 {v['plan']} → 사용 {v['used']}" for k, v in deviations.items())])
         return "# 논문용 분석 결과\n\n" + _table(["항목", "값"], rows)
 
     # ── 2. 재현성: 실제 실행과의 일치 ───────────────────
@@ -177,21 +184,117 @@ class PaperBuilder:
                           f"{_pct(result['rate_diff_high'])}]", f"{result['only_a']} / {result['only_b']}",
                           f"{result['mcnemar_p']:.3f}",
                           f"{result['log10_gap_median']:.2f} [{result['log10_gap_low']:.2f}, {result['log10_gap_high']:.2f}]"])
+        for row, (a, b) in zip(pair_rows, (("C0", "C1"), ("C1S", "C1"), ("C0", "C1S"))):
+            logk = stats.wilcoxon_exact(self._target_gaps(self.main(a), self.main(b),
+                                                          lambda r: math.log10(max(r.min_k_val, 1))))
+            risk = stats.wilcoxon_exact(self._target_gaps(self.main(a), self.main(b), lambda r: stats.summarize([r])["risk_turn_share"]))
+            row.update({"wilcoxon_logk_p": logk["p"], "wilcoxon_logk_n": logk["n"],
+                        "wilcoxon_risk_turn_p": risk["p"], "wilcoxon_risk_turn_n": risk["n"]})
+        for cells, row in zip(pairs, pair_rows):
+            cells += [f"{row['wilcoxon_logk_p']:.4f} (n={row['wilcoxon_logk_n']})",
+                      f"{row['wilcoxon_risk_turn_p']:.4f} (n={row['wilcoxon_risk_turn_n']})"]
         self.files.append(_write_csv(self.out / "tables" / "paired_tests.csv", pair_rows))
 
         for arm in ("C0", "C1S", "C1"):
             self.files.append(_write_csv(self.out / "tables" / f"trajectory_{arm}.csv", stats.trajectory(self.main(arm))))
-        return ("## 2. 본 결과 (표 1)\n\n"
+        return ("## 3. 본 결과 (표 1)\n\n"
                 f"설정: 기준 집단 {self.s.main_population}, Defender k_req = 평가 기준 = {self.s.eval_k}.\n\n"
                 + _table(["갈래", "위반 대상", "95% CI", "최소 k_val 중앙값 [사분위]", "첫 위반 턴(중앙값)",
                           "위험 턴 비율", "원문 유지 턴", "정보 유지율", "개입/거절 턴"], rows)
                 + "\n\n짝 비교 (같은 대상, 같은 질문)\n\n"
                 + _table(["비교", "위반 비율 차이 [95% CI]", "한쪽만 위반 (앞/뒤)", "exact McNemar p",
-                          "log10 최소 k 차이(뒤−앞) 중앙값 [95% CI]"], pairs)
+                          "log10 최소 k 차이(뒤−앞) 중앙값 [95% CI]", "Wilcoxon p: 최소 k", "Wilcoxon p: 위험 턴 비율"], pairs)
                 + "\n\n- 위험 턴 비율: 전체 턴 중 그 턴의 누적 공개 상태가 평가 기준 미만이었던 턴의 비율. "
                   "대상 수가 적을 때 위반 여부(대상 단위)보다 촘촘한 지표다.\n"
                   "- 정보 유지율: 새로 공개될 뻔한 정보 중 공개된 정도 (그대로 1, 한 단계 일반화는 부분, 억제 0).\n"
                   "- log10 최소 k 차이: 대상마다 두 조건의 최소 후보 수를 로그로 비교한 값. 1이면 10배 차이.")
+
+    # ── 사전 계획한 가설 검정 ───────────────────────────
+
+    def _hypotheses(self) -> str:
+        primary = self.s.main_population
+        rows, pvalues, csv_rows = [], {}, []
+        for name in self.s.populations:
+            c0 = self.find("population", arm="C0", population=name)
+            c1 = self.find("population", arm="C1", population=name)
+            only_c0 = sum(1 for a, b in zip(c0, c1) if a.violated and not b.violated)
+            only_c1 = sum(1 for a, b in zip(c0, c1) if b.violated and not a.violated)
+            p = stats.mcnemar_exact(only_c0, only_c1)
+            gap = stats.wilcoxon_exact(self._target_gaps(c0, c1, lambda r: math.log10(max(r.min_k_val, 1))))
+            csv_rows.append({"population": name, "primary": name == primary, "only_c0": only_c0, "only_c1": only_c1,
+                             "mcnemar_p": p, "wilcoxon_logk_n": gap["n"], "wilcoxon_logk_p": gap["p"]})
+            if name != primary:
+                pvalues[name] = p
+        adjusted = stats.holm(pvalues)
+        for row in csv_rows:
+            row["mcnemar_p_holm"] = row["mcnemar_p"] if row["primary"] else adjusted[row["population"]]
+            rows.append([("**주** " if row["primary"] else "") + row["population"], f"{row['only_c0']} / {row['only_c1']}",
+                         f"{row['mcnemar_p']:.4f}", "-" if row["primary"] else f"{row['mcnemar_p_holm']:.4f}",
+                         f"{row['wilcoxon_logk_n']}", f"{row['wilcoxon_logk_p']:.4f}"])
+        self.files.append(_write_csv(self.out / "tables" / "hypothesis_tests.csv", csv_rows))
+        plan = (self.plan_info.get("data") or {}).get("rationale") or {}
+        head = f"주 가설: {plan.get('primary_hypothesis', '주 기준 집단에서 C1의 위반 비율이 C0보다 낮다.')}\n\n"
+        return ("## 2. 사전 계획한 가설 검정\n\n" + head
+                + _table(["기준 집단", "한쪽만 위반 (C0만 / C1만)", "exact McNemar p", "Holm 보정 p (부 분석)",
+                          "Wilcoxon 짝 수", "Wilcoxon p (대상별 log10 최소 k)"], rows)
+                + "\n\n- McNemar: 대상마다 두 조건 중 한쪽에서만 위반한 경우만 센다. 같은 대상을 짝지어 비교하므로 대상 간 차이가 지워진다.\n"
+                  "- Wilcoxon: 위반 여부 대신 대상별 최소 후보 수(로그)의 차이를 순위로 비교한다. 위반까지 가지 않은 대상의 차이도 반영된다.\n"
+                  "- 주 기준 집단은 사전 계획 파일에서 정한 것이다. 나머지는 부 분석으로 보고 Holm 방식으로 보정했다.")
+
+    def _target_gaps(self, a: Sequence[UnitResult], b: Sequence[UnitResult], value) -> list[float]:
+        first, second = stats.per_target(a, value), stats.per_target(b, value)
+        return [second[t] - first[t] for t in first]
+
+    # ── Defender 판단의 정확도 ──────────────────────────
+
+    def _decisions(self) -> str:
+        rows, csv_rows = [], []
+        for arm in ("C1S", "C1"):
+            d = stats.decisions(self.main(arm))
+            csv_rows.append({"arm": arm, **d})
+            rows.append([arm, d["tp"], d["fn"], d["fp"], d["tn"], _pct(d["recall"]), _pct(d["precision"]),
+                         _pct(d["over_block_rate"]), f"{d['fp_zero_match']} / {d['fp_below_floor']} / {d['fp_refusal']}"])
+        self.files.append(_write_csv(self.out / "tables" / "defender_decisions.csv", csv_rows))
+        return ("### 3.1 Defender 판단의 정확도 (표 1-1)\n\n"
+                f"턴마다 정답과 대조해 '원래 답변을 그대로 내면 k_val이 {self.s.eval_k} 미만이 되는가(막아야 했는가)'와 "
+                "'실제로 막았는가(고침 또는 거절)'를 맞춰 봤다. Defender는 실행 중 정답을 모르므로, 이 표는 정답 없이 내린 판단이 "
+                "얼마나 맞았는지를 보여 준다.\n\n"
+                + _table(["갈래", "막아야 했고 막음", "막아야 했는데 놓침", "안 막아도 됐는데 막음", "안 막아도 됐고 통과",
+                          "재현율 (위험 턴 중 막은 비율)", "정밀도 (막은 턴 중 실제 위험)", "과잉 차단률",
+                          "과잉 차단 이유 0명/기준미달/거절"], rows)
+                + "\n\n- 과잉 차단은 Defender가 정답을 모른 채 AI가 말한 값을 그대로 믿고 계산하기 때문에 생긴다. "
+                  "'0명'은 틀린 단서가 섞여 실행 중 후보가 0명이 된 경우, '기준미달'은 틀린 단서 때문에 실행 중 후보 수가 "
+                  "실제보다 작게 계산된 경우다. 정답 기준으로는 위험하지 않았으므로 보호를 위해 치른 비용으로 해석한다.\n"
+                  "- 놓침이 0이면, 정답 기준으로 위험했던 턴은 모두 막았다는 뜻이다 (이상적 재작성 가정 아래).")
+
+    def _qi_utility(self) -> str:
+        retention = stats.qi_retention(self.main("C1"))
+        order = ["AGE", "SEX", "LOC", "POB", "EDU", "OCCP", "INC", "REL"]
+        rows = [[qi, retention[qi][1], _pct(retention[qi][0])] for qi in order if qi in retention]
+        self.files.append(_write_csv(self.out / "tables" / "qi_retention.csv",
+                                     [{"qi": r[0], "new_disclosures": r[1], "retention": retention[r[0]][0]} for r in rows]))
+        return ("### 3.2 QI별 정보 유지율 (누적 방어)\n\n어떤 종류의 정보가 주로 가려졌는지 본다.\n\n"
+                + _table(["QI", "새 공개분 수", "유지율"], rows))
+
+    # ── 표본 크기 계산 ──────────────────────────────────
+
+    def _power(self) -> str:
+        sizes = (10, 20, 30, 40, 50, 60)
+        rows, csv_rows = [], []
+        for name in self.s.populations:
+            c0 = self.find("population", arm="C0", population=name)
+            c1 = self.find("population", arm="C1", population=name)
+            n = len(c0)
+            p10 = sum(1 for a, b in zip(c0, c1) if a.violated and not b.violated) / n
+            p01 = sum(1 for a, b in zip(c0, c1) if b.violated and not a.violated) / n
+            power = [stats.mcnemar_power(size, p10, p01) for size in sizes]
+            csv_rows.append({"population": name, "p_c0_only": p10, "p_c1_only": p01,
+                             **{f"power_n{size}": value for size, value in zip(sizes, power)}})
+            rows.append([name, f"{100 * p10:.0f}% / {100 * p01:.0f}%"] + [f"{100 * v:.0f}%" for v in power])
+        self.files.append(_write_csv(self.out / "tables" / "power.csv", csv_rows))
+        return ("### 6.1 필요한 대상 수 (검정력)\n\n지금 관찰한 비율(대상 중 C0에서만 / C1에서만 위반한 비율)이 유지된다고 보고, "
+                "대상 수별로 exact McNemar가 0.05 아래로 나올 확률을 정확 계산했다. 80% 이상이면 충분한 표본으로 본다.\n\n"
+                + _table(["기준 집단", "C0만 / C1만"] + [f"{n}명" for n in sizes], rows))
 
     # ── 4. 보호–유용성 ──────────────────────────────────
 
@@ -221,9 +324,10 @@ class PaperBuilder:
         self.files.append(_write_csv(self.out / "tables" / "tradeoff.csv", csv_rows))
 
         c1 = series["C1"]
+        safe = [p for p in c1 if p["violation"] == 0]
+        self.optimum = max(safe, key=lambda p: (p["retention"], -(p["k_req"] or 0))) if safe else None
         position = stats.knee([(math.log10(max(p["worst_k"], 1)), p["retention"]) for p in c1])
         self.knee_point = c1[position] if position is not None else None
-        compliant = next((p for p in c1 if p["worst_k"] >= self.s.eval_k), None)
         self.series = series
 
         def row(p: dict[str, Any]) -> list[Any]:
@@ -233,17 +337,17 @@ class PaperBuilder:
         header = ["설정", "최악 대상의 최소 k", "최소 k 중앙값", "정보 유지율", "원문 유지 턴",
                   f"위반 (k<{self.s.eval_k})", "개입 이유 0명/기준미달"]
         notes = []
-        if compliant:
-            notes.append(f"- 모든 대상이 평가 기준 k ≥ {self.s.eval_k}를 지킨 가장 낮은 운영 설정: **{compliant['label']}** "
-                         f"(정보 유지율 {compliant['retention']:.1f}%).")
+        if self.optimum:
+            notes.append(f"- **최적 운영점 (사전 규칙)**: 평가 기준 위반 0%를 달성한 설정 중 정보 유지율이 가장 높은 것 = "
+                         f"**{self.optimum['label']}** (유지율 {self.optimum['retention']:.1f}%, 최악 대상 k "
+                         f"{self.optimum['worst_k']:,.0f}). 이보다 낮추면 위반이 생기고, 높이면 보호 요건은 같은데 정보만 줄어든다.")
         if self.knee_point:
-            notes.append(f"- 곡선의 무릎점 (가로축 log k, 세로축 정보 유지율. 양 끝을 잇는 직선에서 가장 먼 점, Kneedle 방식): "
-                         f"**{self.knee_point['label']}** (최악 대상 k {self.knee_point['worst_k']:,.0f}, "
-                         f"유지율 {self.knee_point['retention']:.1f}%). 이보다 k_req를 올리면 얻는 보호에 비해 잃는 정보가 커진다.")
+            notes.append(f"- 참고: log k 대 유지율 곡선의 무릎점(Kneedle)은 {self.knee_point['label']}이다. 요건과 무관한 일반 지표라 "
+                         "운영점 선택에는 쓰지 않는다.")
         notes.append("- 개입 이유: '0명'은 새 답변이 후보를 0명으로 만드는 경우(대개 틀린 단서가 섞인 경우)로 k_req와 무관하게 막는다. "
                      "'기준미달'은 k_req 아래로 좁히는 경우다. 운영 k_req를 바꾸면 뒤쪽만 달라진다.")
         notes.append("- 고정 일반화(G)는 위험과 무관하게 모든 새 값을 올리므로, 같은 보호 수준에서 정보를 얼마나 더 잃는지 비교한다.")
-        return ("## 3. 보호–유용성 균형 (표 2, 그림 2)\n\n"
+        return ("## 4. 보호–유용성 균형 (표 2, 그림 2)\n\n"
                 f"Defender의 운영 k_req만 바꿔 같은 기록을 다시 판정했다. 보호는 '최악 대상의 최소 k'(모든 대상이 대화 내내 "
                 f"보장받은 최소 후보 수), 유용성은 정보 유지율이다. 위반 열은 평가 기준(k < {self.s.eval_k})으로 셌다.\n\n"
                 "누적 방어 (C1)\n\n" + _table(header, [row(p) for p in c1])
@@ -274,7 +378,7 @@ class PaperBuilder:
         check = self.bank.association_table(self.s.populations)
         self.files.append(_write_csv(self.out / "tables" / "population_check.csv", check))
         check_rows = [[r["population"], f"{r['size']:,}", f"{100 * r['same_country_rate']:.1f}%"] for r in check]
-        return ("## 4. 민감도 (표 3, 그림 3)\n\n### 4.1 기준 집단\n\n"
+        return ("## 5. 민감도 (표 3, 그림 3)\n\n### 5.1 기준 집단\n\n"
                 + _table(["기준 집단", "인원", "C0 위반", "C1S 위반", "C1 위반", "C1 정보 유지율", "C0 최소 k 중앙값",
                           "C1 최소 k 중앙값"], rows)
                 + "\n\n기준 집단의 현실성 점검: 출생 국가와 거주 국가가 같은 사람의 비율 "
@@ -298,7 +402,7 @@ class PaperBuilder:
         self.miss_rows = csv_rows
         self.miss_reference = 100 * stats.violation_rate(self.main("C0"))
         self.files.append(_write_csv(self.out / "tables" / "sensitivity_miss.csv", csv_rows))
-        return ("### 4.2 추출 누락\n\nDefender가 원래 답변의 관찰 중 일부를 보지 못했다고 가정했다. 못 본 값은 그대로 공개되고 "
+        return ("### 5.2 추출 누락\n\nDefender가 원래 답변의 관찰 중 일부를 보지 못했다고 가정했다. 못 본 값은 그대로 공개되고 "
                 "공격자는 그것까지 본다. 비율마다 누락을 무작위로 정한 반복의 평균과 2.5–97.5 백분위다.\n\n"
                 + _table(["누락 비율", "반복", "C1 위반 대상 (평균)", "반복 간 범위", "정보 유지율"], rows)
                 + f"\n\n참고: 방어 없음(C0)의 위반 비율 = {self.miss_reference:.1f}%")
@@ -326,7 +430,7 @@ class PaperBuilder:
                 r = next(x for x in csv_rows if x["max_generalization"] == g and x["k_req"] == k)
                 cells.append(f"{r['retention_pct']:.1f}% / {_num(r['worst_min_k'])} / {r['generalized']}·{r['suppressed']}")
             rows.append(cells)
-        return ("### 4.3 최대 일반화 단계\n\nDefender가 값을 한 단계씩 넓힐 수 있는 한도를 바꿨다. 칸마다 "
+        return ("### 5.3 최대 일반화 단계\n\nDefender가 값을 한 단계씩 넓힐 수 있는 한도를 바꿨다. 칸마다 "
                 "정보 유지율 / 최악 대상의 최소 k / 일반화·억제 횟수다.\n\n"
                 + _table(["최대 단계"] + [f"운영 k_req {k}" for k in ks], rows)
                 + "\n\n- 일반화가 억제보다 늘 정보를 더 남기는 것은 아니다. 앞 턴에서 넓혀서 남긴 값이 뒤 턴의 공개를 더 막을 수 "
@@ -342,7 +446,7 @@ class PaperBuilder:
         self.files.append(_write_csv(self.out / "tables" / "stability.csv", result))
         rows = [[r["targets"], f"{100 * r['mean_diff']:.1f}%", f"{100 * r['low']:.1f}% – {100 * r['high']:.1f}%",
                  f"{100 * r['width']:.1f}%p"] for r in result]
-        return ("## 5. 대상 수에 따른 추정의 안정성 (표 4)\n\n"
+        return ("## 6. 대상 수에 따른 추정의 안정성 (표 4)\n\n"
                 f"지금 가진 {targets}명에서 n명을 복원 추출해 C0−C1 위반 비율 차이를 다시 계산했다. 구간 폭이 줄어드는 정도로 "
                 "대상을 몇 명까지 늘려야 하는지 가늠한다. 대상이 늘어난 뒤 다시 돌리면 실제 값으로 바뀐다.\n\n"
                 + _table(["대상 수", "차이 평균", "95% 범위", "범위 폭"], rows))
@@ -372,7 +476,7 @@ class PaperBuilder:
         csv_rows = [{"stage": r[0], "latency_ms": r[1], "input_tokens": r[2], "output_tokens": r[3]} for r in rows]
         csv_rows.append({"stage": "추가 지연 추정 (턴당)", "latency_ms": _num(added), "input_tokens": "", "output_tokens": ""})
         self.files.append(_write_csv(self.out / "tables" / "overhead.csv", csv_rows))
-        return ("## 6. 실사용 부담 (표 5)\n\n턴 하나의 평균 지연(ms)과 토큰. 실험에서 질문 생성(Fuzzer)은 공격자 쪽이므로 빼고, "
+        return ("## 7. 실사용 부담 (표 5)\n\n턴 하나의 평균 지연(ms)과 토큰. 실험에서 질문 생성(Fuzzer)은 공격자 쪽이므로 빼고, "
                 "서비스에 붙였을 때 늘어나는 부분만 본다.\n\n"
                 + _table(["단계", "지연 (ms)", "입력 토큰", "출력 토큰"], rows)
                 + f"\n\n- 개입 비율 {_pct(intervene)}를 반영한 턴당 추가 지연 추정: 약 {_num(added)} ms "
@@ -390,14 +494,14 @@ class PaperBuilder:
         trajectories = {arm: stats.trajectory(self.main(arm)) for arm in ("C0", "C1S", "C1")}
         survivals = {arm: stats.survival(self.main(arm), max_turn) for arm in ("C0", "C1S", "C1")}
         self.files += figures.fig1(trajectories, survivals, self.s.eval_k, lang, figure_dir)
-        self.files += figures.fig2(self.series, self.knee_point, self.s.eval_k, lang, figure_dir)
+        self.files += figures.fig2(self.series, self.optimum, self.s.eval_k, lang, figure_dir)
         self.files += figures.fig3(self.population_rows, self.miss_rows, self.miss_reference,
                                    self.generalization_rows, lang, figure_dir)
-        return ("## 7. 그림\n\n"
+        return ("## 8. 그림\n\n"
                 "- `figures/fig1_risk_trajectory` (a) 턴마다 남은 후보 수의 중앙값과 사분위 범위, 붉은 점선이 평가 기준. "
                 "(b) 턴 t까지 한 번이라도 기준 아래로 내려간 대상의 비율.\n"
-                "- `figures/fig2_privacy_utility` 가로 정보 유지율, 세로 위반 대상 비율. 왼쪽 아래가 아니라 **오른쪽 아래**가 "
-                "좋은 방향(정보는 많이 남기고 위반은 적게)이다. 점 옆 숫자는 운영 k_req, 붉은 원은 무릎점.\n"
+                "- `figures/fig2_privacy_utility` (a) 가로 정보 유지율, 세로 위반 대상 비율. **오른쪽 아래**가 좋은 방향이다. "
+                "같은 유지율에서 더 아래에 있는 방식이 더 나은 방어다. (b) 운영 k_req에 따른 위반 비율과 정보 유지율. 붉은 선이 최적 운영점.\n"
                 "- `figures/fig3_sensitivity` (a) 기준 집단을 바꿨을 때 갈래별 위반 비율 (b) Defender가 관찰을 놓친 비율에 따른 "
                 "누적 방어의 위반 비율 (c) 일반화 허용 단계에 따른 정보 유지율과 위반 비율.\n\n"
                 "PNG(300dpi)와 PDF(벡터) 두 형식으로 저장했다.")
@@ -405,15 +509,15 @@ class PaperBuilder:
     # ── 9. 해석 시 주의 ─────────────────────────────────
 
     def _cautions(self) -> str:
-        return ("## 8. 이 결과를 쓸 때 함께 적어야 할 가정\n\n"
+        return ("## 9. 이 결과를 쓸 때 함께 적어야 할 가정\n\n"
                 "1. **이상적 재작성 가정**: 조건을 바꾼 재계산에서는 Defender가 허용·일반화한 값만 공개된다고 본다. "
                 "실제 재작성과의 차이는 1절의 일치율로 확인한다.\n"
                 "2. **같은 원래 답변**: 모든 조건이 같은 질문과 같은 원래 답변을 쓴다 (짝 설계). 방어가 다음 질문을 바꾸는 효과는 "
                 "이 분석 범위 밖이다.\n"
-                "3. **추출기 의존**: 원래 답변에서 추출기가 놓친 단서는 어느 조건에서도 계산되지 않는다. 4.2절은 Defender 쪽 누락만 "
+                "3. **추출기 의존**: 원래 답변에서 추출기가 놓친 단서는 어느 조건에서도 계산되지 않는다. 5.2절은 Defender 쪽 누락만 "
                 "모의한 것이다.\n"
                 "4. **합성 데이터와 기준 집단**: 대상·글·기준 집단이 모두 합성이며, k는 기준 집단 안의 후보 수일 뿐 실제 신원 확인을 "
-                "뜻하지 않는다. 4.1절처럼 기준 집단의 구성에 따라 절대값이 크게 달라진다.\n"
+                "뜻하지 않는다. 5.1절처럼 기준 집단의 구성에 따라 절대값이 크게 달라진다.\n"
                 "5. **범위 밖**: 생성 전 규칙 주입(경량 언러닝, C2·C3)과 변형 재공격은 이 분석에 포함되지 않는다.")
 
     # ── 파일 ────────────────────────────────────────────
@@ -460,6 +564,8 @@ class PaperBuilder:
             "git": {"commit": git("rev-parse", "HEAD"), "branch": git("rev-parse", "--abbrev-ref", "HEAD"),
                     "dirty": bool(git("status", "--porcelain"))},
             "settings": self.s.to_dict(),
+            "analysis_plan": {"path": self.plan_info.get("path"), "sha256_16": self.plan_info.get("sha256_16"),
+                              "deviations": self.plan_info.get("deviations")},
             "runs": [{"run_id": r.run_id, "lead_arm": r.lead_arm, "arms": list(r.arms), "k_req": r.k_req,
                       "population": r.population,
                       "model": r.config.get("model"), "prompts": r.config.get("prompts"),

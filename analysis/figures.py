@@ -32,7 +32,7 @@ TEXT = {
         "turn": "대화 턴", "k": "남은 후보 수 k (로그)", "kreq": "평가 기준 k = {k}",
         "share": "위반한 대상의 누적 비율", "retention": "정보 유지율 (%)", "violation": "위반 대상 비율 (%)",
         "fig1a": "(a) 턴별 후보 수 (중앙값, 사분위 범위)", "fig1b": "(b) 위반 도달 누적 비율",
-        "fig2": "보호–유용성 균형", "knee": "무릎점", "protection": "보호: 모든 대상이 보장받은 최소 후보 수 k (로그)",
+        "fig2a": "(a) 보호–유용성 평면", "fig2b": "(b) 누적 방어의 운영 k_req", "optimum": "최적 운영점", "knee": "무릎점", "protection": "보호: 모든 대상이 보장받은 최소 후보 수 k (로그)",
         "fig3a": "(a) 기준 집단", "fig3b": "(b) 추출 누락 비율", "fig3c": "(c) 최대 일반화 단계",
         "miss": "Defender가 놓친 관찰 비율 (%)", "kop": "Defender 운영 k_req", "gen": "최대 일반화 단계", "unlimited": "제한 없음",
         "suppress_only": "억제만",
@@ -44,7 +44,7 @@ TEXT = {
         "share": "Cumulative share violated", "retention": "Information retention (%)",
         "violation": "Targets violated (%)",
         "fig1a": "(a) Candidates per turn (median, IQR)", "fig1b": "(b) Cumulative violation",
-        "fig2": "Privacy–utility trade-off", "knee": "knee", "protection": "Protection: worst-case minimum k (log)",
+        "fig2a": "(a) Privacy–utility plane", "fig2b": "(b) Operating k_req of C1", "optimum": "optimum", "knee": "knee", "protection": "Protection: worst-case minimum k (log)",
         "fig3a": "(a) Reference population", "fig3b": "(b) Extraction misses", "fig3c": "(c) Max generalization",
         "miss": "Observations missed by Defender (%)", "kop": "Defender k_req", "gen": "Max generalization steps", "unlimited": "unlimited",
         "suppress_only": "suppress only",
@@ -122,45 +122,64 @@ def fig1(trajectories: dict[str, list[dict]], survivals: dict[str, list[dict]], 
     return _save(fig, out, "fig1_risk_trajectory")
 
 
-def fig2(series: dict[str, list[dict]], knee_point: dict | None, eval_k: int, lang: str, out: Path) -> list[Path]:
+def fig2(series: dict[str, list[dict]], optimum: dict | None, eval_k: int, lang: str, out: Path) -> list[Path]:
     """
-    series: 이름 → [{"worst_k": 최악 대상의 최소 k, "retention": 정보 유지율 %, "label": 점 이름}, ...] (설정 순서)
-    가로 = 보호 (log), 세로 = 유용성. 오른쪽 위가 좋은 방향이다.
+    (a) 보호–유용성 평면: 가로 정보 유지율 %, 세로 위반 대상 비율 %. 오른쪽 아래가 좋은 방향
+    (b) 누적 방어의 운영 k_req에 따른 위반 비율과 정보 유지율. 최적 운영점을 세로선으로 표시
+    series: 이름 → [{"retention", "violation", "label", "k_req"}, ...] (설정 순서)
     """
     t = TEXT[lang]
-    fig, axis = plt.subplots(figsize=(4.6, 3.3))
+    fig, (left, right) = plt.subplots(1, 2, figsize=(7.0, 2.9), gridspec_kw={"width_ratios": [1.15, 1.0]})
     for name in ("C1", "C1-g0", "C1S", "STATIC", "C0"):
         points = series.get(name) or []
         if not points:
             continue
         style = STYLE[name]
-        xs = [max(p["worst_k"], 1) for p in points]
-        axis.plot(xs, [p["retention"] for p in points], label=t[name], linewidth=1.2,
+        left.plot([p["retention"] for p in points], [p["violation"] for p in points], label=t[name], linewidth=1.2,
                   markersize=4 if name != "C0" else 6, **style)
         if name in ("C1", "STATIC"):
-            groups: dict[tuple[float, float], list[str]] = {}
-            for x, p in zip(xs, points):
-                groups.setdefault((x, round(p["retention"], 1)), []).append(p["label"])
-            for (x, y), labels in groups.items():
-                text = labels[0] if len(labels) == 1 else f"{labels[0]}–{labels[-1].lstrip('kG')}"
-                axis.annotate(text, (x, y), textcoords="offset points", xytext=(3, 4), fontsize=6,
-                              color=style["color"])
-    axis.axvspan(0.7, eval_k, color="#B00020", alpha=0.06, linewidth=0)
-    axis.axvline(eval_k, color="#B00020", linewidth=0.9, linestyle=(0, (4, 3)))
-    axis.text(eval_k * 1.08, 97, t["kreq"].format(k=eval_k), color="#B00020", fontsize=7, va="top")
-    if knee_point:
-        x = max(knee_point["worst_k"], 1)
-        axis.scatter([x], [knee_point["retention"]], s=90, facecolors="none", edgecolors="#B00020", linewidths=1.2,
-                     zorder=5)
-        axis.annotate(f"{t['knee']} ({knee_point['label']})", (x, knee_point["retention"]),
-                      textcoords="offset points", xytext=(6, -14), fontsize=7, color="#B00020")
-    axis.set_xscale("log")
-    axis.set_xlim(left=0.7)
-    axis.set_xlabel(t["protection"])
-    axis.set_ylabel(t["retention"])
-    axis.set_ylim(-3, 103)
-    axis.set_title(t["fig2"].format(k=eval_k), loc="left")
-    axis.legend(frameon=False, loc="lower right", bbox_to_anchor=(1.0, 0.2))
+            seen: set[tuple[float, float]] = set()
+            for p in points:
+                key = (round(p["retention"], 1), round(p["violation"], 1))
+                if key in seen or (p["violation"] == 0 and p is not optimum and name == "C1") \
+                        or (name == "STATIC" and p["label"] not in ("G1", "G2")):
+                    continue
+                seen.add(key)
+                left.annotate(p["label"], (p["retention"], p["violation"]), textcoords="offset points", xytext=(3, 4),
+                              fontsize=6, color=style["color"])
+    if optimum:
+        left.scatter([optimum["retention"]], [optimum["violation"]], s=90, facecolors="none", edgecolors="#B00020",
+                     linewidths=1.2, zorder=5)
+        left.annotate(f"{t['optimum']} ({optimum['label']})", (optimum["retention"], optimum["violation"]),
+                      textcoords="offset points", xytext=(4, 14), fontsize=7, color="#B00020")
+    left.set_xlabel(t["retention"])
+    left.set_ylabel(t["violation"] + f" (k<{eval_k})")
+    left.set_xlim(-3, 103)
+    left.set_ylim(-3, 103)
+    left.set_title(t["fig2a"], loc="left")
+    left.legend(frameon=False, loc="upper left", fontsize=6)
+
+    c1 = [p for p in series.get("C1") or [] if p.get("k_req")]
+    ks = [p["k_req"] for p in c1]
+    right.plot(ks, [p["violation"] for p in c1], color="#B00020", marker="o", markersize=3.5, linewidth=1.3,
+               label=t["violation"])
+    right.plot(ks, [p["retention"] for p in c1], color=STYLE["C1"]["color"], marker="s", markersize=3.5,
+               linewidth=1.3, label=t["retention"])
+    c1s = [p for p in series.get("C1S") or [] if p.get("k_req")]
+    if c1s:
+        right.plot([p["k_req"] for p in c1s], [p["violation"] for p in c1s], color="#B00020", linestyle=":",
+                   linewidth=1.0, label=t["violation"] + " · " + t["C1S"])
+    if optimum:
+        right.axvline(optimum["k_req"], color="#B00020", linewidth=0.9, linestyle=(0, (4, 3)))
+        right.text(optimum["k_req"] * 1.08, 28, f"{t['optimum']}\nk_req = {optimum['k_req']}", color="#B00020",
+                   fontsize=7, va="center")
+    right.set_xscale("log")
+    right.set_xlabel(t["kop"])
+    right.set_ylabel("%")
+    right.set_ylim(-3, 103)
+    right.set_title(t["fig2b"], loc="left")
+    right.legend(frameon=False, loc="upper right", fontsize=6)
+    fig.tight_layout(w_pad=1.5)
     return _save(fig, out, "fig2_privacy_utility")
 
 
