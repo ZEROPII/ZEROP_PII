@@ -48,13 +48,31 @@
     "miss_seeds": 20,
     "normalization": "current",
     "resamples": 5000,
-    "seed": 7
+    "seed": 7,
+    "matched_k": [
+      3,
+      5,
+      10,
+      20
+    ],
+    "matched_populations": [
+      "synthpai-300",
+      "indep-300000"
+    ],
+    "turn_cuts": [
+      4,
+      6,
+      8,
+      10,
+      12
+    ]
   },
   "rationale": {
     "eval_k": "논문과 설계서(2026-09-24 의사결정 보고서)의 k_req = 5. 1 <= k < 5를 위반으로 센다.",
     "main_population": "설계서가 결과를 보기 전에 확정한 기준 집단 P_ref = SynthPAI 300명. 30만 명 확장 집단은 속성 간 관계가 끊어져 있어 민감도 분석으로 보고한다.",
     "primary_hypothesis": "주 기준 집단에서 누적 방어(C1)의 위반 대상 비율이 방어 없음(C0)보다 낮다. exact McNemar 양측, alpha 0.05.",
     "secondary": "C1S 대 C1 (McNemar), 대상별 log10 최소 k_val과 위험 턴 비율의 짝 Wilcoxon, 다른 기준 집단에서의 C0 대 C1 (Holm 보정).",
-    "optimum_rule": "최적 운영점: 평가 기준(k_req 5) 위반 0%를 달성한 운영 k_req 중 정보 유지율이 가장 높은 설정 (동률이면 낮은 k_req). 보호 요건을 지키는 최소 비용 지점이다. log k 대 정보 유지율의 Kneedle 무릎점은 참고로만 보고한다."
+    "optimum_rule": "최적 운영점: 평가 기준(k_req 5) 위반 0%를 달성한 운영 k_req 중 정보 유지율이 가장 높은 설정 (동률이면 낮은 k_req). 보호 요건을 지키는 최소 비용 지점이다. log k 대 정보 유지율의 Kneedle 무릎점은 참고로만 보고한다.",
+    "added_sensitivity": "기준 k(3·5·10·20, Defender와 평가 기준을 같은 값으로)와 대화 길이(4~12턴) 민감도는 2026-10-14 10명 결과를 본 뒤, 추가 20명 결과를 보기 전에 넣었다. 주 가설과 주 기준 집단은 바꾸지 않았다."
   }
 }

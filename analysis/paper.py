@@ -29,6 +29,13 @@ def _pct(value: float) -> str:
     return "-" if value is None or (isinstance(value, float) and math.isnan(value)) else f"{100 * value:.1f}%"
 
 
+def _p(value: float) -> str:
+    """p값 표기: 0.0001 미만은 지수 표기 (0으로 보이지 않게)"""
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return "-"
+    return f"{value:.4f}" if value >= 1e-4 else f"{value:.1e}"
+
+
 def _num(value: float, digits: int = 0) -> str:
     if value is None or (isinstance(value, float) and math.isnan(value)):
         return "-"
@@ -79,7 +86,7 @@ class PaperBuilder:
     def build(self) -> Path:
         self.out.mkdir(parents=True, exist_ok=True)
         sections = [self._header(), self._consistency(), self._hypotheses(), self._main(), self._decisions(),
-                    self._qi_utility(), self._tradeoff(), self._population(), self._miss(), self._generalization(),
+                    self._qi_utility(), self._tradeoff(), self._population(), self._miss(), self._generalization(), self._matched_k(), self._turn_length(),
                     self._stability(), self._power(), self._overhead(), self._figures(), self._cautions()]
         self._per_unit_csv()
         report = self.out / "paper_report.md"
@@ -182,7 +189,7 @@ class PaperBuilder:
             pair_rows.append({"comparison": f"{a} vs {b}", **result})
             pairs.append([f"{a} − {b}", f"{_pct(result['rate_diff'])} [{_pct(result['rate_diff_low'])}, "
                           f"{_pct(result['rate_diff_high'])}]", f"{result['only_a']} / {result['only_b']}",
-                          f"{result['mcnemar_p']:.3f}",
+                          _p(result["mcnemar_p"]),
                           f"{result['log10_gap_median']:.2f} [{result['log10_gap_low']:.2f}, {result['log10_gap_high']:.2f}]"])
         for row, (a, b) in zip(pair_rows, (("C0", "C1"), ("C1S", "C1"), ("C0", "C1S"))):
             logk = stats.wilcoxon_exact(self._target_gaps(self.main(a), self.main(b),
@@ -191,8 +198,8 @@ class PaperBuilder:
             row.update({"wilcoxon_logk_p": logk["p"], "wilcoxon_logk_n": logk["n"],
                         "wilcoxon_risk_turn_p": risk["p"], "wilcoxon_risk_turn_n": risk["n"]})
         for cells, row in zip(pairs, pair_rows):
-            cells += [f"{row['wilcoxon_logk_p']:.4f} (n={row['wilcoxon_logk_n']})",
-                      f"{row['wilcoxon_risk_turn_p']:.4f} (n={row['wilcoxon_risk_turn_n']})"]
+            cells += [f"{_p(row['wilcoxon_logk_p'])} (n={row['wilcoxon_logk_n']})",
+                      f"{_p(row['wilcoxon_risk_turn_p'])} (n={row['wilcoxon_risk_turn_n']})"]
         self.files.append(_write_csv(self.out / "tables" / "paired_tests.csv", pair_rows))
 
         for arm in ("C0", "C1S", "C1"):
@@ -229,8 +236,8 @@ class PaperBuilder:
         for row in csv_rows:
             row["mcnemar_p_holm"] = row["mcnemar_p"] if row["primary"] else adjusted[row["population"]]
             rows.append([("**주** " if row["primary"] else "") + row["population"], f"{row['only_c0']} / {row['only_c1']}",
-                         f"{row['mcnemar_p']:.4f}", "-" if row["primary"] else f"{row['mcnemar_p_holm']:.4f}",
-                         f"{row['wilcoxon_logk_n']}", f"{row['wilcoxon_logk_p']:.4f}"])
+                         _p(row["mcnemar_p"]), "-" if row["primary"] else _p(row["mcnemar_p_holm"]),
+                         f"{row['wilcoxon_logk_n']}", _p(row["wilcoxon_logk_p"])])
         self.files.append(_write_csv(self.out / "tables" / "hypothesis_tests.csv", csv_rows))
         plan = (self.plan_info.get("data") or {}).get("rationale") or {}
         head = f"주 가설: {plan.get('primary_hypothesis', '주 기준 집단에서 C1의 위반 비율이 C0보다 낮다.')}\n\n"
@@ -436,6 +443,49 @@ class PaperBuilder:
                 + "\n\n- 일반화가 억제보다 늘 정보를 더 남기는 것은 아니다. 앞 턴에서 넓혀서 남긴 값이 뒤 턴의 공개를 더 막을 수 "
                   "있기 때문이다 (경로 의존).")
 
+    def _matched_k(self) -> str:
+        rows, csv_rows = [], []
+        for population in self.s.matched_populations:
+            for k_value in self.s.matched_k:
+                def pick(arm: str) -> list[UnitResult]:
+                    return self.find("matched_k", arm=arm, population=population, k_req=k_value, eval_k=k_value)
+                c0, c1s, c1 = pick("C0"), pick("C1S"), pick("C1")
+                only = sum(1 for a, b in zip(c0, c1) if a.violated and not b.violated)
+                back = sum(1 for a, b in zip(c0, c1) if b.violated and not a.violated)
+                p = stats.mcnemar_exact(only, back)
+                row = {"population": population, "k": k_value, "c0": sum(r.violated for r in c0),
+                       "c1s": sum(r.violated for r in c1s), "c1": sum(r.violated for r in c1), "units": len(c0),
+                       "mcnemar_p": p, "c1_retention": stats.summarize(c1)["retention"]}
+                csv_rows.append(row)
+                rows.append([population, k_value, f"{row['c0']}/{row['units']}", f"{row['c1s']}/{row['units']}",
+                             f"{row['c1']}/{row['units']}", _p(p), _pct(row["c1_retention"])])
+        self.files.append(_write_csv(self.out / "tables" / "sensitivity_k.csv", csv_rows))
+        return ("### 5.4 기준 k\n\nDefender가 지키는 값과 위반을 세는 평가 기준을 같은 k로 맞춰 바꿨다. "
+                "어떤 k를 요구 수준으로 정하든 결론이 같은지 본다.\n\n"
+                + _table(["기준 집단", "k", "C0 위반", "C1S 위반", "C1 위반", "C0 대 C1 McNemar p", "C1 정보 유지율"], rows))
+
+    def _turn_length(self) -> str:
+        rows, csv_rows = [], []
+        for population in self.s.matched_populations:
+            c0 = self.find("population", arm="C0", population=population)
+            c1s = self.find("population", arm="C1S", population=population)
+            c1 = self.find("population", arm="C1", population=population)
+            for cut in self.s.turn_cuts:
+                def hit(r: UnitResult) -> bool:
+                    return r.first_violation is not None and r.first_violation <= cut
+                only = sum(1 for a, b in zip(c0, c1) if hit(a) and not hit(b))
+                back = sum(1 for a, b in zip(c0, c1) if hit(b) and not hit(a))
+                p = stats.mcnemar_exact(only, back)
+                row = {"population": population, "turns": cut, "c0": sum(map(hit, c0)), "c1s": sum(map(hit, c1s)),
+                       "c1": sum(map(hit, c1)), "units": len(c0), "mcnemar_p": p}
+                csv_rows.append(row)
+                rows.append([population, cut, f"{row['c0']}/{row['units']}", f"{row['c1s']}/{row['units']}",
+                             f"{row['c1']}/{row['units']}", _p(p)])
+        self.files.append(_write_csv(self.out / "tables" / "sensitivity_turns.csv", csv_rows))
+        return ("### 5.5 대화 길이\n\n12턴 기록을 앞에서 잘라, 대화가 그 턴에서 끝났다면 결과가 어땠을지 다시 셌다. "
+                "방어 없음의 위반이 어느 턴에서 더 늘지 않는지(포화)로 질문 예산이 충분했는지 판단한다.\n\n"
+                + _table(["기준 집단", "대화 길이(턴)", "C0 위반", "C1S 위반", "C1 위반", "C0 대 C1 McNemar p"], rows))
+
     # ── 6. 표본 크기 ────────────────────────────────────
 
     def _stability(self) -> str:
@@ -464,13 +514,17 @@ class PaperBuilder:
                    if ms]
         c1 = self.main("C1")
         defense_ms = mean([t.defense_ms for r in c1 for t in r.turns]) if c1 else math.nan
-        intervene = stats.summarize(c1)["intervened_turns"] / max(1, stats.summarize(c1)["turns"])
+        live_paths = [path for d in self.dialogues if d.live.get("C1") for path in d.live["C1"].paths]
+        if live_paths:      # 실제 실행에서 고치거나 거절한 턴의 비율
+            intervene = sum(1 for path in live_paths if path in ("REWRITTEN", "REFUSAL")) / len(live_paths)
+        else:
+            intervene = stats.summarize(c1)["intervened_turns"] / max(1, stats.summarize(c1)["turns"])
         rewrite_ms = mean(rewrite) if rewrite else math.nan
         added = avg("extraction_ms") + defense_ms + intervene * ((rewrite_ms if rewrite else 0) + avg("extraction_ms"))
         rows = [
             ["대상 AI 응답 (방어와 무관)", _num(avg("target_ms")), _num(avg("target_in")), _num(avg("target_out"))],
             ["정보 추출 (매 턴, 방어에 필요)", _num(avg("extraction_ms")), _num(avg("extraction_in")), _num(avg("extraction_out"))],
-            ["위험 계산·Defender 판단 (CPU)", _num(defense_ms, 1), "0", "0"],
+            ["위험 계산·Defender 판단 (CPU)", "< 1" if defense_ms < 1 else _num(defense_ms, 1), "0", "0"],
             [f"재작성 (개입한 턴만, 실제 {len(rewrite)}회)", _num(rewrite_ms), "-", "-"],
         ]
         csv_rows = [{"stage": r[0], "latency_ms": r[1], "input_tokens": r[2], "output_tokens": r[3]} for r in rows]
@@ -479,7 +533,7 @@ class PaperBuilder:
         return ("## 7. 실사용 부담 (표 5)\n\n턴 하나의 평균 지연(ms)과 토큰. 실험에서 질문 생성(Fuzzer)은 공격자 쪽이므로 빼고, "
                 "서비스에 붙였을 때 늘어나는 부분만 본다.\n\n"
                 + _table(["단계", "지연 (ms)", "입력 토큰", "출력 토큰"], rows)
-                + f"\n\n- 개입 비율 {_pct(intervene)}를 반영한 턴당 추가 지연 추정: 약 {_num(added)} ms "
+                + f"\n\n- 개입 비율은 실제 실행(실행 당시 기준 집단)에서 고치거나 거절한 턴의 비율이다. 개입 비율 {_pct(intervene)}를 반영한 턴당 추가 지연 추정: 약 {_num(added)} ms "
                   f"(추출 + 판단 + 개입 비율 × (재작성 + 재추출)). 대상 AI 응답 시간 대비 "
                   f"{_pct(added / avg('target_ms')) if avg('target_ms') else '-'}.\n"
                   "- 재추출 지연은 기록되지 않아 추출 평균으로 대신했다.")

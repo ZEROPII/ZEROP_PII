@@ -26,6 +26,9 @@ class Settings:
     static_levels: tuple[int, ...] = (1, 2, 3)
     generalization: tuple[int, ...] = (0, 1, 2)
     generalization_k: tuple[int, ...] = (5, 20, 50, 100)
+    matched_k: tuple[int, ...] = (3, 5, 10, 20)
+    matched_populations: tuple[str, ...] = ("synthpai-300", "indep-300000")
+    turn_cuts: tuple[int, ...] = (4, 6, 8, 10, 12)
     miss_rates: tuple[float, ...] = (0.0, 0.1, 0.2, 0.3, 0.5)
     miss_seeds: int = 20
     normalization: str = "current"
@@ -67,6 +70,9 @@ def build_plan(settings: Settings) -> Plan:
     plan.groups["population"] = [c(arm, population=p) for p in settings.populations for arm in ("C0", "C1S", "C1")]
     plan.groups["generalization"] = [c("C1", k_req, max_generalization=g)
                                      for k_req in settings.generalization_k for g in (*settings.generalization, None)]
+    plan.groups["matched_k"] = [Condition(arm, k_value, k_value, population, normalization=norm)
+                                for population in settings.matched_populations for k_value in settings.matched_k
+                                for arm in ("C0", "C1S", "C1")]
     plan.groups["miss"] = [c("C1", miss_rate=rate, miss_seed=seed)
                            for rate in settings.miss_rates for seed in (range(settings.miss_seeds) if rate else (0,))]
     return plan

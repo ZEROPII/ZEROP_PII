@@ -229,6 +229,6 @@ def fig3(population_rows: Sequence[dict], miss_rows: Sequence[dict], miss_refere
     c.set_ylabel(t["retention"])
     c.set_ylim(0, 105)
     c.set_title(t["fig3c"], loc="left")
-    c.legend(frameon=False, fontsize=6, loc="lower left", title=t["gen"], title_fontsize=6)
+    c.legend(frameon=False, fontsize=6, loc="upper right", title=t["gen"], title_fontsize=6)
     fig.tight_layout(w_pad=1.2)
     return _save(fig, out, "fig3_sensitivity")
