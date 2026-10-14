@@ -83,6 +83,8 @@ class TurnResult:
     missed: int
     defense_ms: float
     reason: str | None = None   # 개입 이유 (NEW_ZERO_MATCH / BELOW_FLOOR / CONFLICT)
+    k_val_raw: int = 0          # 원래 답변을 그대로 공개했다면의 k_val (정답 기준. Defender 판단의 정답지)
+    qi_retained: tuple[tuple[str, float], ...] = ()   # 새 공개분별 (QI, 유지량)
 
 
 @dataclass(frozen=True)
@@ -182,15 +184,16 @@ def simulate(dialogue: Dialogue, condition: Condition, context: Context) -> Unit
         reason = None
         released: list[NormalizedObservation]
 
+        projected, _, _ = session._apply(state, session.select(observations).accepted)
+        k_val_raw = validator.validate(dialogue.target_id, projected).k_val
+
         if condition.arm == "C0":
             released = list(observations)
-            retained = float(len(delta))
         elif condition.arm == "STATIC":
-            released, retained, generalized, suppressed = _static(index, state, observations, delta,
-                                                                  condition.static_level)
+            released, _, generalized, suppressed = _static(index, state, observations, delta, condition.static_level)
             intervened = bool(generalized or suppressed)
         elif turn.extraction_failed:
-            released, retained, refused = [], 0.0, True       # 실제 gate와 같이 확인할 수 없는 답은 내보내지 않는다
+            released, refused = [], True       # 실제 gate와 같이 확인할 수 없는 답은 내보내지 않는다
         else:
             seen = [o for o in observations
                     if not _missed(dialogue.unit, turn.turn, o.observation_id, condition.miss_rate, condition.miss_seed)]
@@ -208,13 +211,14 @@ def simulate(dialogue: Dialogue, condition: Condition, context: Context) -> Unit
             generalized, suppressed = len(lifted), len(outcome.suppressed_ids)
             intervened = bool(lifted or outcome.suppressed_ids)
             reason = (outcome.defense_log[0].get("intervention_reason") if outcome.defense_log else None) if intervened else None
-            retained = _retained(index, state, delta, {o.observation_id: o.canonical_value for o in released})
 
+        items = _retained(index, state, delta, {o.observation_id: o.canonical_value for o in released})
+        retained = sum(value for _, value in items)
         delta_count = len(delta)
         session.commit(released)
         k_val = validator.validate(dialogue.target_id, session.committed_qis).k_val
         results.append(TurnResult(turn.turn, session.k_current, k_val, delta_count, retained, intervened, refused,
-                                  suppressed, generalized, missed, defense_ms, reason))
+                                  suppressed, generalized, missed, defense_ms, reason, k_val_raw, tuple(items)))
     return UnitResult(dialogue.unit, dialogue.run_id, dialogue.target_id, condition, tuple(results))
 
 
@@ -225,22 +229,24 @@ def _delta(session: OntologyRiskSession, observations: Sequence[NormalizedObserv
     return [DeltaItem(qi.source or "", qi.qi_type, str(qi.value)) for qi in delta_by_qi.values()]
 
 
-def _retained(index, state: dict[str, str], delta: Sequence[DeltaItem], released: dict[str, str | None]) -> float:
-    total = 0.0
+def _retained(index, state: dict[str, str], delta: Sequence[DeltaItem],
+              released: dict[str, str | None]) -> list[tuple[str, float]]:
+    """새 공개분마다 (QI, 1 − 올린 단계/최대 단계). 억제면 0"""
+    items = []
     for item in delta:
         ladder = _ladder(index, state, item)
         limit = len(ladder) - 1
         node = released.get(item.key)
         if node is None or limit == 0:
-            continue
-        if node in ladder:
-            total += 1 - ladder.index(node) / limit
+            items.append((item.attribute, 0.0))
+        elif node in ladder:
+            items.append((item.attribute, 1 - ladder.index(node) / limit))
         else:
             # 같은 QI의 다른 관찰로 공개된 경우: 그 값이 사다리 위 어디에 있는지 본다
             hit = next((step for step, rung in enumerate(ladder)
                         if rung is not None and index.ontology.is_same_or_descendant(node, rung)), None)
-            total += 0.0 if hit is None else 1 - hit / limit
-    return total
+            items.append((item.attribute, 0.0 if hit is None else 1 - hit / limit))
+    return items
 
 
 def _static(index, state: dict[str, str], observations: Sequence[NormalizedObservation], delta: Sequence[DeltaItem],
