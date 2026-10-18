@@ -14,7 +14,7 @@
 
 ### 1.1 현재 사용 중인 지표 (위반 · 유용성)
 
-| 구분 | 지표 | 정의 (쉬운 설명) | 장점 | 한계 및 보완 | 참고한 근거 |
+| 구분 | 지표 | 정의 및 설명| 장점 | 한계 및 보완 | 참고한 근거 |
 |---|---|---|---|---|---|
 | 위반 | **위반 대상 수** | 대화 중 한 번이라도 1 ≤ k_val < 5에 도달한 고유 대상 수. k_val은 정답과 대조해 맞은 단서만으로 다시 센 "같은 조건의 사람 수" | 누적 대화에서 위험에 이른 대상 규모를 직관적으로 보여줌 | 발생 횟수와 위험의 심각도는 구분하지 못함 | Weatherhead et al. (2026) ◎ |
 | 위반 | **위반 대상 비율** | 위반 대상 수 ÷ 전체 대상 수 | 실험 규모가 달라도 비교하기 쉬움 | 표본이 적으면 비율의 불확실성이 큼 → 신뢰구간 병기 | Weatherhead et al. (2026) ◎ |
@@ -24,7 +24,6 @@
 | 유용성 | **답변 변경·차단 비율** | 방어로 수정되거나 차단된 턴의 비율 | 방어가 답변에 미치는 영향을 측정 | 변경된 답변이 실제로 유용한지는 알려주지 않음 | |
 | 유용성 | **글자 유사도·길이 비율** | 원문과 방어 후 답변의 글자 단위 유사도, 길이 비교 | 자동으로 쉽게 계산 | 표현이 비슷해도 의미가 훼손될 수 있음. 의료 LLM 평가 연구도 어휘 중복 지표(ROUGE 등)는 정확성 검증에 부족하다고 지적 | LiveMedBench (Yan et al., 2026) ◎ |
 
-> 기준 임계값 주의: 기존 PoC 보고서의 위반 기준은 k = 1, 2, 3 (k < 4)였고, 현재 제안은 k < 5라 k = 4도 위반에 포함됩니다. 변경 이유를 명시하고, 가능하면 두 임계값에서 결과를 모두 보고하세요.
 
 ### 1.2 추가로 볼 만한 지표
 
@@ -49,7 +48,7 @@
 
 | 선행연구 | 실제 연구 내용 | 평가 방식 | 우리 프로젝트와의 차이 | 근거 |
 |---|---|---|---|---|
-| **Lee, Park & Son (2026)**, *Applied Sciences* 16(8), 3680 | 다중 턴 대화에서 개별로는 무해한 단서가 누적되어 생기는 재식별 위험을 다룸. 화자별로 단서를 분리해 증거 그래프에 쌓고 위험이 시작되는 시점(onset)을 탐지하는 상태 유지형 미들웨어 제안 | 위험 발생 시점 탐지 중심. (세부 지표와 데이터 규모는 HWP 요약 기준: 합성 대화 184건, OW@k·SW@k·MAE. 본문 대조 필요) | **문제 설정이 가장 직접적으로 겹침.** "다중 턴 누적 위험을 평가한다"만으로는 차별점이 되지 않음. 우리는 후보 수 k, 정답 대조 사후 검증, 온톨로지 일반화, QI 유지 점수를 결합해 비교 | ◎ (본문 지표는 ○) |
+| **Lee, Park & Son (2026)**, *Applied Sciences* 16(8), 3680 | 다중 턴 대화에서 개별로는 무해한 단서가 누적되어 생기는 재식별 위험을 다룸. 화자별로 단서를 분리해 증거 그래프에 쌓고 위험이 시작되는 시점(onset)을 탐지하는 상태 유지형 미들웨어 제안 | 위험 발생 시점 탐지 중심. | **문제 설정이 가장 직접적으로 겹침.** "다중 턴 누적 위험을 평가한다"만으로는 차별점이 되지 않음. 우리는 후보 수 k, 정답 대조 사후 검증, 온톨로지 일반화, QI 유지 점수를 결합해 비교 | ◎ (본문 지표는 ○) |
 | **Weatherhead et al. (2026)**, *Frontiers in Digital Health* | 의료 합성 데이터로, 정보가 한 단계씩 공개될 때 같은 조건의 사람 수(k)가 줄어드는 현상 분석 | k<5 도달 비율 79.9%, 도달 단계 중앙값 7. 희귀 속성을 먼저 공개한 조건에서는 4단계 | 위험이 쌓이는 현상을 보였지만 방어와 그 비용(개입률·응답 손실)은 평가하지 않음 | ◎ |
 | **Panjwani (2026)**, CAMP, arXiv:2604.16521 | 대화 중 개인정보를 누적 추적해 외부 모델로 나가는 입력을 가림 | 노출된 정보 유형 수, 누적 위험 점수(CPE), 개입 턴 | 위험을 가중치 점수로 계산하고 정답 대조 검증이 없음 (프리프린트) | ◎ / ○ |
 | **Ren et al. (2025)**, *Findings of IJCNLP–AACL* | 텍스트 익명화의 개인정보 보호 지표를 다룬 논문 47편을 검토, 서로 다른 6가지 프라이버시 개념으로 분류하고 HIPAA·GDPR 기준과 대응 | 지표 비교 조사 (지표 목록은 [저장소](https://github.com/ryxGuo/privacy-metrics-survey) 참고) | 단일 수치가 모든 보호 수준을 대표하지 않으므로, 우리 k가 어떤 종류의 위험을 나타내는지 명시해야 함 | ◎ |
@@ -85,7 +84,6 @@
 | **차등 프라이버시** | Kairouz et al. (2015), The Composition Theorem for Differential Privacy, ICML | 반복 질의에서 보호가 얼마나 떨어지는지 이론적으로 증명 | 질의 횟수에 따른 전체 보호 수준 하락 | 누적 위험이 중요하다는 배경. DP와 k-익명성은 다른 모델이라 수치를 직접 비교하지 않음 | ◎ |
 
 ---
-
 ## 4. 평가 지표 자체의 비교
 
 | 평가 목적 | 선행연구에서 볼 수 있는 지표·방법 | 우리 프로젝트의 지표 | 장점 | 주의할 점 |
@@ -103,31 +101,11 @@
 
 ## 5. 우리 프로젝트의 차별점 (근거 수준별)
 
-(추가 필요)
 ---
-
-## 6. 확인 현황
-
-### 6.1 이번에 존재를 확인한 자료
-
-Lee et al. (2026), Weatherhead et al. (2026), CAMP (2026), Ren et al. (2025), TAB (2022), El Emam & Dankar (2008), Sweeney (2002), PrivacyLens (2024), Staab et al. (2025), SynthPAI (2024), Cheng et al. (2025), Ferrão et al. (2022), PRASH (2021, 초록 수준), Kairouz et al. (2015), 의료 비식별화 트레이드오프 사례 (2024), Chargeback 사기 탐지 (2026), Hermansa et al. (2022), 고객 서비스 챗봇 (2025, 초록 수준), POLAR-Bench (2026), LiveMedBench (2026), HealthBench (2025).
-
-### 6.2 이번에 확인하지 못한 자료 (인용 전 확인 필요) △
-
-| 자료 | 비고 |
-|---|---|
-| Jin et al., IEEE TKDE (2023), 궤적 데이터 공개 서베이 | 위치 궤적 연구라 평가 설계만 참고 |
-| Zhao, Kaafar & Kourtellis (2020), Not one but many Tradeoffs | 차등 프라이버시 머신러닝 연구 |
-| 이동통신 위치 데이터 재식별 위험과 유용성 (2015) | 저자·게재 정보 확인 필요 |
-| 금융 합성 데이터 개인정보 위험과 트레이드오프 (2026) | 출처 확인 필요 |
-| The Costs of Anonymization: Case Study Using Clinical Data | 독일 만성 신장질환 데이터 사례 |
-| Evaluating LLM-based Agents for Multi-Turn Conversations: A Survey (2025) | 평가 차원 비교용 |
-| Anonymization Techniques for Privacy Preserving Data Publishing: A Comprehensive Survey (2020) | 지표 분류 근거 |
-| PatientAgentBench, Text Anonymization Evaluator(TAE), NIST UEM·SsE 지표 자료 | 공개 저장소·공식 자료 위치 확인 필요 |
 
 ---
 
-## 7. 참고문헌
+## 6. 참고문헌
 
 1. Y. Lee, S. Park, and Y. Son, "Early Detection of Re-Identification Risk in Multi-Turn Dialogues via Entity-Aware Evidence Accumulation," *Applied Sciences*, 16(8), 3680, 2026. https://doi.org/10.3390/app16083680
 2. J. Weatherhead et al., "K-anonymity decay in multi-turn clinical large language model conversations," *Frontiers in Digital Health*, 8, 1832168, 2026. https://doi.org/10.3389/fdgth.2026.1832168
