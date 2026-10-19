@@ -24,7 +24,7 @@ from medical.data import QUERY_POOL, STORE, MedicalData, split_cohort, write_spl
 from medical.defense import MedicalDefender
 from medical.documents import load_documents, make_document, save_documents, facts_prompt_block
 from medical.llm import RoleLLM
-from medical.prompts import PROMPTS, REWRITER_VERSION, prompt_hashes
+from medical.prompts import PROMPT_VERSION, PROMPTS, REWRITER_VERSION, prompt_hashes
 from medical.retrieval import QTYPES, code_sets, query_binding
 from medical.session import Context, dumps, run_trial_group
 from medical.validate import validate_trial
@@ -70,7 +70,7 @@ def build_context(cfg: MedicalConfig, llm: RoleLLM, out: Path, *, paths: Medical
     versions = dict(ontology_version="v0.9.1", matching_rule_version="kcalc v0.9.1 / normalize_bridge v0.9.1",
                     reference_version=f"events:{_sha(paths.events)[:12]}|split_seed:{cfg.seed}|ratio:{cfg.query_pool_ratio}|P_ref:{len(store)}",
                     seed_registry="v0.7-med", case_query_registry="v0.1-med", harness="medical v0.1 (bundle harness_reference v0.1 + C1/C1S)",
-                    defender=f"risk_defender policy g={cfg.generalize_threshold} s={cfg.suppress_threshold} on kcalc", rewriter=REWRITER_VERSION)
+                    defender=f"risk_defender policy g={cfg.generalize_threshold} s={cfg.suppress_threshold} on kcalc", rewriter=REWRITER_VERSION, prompts=PROMPT_VERSION)
     ctx = Context(cfg=cfg, data=data, kc=kc, nz=nz,
                   defender=MedicalDefender(kc, data, generalize_threshold=cfg.generalize_threshold, suppress_threshold=cfg.suppress_threshold),
                   docs=docs, store_sets={p: code_sets(data.by_pat[p]) for p in store},

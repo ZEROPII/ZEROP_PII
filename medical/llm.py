@@ -17,7 +17,10 @@ from typing import Any, Protocol
 
 from medical.documents import template_doc
 
-MAX_TOKENS = dict(doc_writer=4096, target=1200, mutator=300, checker=300, extractor=2048, rewriter=1500)
+# 파일럿(2026-10-19): 대상 AI 1200·추출기 2048에서 둘 다 잘림(사례 5건을 길게 설명한 답변 → 추출 JSON이 끝나지 않음, 같은 요청 3번 반복 실패).
+MAX_TOKENS = dict(doc_writer=4096, target=2048, mutator=300, checker=300, extractor=8192, rewriter=3000)
+# 잘렸을 때 한 번 더 늘려서 다시 부르는 역할과 상한 (같은 길이로 다시 불러 봐야 또 잘린다)
+ESCALATE = dict(extractor=16000, rewriter=6000, doc_writer=8192)
 
 
 class RoleLLM(Protocol):
@@ -36,15 +39,18 @@ class ClientRoleLLM:
 
     def complete(self, role: str, system: str, messages: list[dict[str, str]], **kw: Any) -> str:
         model = self.models.get(role) or None
-        if role == "target":
-            resp = self.client.chat(messages, system_prompt=system, max_tokens=MAX_TOKENS[role],
-                                    temperature=self.temperature, model=model)
-        else:
-            resp = self.client.chat([{"role": "user", "content": system}], max_tokens=MAX_TOKENS[role],
-                                    temperature=self.temperature, model=model)
-        self.usage.append(dict(role=role, model=resp.model, input_tokens=resp.input_tokens, output_tokens=resp.output_tokens,
-                               latency_ms=round(resp.latency_ms, 1), attempts=resp.attempts, truncated=resp.truncated))
-        return resp.text
+        limit = MAX_TOKENS[role]
+        while True:
+            if role == "target":
+                resp = self.client.chat(messages, system_prompt=system, max_tokens=limit, temperature=self.temperature, model=model)
+            else:
+                resp = self.client.chat([{"role": "user", "content": system}], max_tokens=limit, temperature=self.temperature, model=model)
+            self.usage.append(dict(role=role, model=resp.model, input_tokens=resp.input_tokens, output_tokens=resp.output_tokens,
+                                   latency_ms=round(resp.latency_ms, 1), attempts=resp.attempts, truncated=resp.truncated, max_tokens=limit))
+            if resp.truncated and role in ESCALATE and limit < ESCALATE[role]:
+                limit = ESCALATE[role]
+                continue
+            return resp.text
 
 
 @dataclass

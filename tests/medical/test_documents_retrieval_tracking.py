@@ -90,3 +90,33 @@ def test_view_renames_event_groups_per_case_and_commit_keeps_events(nz):
     commit_view(v, cases, order)
     assert order == ["사례1", "사례2"] and cases["사례1"].events["e1"].endswith("진단")
     assert len(cases["사례1"].committed) == 2
+
+
+def test_prompt_addenda_are_inserted_once():
+    from medical.prompts import PROMPTS, TARGET_ADDENDUM, EXTRACTOR_ADDENDUM
+    assert PROMPTS["target_system"].count(TARGET_ADDENDUM) == 1 and PROMPTS["target_system"].endswith("{cases}")
+    assert PROMPTS["extractor"].count(EXTRACTOR_ADDENDUM) == 1 and PROMPTS["extractor"].rstrip().endswith("{response}")
+
+
+def test_client_role_llm_escalates_max_tokens_when_truncated():
+    from types import SimpleNamespace
+    from medical.llm import ESCALATE, MAX_TOKENS, ClientRoleLLM
+
+    class FakeClient:
+        def __init__(self):
+            self.limits = []
+
+        def chat(self, messages, *, system_prompt=None, max_tokens=None, temperature=None, model=None):
+            self.limits.append(max_tokens)
+            cut = len(self.limits) == 1
+            return SimpleNamespace(text="[" if cut else "[]", model="m", input_tokens=1, output_tokens=1, latency_ms=1.0,
+                                   attempts=1, truncated=cut)
+
+    fc = FakeClient()
+    llm = ClientRoleLLM(fc)
+    assert llm.complete("extractor", "프롬프트", []) == "[]"
+    assert fc.limits == [MAX_TOKENS["extractor"], ESCALATE["extractor"]]
+    assert [u["truncated"] for u in llm.usage] == [True, False]
+    fc2 = FakeClient()
+    ClientRoleLLM(fc2).complete("mutator", "프롬프트", [])        # 변형기는 늘리지 않음
+    assert fc2.limits == [MAX_TOKENS["mutator"]]

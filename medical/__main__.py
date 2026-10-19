@@ -5,6 +5,7 @@
 #   python -m medical run [--arms C0,C1,C1S] [--limit N] [--trials-per-cell 2] [--docs template|llm] [--docs-from 경로/RAG문서.jsonl]
 #                         [--model 모델] [--model-ROLE 모델] [--mode efficiency|exploration] [--budget 10]
 #   python -m medical report <실행 폴더>                              집계표 (LLM 0)
+#   python -m medical reextract <실행 폴더> [--limit 4]               기록된 원 응답에 지금 추출기 프롬프트만 다시 적용 (대상 AI 호출 0)
 #
 # 실제 실행은 .env(LLM_API_KEY 등)를 읽는다. 키 값은 어디에도 출력·기록하지 않는다.
 
@@ -52,6 +53,10 @@ def main(argv: list[str] | None = None) -> int:
         rn.add_argument(f"--model-{r.replace('_', '-')}", dest=f"model_{r}", default=None)
     rp = sub.add_parser("report")
     rp.add_argument("run_dir")
+    rx = sub.add_parser("reextract")
+    rx.add_argument("run_dir")
+    rx.add_argument("--limit", type=int, default=4, help="다시 추출할 서로 다른 원 응답 수 상한")
+    rx.add_argument("--model", default=None)
     a = ap.parse_args(argv)
 
     if a.cmd == "audit":
@@ -63,6 +68,10 @@ def main(argv: list[str] | None = None) -> int:
         r = run_audit(d, store, a.k_req, progress=True)
         write_audit(r, Path(a.out))
         print(to_markdown(r))
+        return 0
+    if a.cmd == "reextract":
+        from medical.reextract import reextract
+        reextract(Path(a.run_dir), a.limit, a.model)
         return 0
     if a.cmd == "report":
         from medical.report import report, to_markdown
