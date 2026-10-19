@@ -176,6 +176,31 @@ class LLMClient:
         payload = self._build_payload(user_prompt, system_prompt, max_tokens, temperature)
         return self._send_with_retry(payload)
 
+    def chat(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        system_prompt: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        model: str | None = None,
+    ) -> LLMResponse:
+        """
+        input : messages ([{'role': 'user'|'assistant', 'content': str}, ...], 마지막은 user),
+                system_prompt, max_tokens, temperature (complete와 같음),
+                model (None이면 설정값. 의료 하네스에서 역할별로 다른 모델을 쓸 때만 넘긴다)
+        output : LLMResponse
+
+        여러 턴 대화를 그대로 보낸다 (의료 대상 AI: 매 턴 앞선 질문·답변을 모두 붙여 보냄).
+        """
+        if not messages or messages[-1].get("role") != "user" or not str(messages[-1].get("content", "")).strip():
+            raise ValueError("messages는 비어 있지 않아야 하고 마지막 원소는 내용이 있는 user 메시지여야 합니다.")
+        payload = self._build_payload("-", system_prompt, max_tokens, temperature)
+        payload["messages"] = [{"role": m["role"], "content": m["content"]} for m in messages]
+        if model:
+            payload["model"] = model
+        return self._send_with_retry(payload)
+
     def close(self) -> None:
         """HTTP 세션을 닫는다. with 문으로 쓰면 자동 호출된다."""
         self._session.close()
