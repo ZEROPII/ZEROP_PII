@@ -22,6 +22,7 @@ from medical.bundle.normalize_bridge import Normalizer
 from medical.config import ROOT, MedicalConfig, MedicalPaths
 from medical.data import QUERY_POOL, STORE, MedicalData, split_cohort, write_split
 from medical.defense import MedicalDefender
+from medical.grouping import GroupRepairKC
 from medical.documents import load_documents, make_document, save_documents, facts_prompt_block
 from medical.llm import RoleLLM
 from medical.prompts import PROMPT_VERSION, PROMPTS, REWRITER_VERSION, prompt_hashes
@@ -65,12 +66,14 @@ def build_context(cfg: MedicalConfig, llm: RoleLLM, out: Path, *, paths: Medical
         writer = lambda facts: llm.complete("doc_writer", PROMPTS["doc_writer"].format(facts=facts_prompt_block(facts)), [], facts=facts)
         docs = {p: make_document(data, p, mode=cfg.documents, write=writer, max_retries=cfg.max_doc_retries) for p in store}
     save_documents(docs, out)
-    kc = KCalc(paths.nodes, paths.events, exclude_provisional_atc=cfg.exclude_provisional_atc, patients=set(store))
+    # 대상 AI가 여러 사건을 한 줄로 합쳐 말해 생기는 '아무도 맞지 않는 묶음'을 k 계산 전에 나눈다 (medical/grouping.py)
+    kc = GroupRepairKC(KCalc(paths.nodes, paths.events, exclude_provisional_atc=cfg.exclude_provisional_atc, patients=set(store)))
     nz = Normalizer(paths.nodes, paths.alias, min_confidence=cfg.min_confidence)
     versions = dict(ontology_version="v0.9.1", matching_rule_version="kcalc v0.9.1 / normalize_bridge v0.9.1",
                     reference_version=f"events:{_sha(paths.events)[:12]}|split_seed:{cfg.seed}|ratio:{cfg.query_pool_ratio}|P_ref:{len(store)}",
                     seed_registry="v0.7-med", case_query_registry="v0.1-med", harness="medical v0.1 (bundle harness_reference v0.1 + C1/C1S)",
-                    defender=f"risk_defender policy g={cfg.generalize_threshold} s={cfg.suppress_threshold} on kcalc", rewriter=REWRITER_VERSION, prompts=PROMPT_VERSION)
+                    defender=f"risk_defender policy g={cfg.generalize_threshold} s={cfg.suppress_threshold} on kcalc", rewriter=REWRITER_VERSION, prompts=PROMPT_VERSION,
+                    event_grouping="repair v1 (묶음 단독 k=0이면 나눔, 단독 불일치 값은 k에서 제외)")
     ctx = Context(cfg=cfg, data=data, kc=kc, nz=nz,
                   defender=MedicalDefender(kc, data, generalize_threshold=cfg.generalize_threshold, suppress_threshold=cfg.suppress_threshold),
                   docs=docs, store_sets={p: code_sets(data.by_pat[p]) for p in store},

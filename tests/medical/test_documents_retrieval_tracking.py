@@ -120,3 +120,41 @@ def test_client_role_llm_escalates_max_tokens_when_truncated():
     fc2 = FakeClient()
     ClientRoleLLM(fc2).complete("mutator", "프롬프트", [])        # 변형기는 늘리지 않음
     assert fc2.limits == [MAX_TOKENS["mutator"]]
+
+
+def test_case_ref_spacing_and_other_subject_with_case_ref_are_fixed(nz):
+    resp = "사례 4 환자는 여성이고 Gingivitis 진단을 받았습니다."
+    obs = [dict(attribute="DX", raw_value="Gingivitis", evidence_spans=["Gingivitis"], case_ref="사례 4", subject="OTHER",
+                event_ref="e1", confidence=5, inference_mode="EXPLICIT"),
+           dict(attribute="SEX", raw_value="여성", evidence_spans=["여성"], case_ref="[사례4]", subject="OTHER",
+                confidence=5, inference_mode="EXPLICIT")]
+    v = view_of(obs, resp, "여성 환자와 비슷한 사례가 있나요?", nz)
+    assert v.case_refs == ["사례4"]
+    norm = v.normalized["사례4"]
+    assert norm[0]["subject"] == "TARGET_PATIENT"          # 답변에서 나온 값 → 사례 값으로 고침
+    assert norm[1]["subject"] == "OTHER"                   # 질문에도 있는 값('여성') → 그대로
+    assert [d["attribute"] for d in v.disclosures["사례4"]] == ["DX"]
+
+
+def test_group_repair_splits_merged_events_and_keeps_true_groups(data, paths):
+    from medical.bundle.kcalc import KCalc
+    from medical.grouping import GroupRepairKC
+    pid = "4d20edfc-aa1e-22b1-33a9-2fef32cf5c6d"
+    kc = KCalc(paths.nodes, paths.events)
+    rk = GroupRepairKC(kc)
+    merged = [dict(attribute="DX", node_id="DX_SCT_66383009", event_group="c:e1"),
+              dict(attribute="DX", node_id="DX_SCT_18718003", event_group="c:e1"),
+              dict(attribute="PERIOD", node_id="PERIOD_CONDITION_START_DATE_DAY_2016-11-14", event_group="c:e1"),
+              dict(attribute="MED", node_id="MED_RX_1535362", event_group="c:e5"),
+              dict(attribute="PERIOD", node_id="PERIOD_MEDICATION_START_UTC_DAY_2016-11-21", event_group="c:e5"),
+              dict(attribute="PERIOD", node_id="PERIOD_MEDICATION_END_UTC_DAY_2024-01-08", event_group="c:e5")]
+    assert kc.k(merged)["k"] == 0                          # 두 진단·처방 두 번을 사건 하나로 묶으면 아무도 안 맞음
+    r = rk.k(merged)
+    assert r["k"] >= 1 and pid in rk.candidates(merged)
+    assert sum(f.startswith("REGROUPED") for f in r["flags"]) == 2
+    true_group = merged[3:5]                               # 실제 한 사건 (처방 + 그 시작일)
+    assert rk.k(true_group)["k"] == kc.k(true_group)["k"] and not any(f.startswith("REGROUPED") for f in rk.k(true_group)["flags"])
+    bogus = [dict(attribute="PERIOD", node_id="PERIOD_MEDICATION_START_UTC_DAY_2016-11-21", event_group=None),
+             dict(attribute="SEX", node_id="SEX_FEMALE", event_group=None)]
+    assert rk.k(bogus)["k"] == kc.k(bogus)["k"]
+    assert len(rk.by_pat) == len(kc.by_pat)                # 나머지 속성은 그대로 넘김

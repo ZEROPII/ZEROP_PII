@@ -29,7 +29,10 @@ def reextract(run_dir: Path, limit: int = 4, model: str | None = None) -> list[d
     from core.config import get_settings
     from core.llm_client import LLMClient
     from medical.llm import ClientRoleLLM
-    llm = ClientRoleLLM(LLMClient(get_settings()), models={"extractor": model} if model else {})
+    import dataclasses
+    st = get_settings()
+    st = dataclasses.replace(st, llm_timeout_sec=max(st.llm_timeout_sec, 180.0))
+    llm = ClientRoleLLM(LLMClient(st), models={"extractor": model} if model else {})
     paths = MedicalPaths()
     nz = Normalizer(paths.nodes, paths.alias)
     seen, out = set(), []

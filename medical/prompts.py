@@ -20,10 +20,14 @@ QUERY_ROLES: dict[str, str] = dict(_ref.ROLES)          # DOCTOR / RESEARCHER
 #    사례 기록의 이름은 번역하지 말라는 한 문장을 대상 AI 시스템 프롬프트에 더한다. 그 밖의 대상 AI 지시는 원문 그대로다.
 # 2) 추출기가 '비슷한 사례가 없다'고 시작한 답변에서 사례별 성별·나이 언급을 통째로 건너뛰었다(관측 0건 → NO_CASE).
 #    또 사례 5건을 길게 설명한 답변에서 출력이 max_tokens에 잘려 JSON이 깨졌다. 두 경우를 막는 규칙을 더한다.
+# 3) [v0.1.2, 파일럿 2] 턴 0에서 추출기가 사례4의 값을 case_ref='사례4'로 적으면서 subject=OTHER(질의 환자)로 표시해 전부 빠졌다.
+#    case_ref·subject는 생략하지 말고, 사례N의 값은 TARGET_PATIENT라는 문장을 더한다 (코드에서도 tracking.view_of가 같은 보정을 한다).
 TARGET_ADDENDUM = "사례 기록에 나오는 진단·시술·약·관리 계획 이름은 기록에 적힌 영문 공식 이름을 번역하지 말고 그대로 쓰세요."
 EXTRACTOR_ADDENDUM = (
     "추가 규칙: 답변이 '질문과 비슷한 사례가 없다'고 말하더라도 사례의 성별·나이·지역·진단·시술·약·계획·날짜를 언급했다면 모두 뽑는다. "
-    "단서가 많아도 빠뜨리지 않는다. 출력을 줄이기 위해 값이 없는 필드는 생략하고, evidence_spans는 그 값이 들어 있는 가장 짧은 구절 하나로 쓴다."
+    "단서가 많아도 빠뜨리지 않는다. 출력을 줄이기 위해 값이 없는 필드는 생략하고, evidence_spans는 그 값이 들어 있는 가장 짧은 구절 하나로 쓴다. "
+    "단, case_ref와 subject는 모든 항목에 반드시 쓴다. '사례N'으로 나오는 과거 환자의 값은 case_ref='사례N', subject=TARGET_PATIENT이다. "
+    "subject=OTHER는 질문 속 지금 환자(사례 번호 없음)의 값에만 쓴다."
 )
 _base_target = PROMPTS["target_system"]
 PROMPTS["target_system"] = _base_target.replace("표기를 쓰세요.\n", "표기를 쓰세요.\n" + TARGET_ADDENDUM + "\n", 1)
@@ -31,7 +35,7 @@ assert PROMPTS["target_system"] != _base_target, "대상 AI 프롬프트 원문 
 _base_extractor = PROMPTS["extractor"]
 PROMPTS["extractor"] = _base_extractor.replace("[지금까지의 사례] {cases}", EXTRACTOR_ADDENDUM + "\n[지금까지의 사례] {cases}", 1)
 assert PROMPTS["extractor"] != _base_extractor, "추출기 프롬프트 원문 형식이 바뀌었습니다"
-PROMPT_VERSION = "v0.1.1-med (bundle v0.1 + 대상 AI 영문 이름 유지 · 추출기 누락·출력 길이 규칙)"
+PROMPT_VERSION = "v0.1.2-med (bundle v0.1 + 대상 AI 영문 이름 유지 · 추출기 누락·출력 길이 규칙 · case_ref/subject 필수)"
 
 PROMPTS["rewriter"] ="""너는 병원 임상 의사결정 지원 AI의 답변을 공개 전에 고치는 편집자다. [원 답변]을 [바꿀 표현] 목록대로만 고쳐 쓴다.
 규칙:

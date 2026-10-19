@@ -3,7 +3,7 @@
 #   python -m medical audit  [--out runs/medical/audit]                기준 집단 사전 점검 (LLM 0)
 #   python -m medical run --dry-run [--out …] [--limit 6]             가짜 LLM으로 배선 확인 (토큰 0, 숫자는 의미 없음)
 #   python -m medical run [--arms C0,C1,C1S] [--limit N] [--trials-per-cell 2] [--docs template|llm] [--docs-from 경로/RAG문서.jsonl]
-#                         [--model 모델] [--model-ROLE 모델] [--mode efficiency|exploration] [--budget 10]
+#                         [--model 모델] [--model-ROLE 모델] [--mode efficiency|exploration] [--budget 10] [--timeout 180]
 #   python -m medical report <실행 폴더>                              집계표 (LLM 0)
 #   python -m medical reextract <실행 폴더> [--limit 4]               기록된 원 응답에 지금 추출기 프롬프트만 다시 적용 (대상 AI 호출 0)
 #
@@ -49,6 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     rn.add_argument("--suppress-threshold", type=int, default=3)
     rn.add_argument("--main-experiment", action="store_true")
     rn.add_argument("--model", default=None)
+    rn.add_argument("--timeout", type=float, default=180.0, help="LLM 요청 timeout 초 (.env 값보다 작으면 이 값을 씀)")
     for r in ROLES:
         rn.add_argument(f"--model-{r.replace('_', '-')}", dest=f"model_{r}", default=None)
     rp = sub.add_parser("report")
@@ -89,7 +90,11 @@ def main(argv: list[str] | None = None) -> int:
         from core.config import get_settings
         from core.llm_client import LLMClient
         from medical.llm import ClientRoleLLM
-        llm = ClientRoleLLM(LLMClient(get_settings()), models=cfg.models, temperature=cfg.temperature)
+        import dataclasses
+        st = get_settings()
+        # 파일럿 2: 추출기 출력이 8천 토큰을 넘으면 60초 안에 끝나지 않아 재시도 4번 모두 timeout → LLM_ERROR
+        st = dataclasses.replace(st, llm_timeout_sec=max(st.llm_timeout_sec, a.timeout))
+        llm = ClientRoleLLM(LLMClient(st), models=cfg.models, temperature=cfg.temperature)
     run_experiment(cfg, llm, out, limit=a.limit, docs_from=Path(a.docs_from) if a.docs_from else None, store_limit=a.store_limit)
     print(to_markdown(report(out)))
     print(f"결과: {out}")

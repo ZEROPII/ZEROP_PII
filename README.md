@@ -9,7 +9,7 @@
 | 항목 | 상태 |
 | --- | --- |
 | 모듈 구현 및 연결 (질문 생성 → 응답 → 추출 → 판정 → 공개 → State 반영) | 완료 |
-| 단위·통합 테스트 | 801개 통과 (LLM 호출은 가짜 client 사용, 의료 33개 포함) |
+| 단위·통합 테스트 | 805개 통과 (LLM 호출은 가짜 client 사용, 의료 37개 포함) |
 | 의료 시나리오 (Synthea 576명) | `python -m medical` — RAG 문서·유사 환자 검색·사례별 추적·사건 단위 k(kcalc)·Defender(이유진 정책)·C0/C1/C1S·Validated k. 가짜 LLM 배선 확인 완료, 실제 LLM 파일럿 전. 상세: [docs/medical.md](docs/medical.md) |
 | 실행 갈래 | C0(Defender 없음), C1(공개 전 Defender), C1S(무상태 Defender 대조군) |
 | 위험 계산 백엔드 | `risk_defender`(이유진 파트, 기본) / `ontology`(D1 Stage 3 계층 + D1 Stage 11 Defender) |
@@ -107,7 +107,7 @@ python -m adapters.prepare_reference    # 기준 집단: 원본 300명 + 합성 
 
 ```bash
 python -m core.llm_client               # 모델 응답이 오는지 확인
-python -m pytest -q                     # 801 passed
+python -m pytest -q                     # 805 passed
 python -m ontology                      # 기준 집단이 온톨로지로 전부 풀리는지 점검 (LLM 호출 없음)
 ```
 

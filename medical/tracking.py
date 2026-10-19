@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import collections
 import json
+import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -71,10 +72,31 @@ def known_cases_json(cases: dict[str, Case], order: list[str]) -> str:
     return json.dumps([cases[c].describe() for c in order], ensure_ascii=False)
 
 
+def case_ref_of(o: dict[str, Any]) -> str:
+    """'사례 4'·'[사례4]'·'사례4번' → '사례4'. 사례 번호가 없으면 원래 표기 (없으면 UNCLEAR)."""
+    raw = str(o.get("case_ref") or "").strip()
+    m = re.search(r"사례\s*(\d+)", raw)
+    return f"사례{int(m.group(1))}" if m else (raw or UNCLEAR)
+
+
+def fix_subject(o: dict[str, Any], ref: str, query: str) -> dict[str, Any]:
+    """
+    case_ref가 '사례N'인데 subject=OTHER로 적힌 관찰 (파일럿 2 턴 0): OTHER는 질문 속 지금 환자에게만 쓰는 값이므로 서로 맞지 않는다.
+    값이 질문에 없고 답변에서 나온 것이면 그 사례의 값(TARGET_PATIENT)으로 고친다. 질문에 있는 값이면 그대로 둔다(질의 환자 정보일 수 있음).
+    """
+    if o.get("subject") == "OTHER" and re.fullmatch(r"사례\d+", ref):
+        val = str(o.get("raw_value") or "").strip()
+        if val and val not in query:
+            return dict(o, subject="TARGET_PATIENT", subject_fixed="OTHER->TARGET_PATIENT")
+    return o
+
+
 def view_of(observations: list[dict[str, Any]], response: str, query: str, nz: Normalizer) -> CaseView:
     by_case: dict[str, list[dict[str, Any]]] = collections.OrderedDict()
     for o in observations:
-        by_case.setdefault(str(o.get("case_ref") or UNCLEAR), []).append(o)
+        ref = case_ref_of(o)
+        o = fix_subject(dict(o, case_ref=ref) if ref != UNCLEAR else o, ref, query)
+        by_case.setdefault(ref, []).append(o)
     normalized, disclosures, sources, partial = {}, {}, {}, {}
     for ref, os_ in by_case.items():
         norm = [nz.normalize(o, response, query) for o in os_]
