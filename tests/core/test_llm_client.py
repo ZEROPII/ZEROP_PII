@@ -314,3 +314,29 @@ def test_context_manager_closes_session():
     with LLMClient(make_settings(), session=session):  # type: ignore[arg-type]
         pass
     assert session.closed is True
+
+
+# ──────────────────────────────────────────────────────────────
+# 여러 턴 대화 (의료 대상 AI)
+# ──────────────────────────────────────────────────────────────
+
+def test_chat_sends_full_history_and_model_override():
+    client, session, _ = make_client([FakeResponse(200, ok_body("두 번째 답"))])
+    msgs = [{"role": "user", "content": "첫 질문"}, {"role": "assistant", "content": "첫 답"}, {"role": "user", "content": "두 번째 질문"}]
+
+    result = client.chat(msgs, system_prompt="사례 5건", temperature=0, model="other-model")
+
+    sent = session.calls[0]["json"]
+    assert sent["messages"] == msgs
+    assert sent["system"] == "사례 5건"
+    assert sent["model"] == "other-model"
+    assert sent["temperature"] == 0
+    assert result.text == "두 번째 답"
+
+
+def test_chat_rejects_history_not_ending_with_user():
+    client, _, _ = make_client([])
+    with pytest.raises(ValueError):
+        client.chat([{"role": "user", "content": "q"}, {"role": "assistant", "content": "a"}])
+    with pytest.raises(ValueError):
+        client.chat([])
