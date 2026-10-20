@@ -13,13 +13,17 @@ DEFAULT_QI_ORDER = [
     "REGION",
     "DX",
     "PROC",
-    "PERIOD",
     "MED",
     "PLAN",
 ]
 
+# 한 사람당 여러 값을 가질 수 있는 QI — {"code", "age", "date"} 번들 리스트로 저장
+# PERIOD는 독립 필드 없이 각 이벤트 번들의 "date" 필드로 내포됨
+MULTI_VALUE_QIS: frozenset[str] = frozenset({"DX", "PROC", "MED", "PLAN"})
+
 DIRECT_IDENTIFIER_FIELDS = {"patient_id"}
 QIStatus = Literal["committed", "pending", "conflict", "rejected"]
+
 
 @dataclass(frozen=True)
 class QIObservation:
@@ -86,6 +90,30 @@ def update_state(
             next_state.pending.append(event)
             continue
 
+        # 다중값 QI: {"code","age","date"} 번들 리스트에 추가 (code 기준 중복 제거)
+        if qi_type in MULTI_VALUE_QIS:
+            new_values: list[Any] = normalized if isinstance(normalized, list) else [normalized]
+            existing = next_state.qis.get(qi_type)
+            if existing is None:
+                next_state.qis[qi_type] = {
+                    **event,
+                    "value": list(new_values),
+                    "status": "committed",
+                    "history": [event],
+                }
+            else:
+                current_list: list[Any] = existing.get("value", [])
+                added = False
+                for v in new_values:
+                    if not _is_duplicate_event(v, current_list):
+                        current_list.append(v)
+                        added = True
+                existing["value"] = current_list
+                existing.setdefault("history", []).append(
+                    {**event, "reason": "appended" if added else "same_value"}
+                )
+            continue
+
         existing = next_state.qis.get(qi_type)
         if existing is None:
             next_state.qis[qi_type] = {
@@ -128,10 +156,33 @@ def update_state(
 def normalize_qi_value(qi_type: str, value: Any) -> Any:
     if value is None:
         return None
+    if isinstance(value, dict):
+        # 번들 이벤트: code 필드 필수, age·date는 있으면 유지
+        code = (value.get("code") or "").strip()
+        if not code:
+            return None
+        result: dict[str, str] = {"code": code}
+        age = (value.get("age") or "").strip()
+        date = (value.get("date") or "").strip()
+        if age:
+            result["age"] = age
+        if date:
+            result["date"] = date
+        return result
     if isinstance(value, str):
         normalized = value.strip()
         return normalized if normalized else None
     return value
+
+
+def _is_duplicate_event(v: Any, current_list: list[Any]) -> bool:
+    """code 기준 중복 여부 확인."""
+    v_code = v.get("code") if isinstance(v, dict) else v
+    for e in current_list:
+        e_code = e.get("code") if isinstance(e, dict) else e
+        if e_code == v_code:
+            return True
+    return False
 
 
 def is_more_specific(qi_type: str, candidate: Any, existing: Any) -> bool:
@@ -140,7 +191,6 @@ def is_more_specific(qi_type: str, candidate: Any, existing: Any) -> bool:
         return False
     if str(candidate) == str(existing):
         return False
-    # 순환 임포트 방지를 위해 함수 내부에서 임포트
     try:
         from .loader import NODE_REGISTRY  # noqa: PLC0415
     except ImportError:

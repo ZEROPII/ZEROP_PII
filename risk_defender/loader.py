@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import csv
 import json
+import random
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -19,7 +20,7 @@ NODE_REGISTRY: dict[str, dict[str, Any]] = {}
 _DATA_DIR = Path(__file__).resolve().parent / "data"
 DEFAULT_NODE_PATH = _DATA_DIR / "노드_v0.9.csv"
 DEFAULT_EVENT_PATH = _DATA_DIR / "사건연결표_v0.9.csv"
-DEFAULT_PROFILES_PATH = _DATA_DIR / "user_patient_profiles_1000.json"
+DEFAULT_PROFILES_PATH = _DATA_DIR / "user_patient_profiles_576.json"
 
 # event_type → QI 키 매핑 (CSV에서 직접 로드할 때 사용)
 _EVENT_TYPE_TO_QI: dict[str, str] = {
@@ -101,9 +102,14 @@ def load_expanded_population(
 def load_population_from_csv(
     event_path: str | Path = DEFAULT_EVENT_PATH,
     node_path: str | Path = DEFAULT_NODE_PATH,
+    *,
+    seed: int | None = 42,
+    max_per_qi: int = 5,
 ) -> list[PersonaRecord]:
     """사건연결표 CSV를 직접 읽어 환자별 PersonaRecord를 생성한다.
-    user_patient_profiles_576.json을 재생성할 때 사용한다.
+
+    seed=None이면 모든 이벤트를 수집(제한 없음).
+    seed가 주어지면 환자별로 1~max_per_qi개 샘플링(재현 가능).
     """
     load_node_registry(node_path)
 
@@ -117,9 +123,11 @@ def load_population_from_csv(
             pid = row["patient_id"].strip()
             patient_events.setdefault(pid, []).append(dict(row))
 
+    rng = random.Random(seed) if seed is not None else None
+
     records: list[PersonaRecord] = []
     for pid, events in patient_events.items():
-        qis = _aggregate_patient_qis(events)
+        qis = _aggregate_patient_qis(events, rng=rng, max_per_qi=max_per_qi)
         records.append(PersonaRecord(
             person_id=pid,
             username=None,
@@ -131,8 +139,22 @@ def load_population_from_csv(
     return records
 
 
-def _aggregate_patient_qis(events: list[dict[str, str]]) -> dict[str, Any]:
-    """환자의 이벤트 목록에서 QI 딕셔너리를 추출한다."""
+def _aggregate_patient_qis(
+    events: list[dict[str, str]],
+    *,
+    rng: "random.Random | None" = None,
+    max_per_qi: int = 5,
+    min_per_qi: int = 1,
+    qi_count_weights: "list[float] | None" = None,
+) -> dict[str, Any]:
+    """환자의 이벤트 목록에서 QI 딕셔너리를 추출한다.
+
+    DX/PROC/MED/PLAN은 {"code", "age", "date"} 번들 리스트로 수집한다.
+    rng가 주어지면 1~max_per_qi 범위에서 랜덤 샘플링, 없으면 전체 수집.
+    PERIOD는 독립 필드 없이 각 이벤트 번들의 "date" 키로 내포된다.
+    """
+    from .schema import MULTI_VALUE_QIS  # noqa: PLC0415
+
     sorted_events = sorted(events, key=lambda e: e.get("start") or "")
 
     first = sorted_events[0]
@@ -142,22 +164,50 @@ def _aggregate_patient_qis(events: list[dict[str, str]]) -> dict[str, Any]:
         "REGION": first.get("region_node") or None,
     }
 
-    seen_qi_types: set[str] = set()
+    # 이벤트별 번들 수집 (code 기준 중복 제거, 날짜순)
+    multi_pool: dict[str, list[dict[str, str]]] = {qi: [] for qi in MULTI_VALUE_QIS}
+    seen_codes: dict[str, set[str]] = {qi: set() for qi in MULTI_VALUE_QIS}
+
     for event in sorted_events:
         etype = event.get("event_type", "").strip()
         qi_key = _EVENT_TYPE_TO_QI.get(etype)
-        if qi_key and qi_key not in seen_qi_types:
-            code_node = event.get("code_node") or None
-            if code_node:
-                raw_qis[qi_key] = code_node
-                seen_qi_types.add(qi_key)
-        if etype == "CONDITION" and "PERIOD" not in raw_qis:
-            period = event.get("period_start_node") or None
-            if period:
-                raw_qis["PERIOD"] = period
+        if not qi_key:
+            continue
+        code_node = (event.get("code_node") or "").strip()
+        if not code_node or code_node in seen_codes[qi_key]:
+            continue
+        seen_codes[qi_key].add(code_node)
+        entry: dict[str, str] = {"code": code_node}
+        age_node = (event.get("age_node") or "").strip()
+        period_node = (event.get("period_start_node") or "").strip()
+        if age_node:
+            entry["age"] = age_node
+        if period_node:
+            entry["date"] = period_node
+        multi_pool[qi_key].append(entry)
 
-    return {
-        qi_type: normalize_qi_value(qi_type, raw_qis.get(qi_type))
-        for qi_type in DEFAULT_QI_ORDER
-        if normalize_qi_value(qi_type, raw_qis.get(qi_type)) is not None
-    }
+    # qi_count_weights 기본값: avg 2.6 타깃 (1~5)
+    weights = qi_count_weights or [0.25, 0.25, 0.25, 0.15, 0.10]
+
+    for qi_key, pool in multi_pool.items():
+        if not pool:
+            raw_qis[qi_key] = None
+            continue
+        if rng is not None:
+            n = rng.choices(range(min_per_qi, max_per_qi + 1), weights=weights)[0]
+            n = min(n, len(pool))
+            raw_qis[qi_key] = pool[:n]
+        else:
+            raw_qis[qi_key] = pool
+
+    result: dict[str, Any] = {}
+    for qi_type in DEFAULT_QI_ORDER:
+        raw = raw_qis.get(qi_type)
+        if qi_type in MULTI_VALUE_QIS:
+            if raw:
+                result[qi_type] = raw
+        else:
+            normalized = normalize_qi_value(qi_type, raw)
+            if normalized is not None:
+                result[qi_type] = normalized
+    return result
