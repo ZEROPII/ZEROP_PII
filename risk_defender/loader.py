@@ -26,6 +26,7 @@ DEFAULT_PROFILES_PATH = _DATA_DIR / "user_patient_profiles_576.json"
 _EVENT_TYPE_TO_QI: dict[str, str] = {
     "CONDITION": "DX",
     "PROCEDURE": "PROC",
+    "PROCEDURE_HISTORY": "PROC",  # 과거 시술 이력도 PROC으로 포함
     "MEDICATION": "MED",
     "CAREPLAN": "PLAN",
 }
@@ -159,7 +160,6 @@ def _aggregate_patient_qis(
 
     first = sorted_events[0]
     raw_qis: dict[str, Any] = {
-        "AGE": first.get("age_node") or None,
         "SEX": first.get("sex_node") or None,
         "REGION": first.get("region_node") or None,
     }
@@ -180,10 +180,13 @@ def _aggregate_patient_qis(
         entry: dict[str, str] = {"code": code_node}
         age_node = (event.get("age_node") or "").strip()
         period_node = (event.get("period_start_node") or "").strip()
+        period_end_node = (event.get("period_end_node") or "").strip()
         if age_node:
             entry["age"] = age_node
         if period_node:
             entry["date"] = period_node
+        if period_end_node:
+            entry["date_end"] = period_end_node
         multi_pool[qi_key].append(entry)
 
     # qi_count_weights 기본값: avg 2.6 타깃 (1~5)

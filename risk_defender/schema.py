@@ -164,10 +164,13 @@ def normalize_qi_value(qi_type: str, value: Any) -> Any:
         result: dict[str, str] = {"code": code}
         age = (value.get("age") or "").strip()
         date = (value.get("date") or "").strip()
+        date_end = (value.get("date_end") or "").strip()
         if age:
             result["age"] = age
         if date:
             result["date"] = date
+        if date_end:
+            result["date_end"] = date_end
         return result
     if isinstance(value, str):
         normalized = value.strip()

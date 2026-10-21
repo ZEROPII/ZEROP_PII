@@ -8,50 +8,49 @@ Synthea 합성 환자 기반 의료 시나리오에서 다음 7개 QI를 사용�
 
 | 약어 | 의미 | 저장 형태 | 출처 |
 |------|------|-----------|------|
-| `AGE` | 환자 나이 (첫 이벤트 기준) | 단일 문자열 | `age_node` |
 | `SEX` | 성별 | 단일 문자열 | `sex_node` |
 | `REGION` | 거주/진료 지역 | 단일 문자열 | `region_node` |
 | `DX` | 진단명 (SNOMED CT / ICD) | 이벤트 번들 리스트 | `code_node` (CONDITION) |
-| `PROC` | 시술/처치 (SNOMED CT) | 이벤트 번들 리스트 | `code_node` (PROCEDURE) |
+| `PROC` | 시술/처치 (SNOMED CT) | 이벤트 번들 리스트 | `code_node` (PROCEDURE, PROCEDURE_HISTORY) |
 | `MED` | 투약 정보 | 이벤트 번들 리스트 | `code_node` (MEDICATION) |
 | `PLAN` | 케어플랜 | 이벤트 번들 리스트 | `code_node` (CAREPLAN) |
 
-`PERIOD`는 독립 QI 필드 없이 각 이벤트 번들의 `"date"` 키로 내포된다.
+`PERIOD`는 독립 QI 필드 없이 각 이벤트 번들의 `"date"` (시작일) / `"date_end"` (종료일) 키로 내포된다.
+환자 레벨 `AGE`는 제거됨 — 나이 정보는 각 이벤트 번들의 `"age"` 키로만 존재한다.
 
 ### 이벤트 번들 구조
 
-DX/PROC/MED/PLAN은 각 이벤트를 `{"code", "age", "date"}` 번들로 저장한다. 진단·시술·투약·관리 계획 각각에 해당 시점의 나이와 날짜가 함께 묶인다.
+DX/PROC/MED/PLAN은 각 이벤트를 `{"code", "age", "date", "date_end"}` 번들로 저장한다. 종료일(`date_end`)이 없는 이벤트(예: 진행 중 투약)는 해당 키를 생략한다.
 
 ```json
 {
-  "AGE": "AGE_Y22",
   "SEX": "SEX_MALE",
   "REGION": "REGION_DATASET_LOCALITY_...",
   "DX": [
-    {"code": "DX_SCT_66383009", "age": "AGE_Y22", "date": "PERIOD_CONDITION_START_DATE_DAY_2019-03-24"},
+    {"code": "DX_SCT_66383009", "age": "AGE_Y22", "date": "PERIOD_CONDITION_START_DATE_DAY_2019-03-24", "date_end": "PERIOD_CONDITION_END_DATE_DAY_2019-04-07"},
     {"code": "DX_ICD_CODE_J329", "age": "AGE_Y25", "date": "PERIOD_CONDITION_START_DATE_DAY_2022-11-07"}
   ],
   "PROC": [
-    {"code": "PROC_SCT_1260009003", "age": "AGE_Y22", "date": "PERIOD_PROCEDURE_START_UTC_DAY_2019-04-06"}
+    {"code": "PROC_SCT_1260009003", "age": "AGE_Y22", "date": "PERIOD_PROCEDURE_START_UTC_DAY_2019-04-06", "date_end": "PERIOD_PROCEDURE_END_UTC_DAY_2019-04-06"}
   ],
   "MED": [
-    {"code": "MED_RX_1535362", "age": "AGE_Y22", "date": "PERIOD_MEDICATION_START_UTC_DAY_2019-03-24"}
+    {"code": "MED_RX_1535362", "age": "AGE_Y22", "date": "PERIOD_MEDICATION_START_UTC_DAY_2019-03-24", "date_end": "PERIOD_MEDICATION_END_UTC_DAY_2019-09-30"}
   ]
 }
 ```
 
-환자 레벨 `AGE`는 첫 이벤트의 나이로 별도 유지하고, 각 이벤트에도 해당 시점 나이를 `"age"` 키로 함께 저장한다.
-
 ### 이벤트 수 분포 (576명 기준)
 
-각 환자는 QI별로 1~5개 이벤트를 가진다 (seed=42, avg ~2.5개).
+사건표(사건연결표_v0.9.csv)의 전체 이벤트를 상한 없이 포함한다. 고유 코드 기준 중복 제거 후 날짜순 정렬.
 
-| QI | 평균 | 최대 | 0개 환자 |
-|----|------|------|---------|
-| DX | 2.45 | 5 | 3명 |
-| PROC | 2.41 | 5 | 21명 |
-| MED | 2.47 | 5 | 6명 |
-| PLAN | 1.89 | 5 | 43명 |
+| QI | 총 이벤트 | 환자당 평균 |
+|----|----------|------------|
+| DX | 5,032 | 8.7 |
+| MED | 3,848 | 6.7 |
+| PROC | 2,742 | 4.8 |
+| PLAN | 1,738 | 3.0 |
+
+PROC는 `PROCEDURE`와 `PROCEDURE_HISTORY` 이벤트를 모두 포함한다.
 
 ## 데이터 파일
 
@@ -69,7 +68,7 @@ DX/PROC/MED/PLAN은 각 이벤트를 `{"code", "age", "date"}` 번들로 저장�
 python3 -c "
 from risk_defender.loader import load_population_from_csv
 import json, pathlib
-records = load_population_from_csv(seed=42, max_per_qi=5)
+records = load_population_from_csv(seed=None)  # 상한 없음, 사건표 전체
 out = [{'person_id': r.person_id, 'qis': r.qis} for r in records]
 pathlib.Path('risk_defender/data/user_patient_profiles_576.json').write_text(
     json.dumps(out, ensure_ascii=False, indent=2), encoding='utf-8'
@@ -150,11 +149,12 @@ DEMO_QI_ORDER = ["AGE", "SEX", "REGION", "DX", "PROC", "MED", "PLAN"]
 - Privacy State / k / Defender 핵심 모듈 구현 완료
 - Synthea 합성 환자 576명을 reference population으로 로딩
 - 노드 계층(노드_v0.9.csv)을 활용한 계층적 QI 매칭 및 일반화 구현
-- 7개 의료 QI(AGE/SEX/REGION/DX/PROC/MED/PLAN)가 누적될 때 k와 risk gain 계산
+- 6개 의료 QI(SEX/REGION/DX/PROC/MED/PLAN)가 누적될 때 k와 risk gain 계산
 - threshold 이하 QI는 노드 계층을 따라 일반화하거나 억제
-- 이벤트 번들 구조 도입: DX/PROC/MED/PLAN 각 항목에 해당 시점 `age`와 `date` 함께 저장
-- PERIOD 독립 필드 제거 → 각 이벤트 번들의 `"date"` 키로 내포
-- 환자별 1~5개 이벤트 다중 보유 (seed=42, avg ~2.5개)
+- 이벤트 번들 구조 도입: DX/PROC/MED/PLAN 각 항목에 해당 시점 `age`, `date`, `date_end` 함께 저장
+- 환자 레벨 `AGE` 제거 → 나이 정보는 각 이벤트 번들 내 `"age"` 키로만 보유
+- 프로필 이벤트 수 상한 제거: 사건표 전체와 1:1 매칭 (DX 8.7개 / MED 6.7개 / PROC 4.8개 / PLAN 3.0개)
+- `PROCEDURE_HISTORY` 이벤트를 `PROC`으로 통합 (PROC 총계 2,742개)
 
 ## 다음에 할 것
 
