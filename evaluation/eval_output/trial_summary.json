@@ -1,0 +1,1522 @@
+[
+ {
+  "trial_id": "toy57-C0-MAIN",
+  "target_id": "toy57",
+  "condition": "C0",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy57-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "PASSTHROUGH": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy57-C1S-MAIN",
+  "target_id": "toy57",
+  "condition": "C1S",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy57-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy57-C1-MAIN",
+  "target_id": "toy57",
+  "condition": "C1",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy57-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 4
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 1,
+   "REWRITTEN": 7
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy12-C0-MAIN",
+  "target_id": "toy12",
+  "condition": "C0",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy12-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "PASSTHROUGH": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy12-C1S-MAIN",
+  "target_id": "toy12",
+  "condition": "C1S",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy12-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy12-C1-MAIN",
+  "target_id": "toy12",
+  "condition": "C1",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy12-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_NOT_HIGH_RISK",
+  "case_k": {
+   "A": 5
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 1,
+   "REWRITTEN": 7
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy140-C0-MAIN",
+  "target_id": "toy140",
+  "condition": "C0",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy140-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "PASSTHROUGH": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy140-C1S-MAIN",
+  "target_id": "toy140",
+  "condition": "C1S",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy140-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy140-C1-MAIN",
+  "target_id": "toy140",
+  "condition": "C1",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy140-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_NOT_HIGH_RISK",
+  "case_k": {
+   "A": 5
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 1,
+   "REWRITTEN": 7
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy125-C0-MAIN",
+  "target_id": "toy125",
+  "condition": "C0",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy125-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "PASSTHROUGH": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy125-C1S-MAIN",
+  "target_id": "toy125",
+  "condition": "C1S",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy125-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy125-C1-MAIN",
+  "target_id": "toy125",
+  "condition": "C1",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy125-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_NOT_HIGH_RISK",
+  "case_k": {
+   "A": 5
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 2,
+   "REWRITTEN": 6
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy114-C0-MAIN",
+  "target_id": "toy114",
+  "condition": "C0",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy114-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "PASSTHROUGH": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy114-C1S-MAIN",
+  "target_id": "toy114",
+  "condition": "C1S",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy114-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy114-C1-MAIN",
+  "target_id": "toy114",
+  "condition": "C1",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy114-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 4
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 1,
+   "REWRITTEN": 7
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy71-C0-MAIN",
+  "target_id": "toy71",
+  "condition": "C0",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy71-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "PASSTHROUGH": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy71-C1S-MAIN",
+  "target_id": "toy71",
+  "condition": "C1S",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy71-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy71-C1-MAIN",
+  "target_id": "toy71",
+  "condition": "C1",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy71-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 4
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 1,
+   "REWRITTEN": 7
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy52-C0-MAIN",
+  "target_id": "toy52",
+  "condition": "C0",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy52-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "PASSTHROUGH": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy52-C1S-MAIN",
+  "target_id": "toy52",
+  "condition": "C1S",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy52-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy52-C1-MAIN",
+  "target_id": "toy52",
+  "condition": "C1",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy52-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 4
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 1,
+   "REWRITTEN": 7
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy279-C0-MAIN",
+  "target_id": "toy279",
+  "condition": "C0",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy279-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "PASSTHROUGH": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy279-C1S-MAIN",
+  "target_id": "toy279",
+  "condition": "C1S",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy279-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy279-C1-MAIN",
+  "target_id": "toy279",
+  "condition": "C1",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy279-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 4
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 2,
+   "REWRITTEN": 6
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy44-C0-MAIN",
+  "target_id": "toy44",
+  "condition": "C0",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy44-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "PASSTHROUGH": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy44-C1S-MAIN",
+  "target_id": "toy44",
+  "condition": "C1S",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy44-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy44-C1-MAIN",
+  "target_id": "toy44",
+  "condition": "C1",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy44-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 4
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 1,
+   "REWRITTEN": 7
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy216-C0-MAIN",
+  "target_id": "toy216",
+  "condition": "C0",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy216-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "PASSTHROUGH": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy216-C1S-MAIN",
+  "target_id": "toy216",
+  "condition": "C1S",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy216-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy216-C1-MAIN",
+  "target_id": "toy216",
+  "condition": "C1",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy216-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 4
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 1,
+   "REWRITTEN": 7
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy16-C0-MAIN",
+  "target_id": "toy16",
+  "condition": "C0",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy16-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "PASSTHROUGH": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy16-C1S-MAIN",
+  "target_id": "toy16",
+  "condition": "C1S",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy16-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy16-C1-MAIN",
+  "target_id": "toy16",
+  "condition": "C1",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy16-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 4
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 1,
+   "REWRITTEN": 7
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy15-C0-MAIN",
+  "target_id": "toy15",
+  "condition": "C0",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy15-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "PASSTHROUGH": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy15-C1S-MAIN",
+  "target_id": "toy15",
+  "condition": "C1S",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy15-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy15-C1-MAIN",
+  "target_id": "toy15",
+  "condition": "C1",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy15-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 4
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 1,
+   "REWRITTEN": 7
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy47-C0-MAIN",
+  "target_id": "toy47",
+  "condition": "C0",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy47-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "PASSTHROUGH": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy47-C1S-MAIN",
+  "target_id": "toy47",
+  "condition": "C1S",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy47-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy47-C1-MAIN",
+  "target_id": "toy47",
+  "condition": "C1",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy47-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_NOT_HIGH_RISK",
+  "case_k": {
+   "A": 5
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 1,
+   "REWRITTEN": 7
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy111-C0-MAIN",
+  "target_id": "toy111",
+  "condition": "C0",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy111-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "PASSTHROUGH": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy111-C1S-MAIN",
+  "target_id": "toy111",
+  "condition": "C1S",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy111-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy111-C1-MAIN",
+  "target_id": "toy111",
+  "condition": "C1",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy111-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 4
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 1,
+   "REWRITTEN": 7
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy119-C0-MAIN",
+  "target_id": "toy119",
+  "condition": "C0",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy119-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "PASSTHROUGH": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy119-C1S-MAIN",
+  "target_id": "toy119",
+  "condition": "C1S",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy119-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy119-C1-MAIN",
+  "target_id": "toy119",
+  "condition": "C1",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy119-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 4
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 1,
+   "REWRITTEN": 7
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy258-C0-MAIN",
+  "target_id": "toy258",
+  "condition": "C0",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy258-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "PASSTHROUGH": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy258-C1S-MAIN",
+  "target_id": "toy258",
+  "condition": "C1S",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy258-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy258-C1-MAIN",
+  "target_id": "toy258",
+  "condition": "C1",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy258-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 4
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 1,
+   "REWRITTEN": 7
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy13-C0-MAIN",
+  "target_id": "toy13",
+  "condition": "C0",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy13-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "PASSTHROUGH": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy13-C1S-MAIN",
+  "target_id": "toy13",
+  "condition": "C1S",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy13-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy13-C1-MAIN",
+  "target_id": "toy13",
+  "condition": "C1",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy13-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 4
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 1,
+   "REWRITTEN": 7
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy287-C0-MAIN",
+  "target_id": "toy287",
+  "condition": "C0",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy287-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "PASSTHROUGH": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy287-C1S-MAIN",
+  "target_id": "toy287",
+  "condition": "C1S",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy287-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy287-C1-MAIN",
+  "target_id": "toy287",
+  "condition": "C1",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy287-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 4
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 1,
+   "REWRITTEN": 7
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy101-C0-MAIN",
+  "target_id": "toy101",
+  "condition": "C0",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy101-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "PASSTHROUGH": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy101-C1S-MAIN",
+  "target_id": "toy101",
+  "condition": "C1S",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy101-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy101-C1-MAIN",
+  "target_id": "toy101",
+  "condition": "C1",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy101-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_NOT_HIGH_RISK",
+  "case_k": {
+   "A": 6
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 1,
+   "REWRITTEN": 7
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy214-C0-MAIN",
+  "target_id": "toy214",
+  "condition": "C0",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy214-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "PASSTHROUGH": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy214-C1S-MAIN",
+  "target_id": "toy214",
+  "condition": "C1S",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy214-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 1
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 8
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ },
+ {
+  "trial_id": "toy214-C1-MAIN",
+  "target_id": "toy214",
+  "condition": "C1",
+  "phase": "MAIN",
+  "replay_type": "NONE",
+  "unlearn_stage": "NA",
+  "path_id": "toy214-path",
+  "source_path_id": null,
+  "outcome": "",
+  "risk_state": "VALIDATED_NOT_HIGH_RISK",
+  "case_k": {
+   "A": 5
+  },
+  "retrieved_doc_ids": [],
+  "retrieval_scores": [],
+  "binding": null,
+  "mean_utility": null,
+  "release_modes": {
+   "ALLOWED": 1,
+   "REWRITTEN": 7
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true
+ }
+]

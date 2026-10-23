@@ -9,14 +9,21 @@ from typing import Any, Literal
 
 DEFAULT_QI_ORDER = [
     "AGE",
-    "LOC",
-    "OCCP",
-    "EDU",
-    "REL",
+    "SEX",
+    "REGION",
+    "DX",
+    "PROC",
+    "MED",
+    "PLAN",
 ]
 
-DIRECT_IDENTIFIER_FIELDS = {"author", "username", "person_id"}
+# 한 사람당 여러 값을 가질 수 있는 QI — {"code", "age", "date"} 번들 리스트로 저장
+# PERIOD는 독립 필드 없이 각 이벤트 번들의 "date" 필드로 내포됨
+MULTI_VALUE_QIS: frozenset[str] = frozenset({"DX", "PROC", "MED", "PLAN"})
+
+DIRECT_IDENTIFIER_FIELDS = {"patient_id"}
 QIStatus = Literal["committed", "pending", "conflict", "rejected"]
+
 
 @dataclass(frozen=True)
 class QIObservation:
@@ -83,6 +90,30 @@ def update_state(
             next_state.pending.append(event)
             continue
 
+        # 다중값 QI: {"code","age","date"} 번들 리스트에 추가 (code 기준 중복 제거)
+        if qi_type in MULTI_VALUE_QIS:
+            new_values: list[Any] = normalized if isinstance(normalized, list) else [normalized]
+            existing = next_state.qis.get(qi_type)
+            if existing is None:
+                next_state.qis[qi_type] = {
+                    **event,
+                    "value": list(new_values),
+                    "status": "committed",
+                    "history": [event],
+                }
+            else:
+                current_list: list[Any] = existing.get("value", [])
+                added = False
+                for v in new_values:
+                    if not _is_duplicate_event(v, current_list):
+                        current_list.append(v)
+                        added = True
+                existing["value"] = current_list
+                existing.setdefault("history", []).append(
+                    {**event, "reason": "appended" if added else "same_value"}
+                )
+            continue
+
         existing = next_state.qis.get(qi_type)
         if existing is None:
             next_state.qis[qi_type] = {
@@ -125,70 +156,48 @@ def update_state(
 def normalize_qi_value(qi_type: str, value: Any) -> Any:
     if value is None:
         return None
-
-    if qi_type == "AGE":
-        return to_age_band(value)
-
+    if isinstance(value, dict):
+        # 번들 이벤트: code 필드 필수, age·date는 있으면 유지
+        code = (value.get("code") or "").strip()
+        if not code:
+            return None
+        result: dict[str, str] = {"code": code}
+        age = (value.get("age") or "").strip()
+        date = (value.get("date") or "").strip()
+        date_end = (value.get("date_end") or "").strip()
+        if age:
+            result["age"] = age
+        if date:
+            result["date"] = date
+        if date_end:
+            result["date_end"] = date_end
+        return result
     if isinstance(value, str):
-        normalized = " ".join(value.strip().split())
+        normalized = value.strip()
         return normalized if normalized else None
-
     return value
 
 
-def to_age_band(value: Any) -> str | None:
-    if value is None:
-        return None
-
-    if isinstance(value, str):
-        raw = value.strip().lower()
-        if not raw:
-            return None
-        if raw.endswith("s") and raw[:-1].isdigit():
-            return raw
-        if raw in {"teens", "young", "adult", "senior"}:
-            return raw
-        digits = "".join(ch for ch in raw if ch.isdigit())
-        if not digits:
-            return raw
-        value = int(digits)
-
-    if not isinstance(value, int):
-        return str(value)
-
-    if value < 20:
-        return "teens"
-    decade = value // 10 * 10
-    return f"{decade}s"
-
-
-def is_more_specific(qi_type: str, candidate: Any, existing: Any) -> bool:
-    if candidate in (None, "") or existing in (None, ""):
-        return False
-
-    if qi_type == "LOC":
-        return _location_specificity(str(candidate)) > _location_specificity(str(existing))
-
-    if qi_type == "AGE":
-        return _age_specificity(candidate) > _age_specificity(existing)
-
-    if qi_type == "EDU":
-        return _education_specificity(str(candidate)) > _education_specificity(str(existing))
-
+def _is_duplicate_event(v: Any, current_list: list[Any]) -> bool:
+    """code 기준 중복 여부 확인."""
+    v_code = v.get("code") if isinstance(v, dict) else v
+    for e in current_list:
+        e_code = e.get("code") if isinstance(e, dict) else e
+        if e_code == v_code:
+            return True
     return False
 
 
-def _location_specificity(value: str) -> int:
-    return len([part for part in value.split(",") if part.strip()])
-
-
-def _age_specificity(value: Any) -> int:
-    text = str(value)
-    return 2 if text.isdigit() else 1
-
-
-def _education_specificity(value: str) -> int:
-    lowered = value.lower()
-    if any(token in lowered for token in ["computer", "business", "marketing", "physics"]):
-        return 2
-    return 1
+def is_more_specific(qi_type: str, candidate: Any, existing: Any) -> bool:
+    """노드 계층 depth 기준으로 candidate가 existing보다 더 구체적인지 확인."""
+    if candidate in (None, "") or existing in (None, ""):
+        return False
+    if str(candidate) == str(existing):
+        return False
+    try:
+        from .loader import NODE_REGISTRY  # noqa: PLC0415
+    except ImportError:
+        return False
+    c_depth = NODE_REGISTRY.get(str(candidate), {}).get("depth", -1)
+    e_depth = NODE_REGISTRY.get(str(existing), {}).get("depth", -1)
+    return c_depth > e_depth

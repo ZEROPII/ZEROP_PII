@@ -92,43 +92,57 @@ def _matches_all_qis(persona_qis: dict[str, Any], query_qis: dict[str, Any]) -> 
 
 
 def _matches_qi(qi_type: str, actual: Any, expected: Any) -> bool:
+    """QI 매칭.
+    - expected가 리스트(누적 관찰): 모든 항목이 actual에 하나씩 매칭되어야 True (AND)
+    - actual이 번들 dict 리스트: 원소 중 하나라도 expected와 매칭되면 True (OR)
+    - 단일 값: 노드 동일 또는 expected가 actual의 조상이면 True
+    """
     if actual is None or expected is None:
         return False
 
+    if isinstance(expected, list):
+        return all(_matches_qi(qi_type, actual, exp_item) for exp_item in expected)
+
+    if isinstance(actual, list):
+        return any(_matches_event_entry(elem, expected) for elem in actual)
+
+    return _matches_single(actual, expected)
+
+
+def _matches_event_entry(entry: Any, expected: Any) -> bool:
+    """이벤트 번들(dict or str)과 expected(dict or str) 매칭.
+    expected가 dict이면 명시된 필드(code/age/date)를 모두 충족해야 True.
+    expected가 str이면 code 필드와만 비교.
+    """
+    if isinstance(entry, dict):
+        code = entry.get("code", "")
+        if isinstance(expected, dict):
+            if "code" in expected and not _matches_single(code, expected["code"]):
+                return False
+            if "age" in expected and entry.get("age") != expected["age"]:
+                return False
+            if "date" in expected and entry.get("date") != expected["date"]:
+                return False
+            return True
+        return _matches_single(code, str(expected))
+    return _matches_single(entry, expected)
+
+
+def _matches_single(actual: Any, expected: Any) -> bool:
+    """단일 노드 매칭: 동일하거나 expected가 actual의 조상이면 True."""
     actual_text = str(actual).strip()
     expected_text = str(expected).strip()
-    if actual_text.casefold() == expected_text.casefold():
+    if actual_text == expected_text:
         return True
+    from .loader import NODE_REGISTRY  # noqa: PLC0415
+    return _is_ancestor_or_equal(expected_text, actual_text, NODE_REGISTRY)
 
-    if qi_type == "LOC":
-        return expected_text.casefold() in _location_ancestors(actual_text)
 
-    if qi_type == "AGE":
-        if expected_text == "adult":
-            return actual_text in {"20s", "30s", "40s", "50s", "60s"}
-        if expected_text == "senior":
-            return actual_text in {"70s", "80s", "90s"}
-        if expected_text == "young":
-            return actual_text == "teens"
-
-    if qi_type == "EDU":
-        if expected_text == "higher_education":
-            return actual_text in {"College Degree", "Master's", "PhD"}
-        if expected_text == "non_advanced_degree":
-            return actual_text in {"HS Diploma", "In College/HS Diploma"}
-
-    if qi_type == "REL":
-        if expected_text == "partnered":
-            return actual_text in {"married", "engaged", "in a relationship"}
-        if expected_text == "not_partnered":
-            return actual_text in {"single", "divorced", "widowed"}
-
+def _is_ancestor_or_equal(query: str, patient: str, registry: dict[str, Any]) -> bool:
+    """query가 patient 노드의 조상(혹은 동일)이면 True."""
+    current = registry.get(patient, {}).get("parent_id")
+    while current:
+        if current == query:
+            return True
+        current = registry.get(current, {}).get("parent_id")
     return False
-
-
-def _location_ancestors(value: str) -> set[str]:
-    ancestors: set[str] = set()
-    parts = [part.strip() for part in value.split(",") if part.strip()]
-    if len(parts) >= 2:
-        ancestors.add(parts[-1].casefold())
-    return ancestors
