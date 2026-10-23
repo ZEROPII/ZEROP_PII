@@ -1,7 +1,7 @@
 # 의료 원자료 적재와 코호트 분리 (하네스 명세 §1·§2)
 #
 # 사건연결표 한 행 = 사건 하나 (CONDITION·PROCEDURE·PROCEDURE_HISTORY·MEDICATION·CAREPLAN).
-# 노드 v0.9는 단일 부모 계층이다 (parent_id 하나). DX·PROC 공식 다중 부모 그래프(2026-10-07 스냅샷)는
+# 노드 v0.10(v0.9 + PERIOD 분기 단계)은 단일 부모 계층이다 (parent_id 하나). DX·PROC 공식 다중 부모 그래프(2026-10-07 스냅샷)는
 # 실행 플래그가 모두 꺼진 상태라 1차에서는 쓰지 않는다 (docs/medical.md '온톨로지 판').
 
 from __future__ import annotations

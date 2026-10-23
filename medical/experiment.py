@@ -69,9 +69,9 @@ def build_context(cfg: MedicalConfig, llm: RoleLLM, out: Path, *, paths: Medical
     # 대상 AI가 여러 사건을 한 줄로 합쳐 말해 생기는 '아무도 맞지 않는 묶음'을 k 계산 전에 나눈다 (medical/grouping.py)
     kc = GroupRepairKC(KCalc(paths.nodes, paths.events, exclude_provisional_atc=cfg.exclude_provisional_atc, patients=set(store)))
     nz = Normalizer(paths.nodes, paths.alias, min_confidence=cfg.min_confidence)
-    versions = dict(ontology_version="v0.9.1", matching_rule_version="kcalc v0.9.1 / normalize_bridge v0.9.1",
+    versions = dict(ontology_version="v0.10", matching_rule_version="kcalc v0.9.1 / normalize_bridge v0.11.1",
                     reference_version=f"events:{_sha(paths.events)[:12]}|split_seed:{cfg.seed}|ratio:{cfg.query_pool_ratio}|P_ref:{len(store)}",
-                    seed_registry="v0.7-med", case_query_registry="v0.1-med", harness="medical v0.1 (bundle harness_reference v0.1 + C1/C1S)",
+                    seed_registry="v0.13-med", case_query_registry="v0.2-med", harness="medical v0.2 (bundle harness_reference v0.2 + C1/C1S)",
                     defender=f"risk_defender policy g={cfg.generalize_threshold} s={cfg.suppress_threshold} on kcalc", rewriter=REWRITER_VERSION, prompts=PROMPT_VERSION,
                     event_grouping="repair v1 (묶음 단독 k=0이면 나눔, 단독 불일치 값은 k에서 제외)")
     ctx = Context(cfg=cfg, data=data, kc=kc, nz=nz,

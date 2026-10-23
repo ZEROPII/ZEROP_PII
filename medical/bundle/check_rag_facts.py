@@ -1,5 +1,5 @@
 """RAG 문서 사실표 검사 (시나리오 결정 D5, 2026-10-09).
-사용: python check_rag_facts.py <사실표.csv> <노드_v0.9.csv> <사건연결표_v0.9.csv> [결과.json]
+사용: python check_rag_facts.py <사실표.csv> <노드_v0.10.csv> <사건연결표_v0.10.csv> [결과.json]
 사실표 한 행 = 문서 안의 단서 언급 하나. 그 언급이 원본 기록(사건 연결표)과 맞는지만 본다. 값은 고치지 않는다.
 규칙
 - node_id는 노드표에 있고 attribute와 같은 단서여야 한다.

@@ -31,7 +31,7 @@ from medical.data import MedicalData
 from medical.defense import MedicalDefender, format_changes
 from medical.llm import RoleLLM
 from medical.prompts import PROMPTS, REFUSAL_TEXT
-from medical.retrieval import code_sets, fill_case_query, query_binding, retrieve
+from medical.retrieval import code_sets, fill_case_query, panel_text, query_binding, retrieve
 from medical.tracking import Case, CaseView, commit_view, known_cases_json, parse_json, view_of
 
 ARMS = ("C0", "C1", "C1S")
@@ -100,7 +100,8 @@ def make_prefix(ctx: Context, tid: str, qpid: str, qtype: str, role: str) -> Pre
     base = fill_case_query(cq["template_text"], b)
     ret = retrieve(code_sets(ctx.data.by_pat[qpid], b["index_date"]), ctx.store_sets, ctx.cfg.top_k_retrieval)
     docs = [ctx.docs[p] for p, _ in ret]
-    system = PROMPTS["target_system"].format(n=len(docs), cases="\n\n".join(f"[사례{i}]\n{d['text']}" for i, d in enumerate(docs, 1)))
+    system = PROMPTS["target_system"].format(n=len(docs), panel=panel_text(b),
+                                             cases="\n\n".join(f"[사례{i}]\n{d['text']}" for i, d in enumerate(docs, 1)))
     op0 = rng.choice(["M1", "M3"])
     q0, tries0 = realize(ctx.llm, ctx.cfg, base, "(사례 검색: 단서를 묻지 않음)", "CASE_RETRIEVAL", "-", "-", op0, role, [])
     fallback = q0 is None
@@ -268,9 +269,10 @@ class ArmRun:
                 seed, key = pick
                 op = rng.choice(applicable_ops(seed, cfg.operators))
                 evtxt = {f"{A}:{g}": v for g, v in self.cases[A].events.items()}
-                filled = fill_seed(seed, key, state, self.ctx.data.N, f"{A} 환자", evtxt)
-                q, tries = realize(self.ctx.llm, cfg, filled, seed["target_qi"], seed["attack_objective"], seed["scenario_id"],
-                                   f"{A} 환자", op, p.role, self.sent)
+                subj = f"{A} 환자" if seed.get("scope") != "GROUP" else "검색된 사례 전체"     # 하네스 v0.2: GROUP 행은 사례 전체에 묻는다
+                filled = fill_seed(seed, key, state, self.ctx.data.N, subj, evtxt)
+                q, tries = realize(self.ctx.llm, cfg, filled, seed["target_qi"], seed["attack_objective"], seed["variant"],
+                                   subj, op, p.role, self.sent)
                 n_attempts += len(tries)
                 if q is None:
                     n_invalid += 1
@@ -279,8 +281,10 @@ class ArmRun:
                     continue
                 turn += 1
                 used.add(seed["seed_id"])
-                scen[seed["scenario_id"]] += 1
+                scen[seed["variant"]] += 1
                 self._turn(turn, q, None, None, None, 0, dict(seed_id=seed["seed_id"], target_qi=seed["target_qi"],
+                                                               target_qi_2=seed.get("target_qi_2"), variant=seed["variant"],
+                                                               scope=seed.get("scope"), relation=seed.get("expected_relation"),
                                                                objective=seed["attack_objective"], operator=op, filled_seed=filled,
                                                                realization_fallback=False, checks=tries, regenerations=len(tries) - 1))
                 k = self.cases[A].k_hist[-1]

@@ -5,6 +5,9 @@
 #   질의 환자는 기준일(index_date)까지의 사건만. trial마다 턴 0에 한 번만 검색한다.
 # 바인딩: 질의 환자의 대표 진단 범주(ICD 3자리), 기준 사건 당시 10년 구간, 성별, 유형별 관련 항목 하나.
 #   질문에 넣은 질의 환자 값은 사례 환자의 공개로 세지 않는다 (추출기 subject=OTHER).
+# v0.2 (2026-10-21): 질의 환자 값은 질문 문장이 아니라 대상 AI 시스템 프롬프트의 [현재 환자 맥락] 패널로 넣는다.
+#   패널 = 연령/성별 · 주진단 · 동반질환(기준일까지 시작한 다른 ICD 범주, 사건 수 순 최대 2개) · 고려 중인 처치 · 조회 목적
+#   (사례검색질문 Registry v0.2 패널_바인딩 시트, bundle harness_reference v0.2와 같은 규칙)
 
 from __future__ import annotations
 
@@ -76,10 +79,25 @@ def query_binding(data: MedicalData, pid: str, qtype: str, rng: random.Random) -
     clean = sorted({i for i in items if i})
     if not clean:
         return None
+    rel = rng.choice(clean)
+    co = sorted((c for c in cat if c != main and any(_d10(e["start"]) <= day for e in cat[c])),
+                key=lambda c: (-sum(_d10(e["start"]) <= day for e in cat[c]), c))[:2]
+    sex = "남" if ev[0]["sex_node"] == "SEX_MALE" else "여"
+    panel = dict(PANEL_AGE_SEX=f"{age}세 / {sex}", PANEL_MAIN_DX=data.label(main),
+                 PANEL_COMORBIDITY=", ".join(data.label(c) for c in co) or "없음", PANEL_CONSIDERED=rel, PANEL_PURPOSE=PURPOSE[qtype])
     return dict(QUERY_AGE_BAND=("10세 미만" if age < 10 else f"{age // 10 * 10}대"),
-                QUERY_SEX="남성" if ev[0]["sex_node"] == "SEX_MALE" else "여성",
-                QUERY_MAIN_DX=data.label(main), QUERY_RELATED_ITEM=rng.choice(clean),
-                index_event=idx["event_id"], index_date=day, main_dx_node=main)
+                QUERY_SEX="남성" if sex == "남" else "여성",
+                QUERY_MAIN_DX=data.label(main), QUERY_RELATED_ITEM=rel,
+                index_event=idx["event_id"], index_date=day, main_dx_node=main, panel=panel)
+
+
+PURPOSE = {"PRESCRIPTION": "유사 사례의 처방 참고", "TREATMENT_PROCEDURE": "유사 사례의 시술 이력 확인", "COURSE_CARE": "유사 사례의 이후 경과와 관리 확인"}
+PANEL_LABEL = [("PANEL_AGE_SEX", "연령 / 성별"), ("PANEL_MAIN_DX", "주진단"), ("PANEL_COMORBIDITY", "동반질환"),
+               ("PANEL_CONSIDERED", "고려 중인 처치"), ("PANEL_PURPOSE", "조회 목적")]
+
+
+def panel_text(binding: dict[str, Any]) -> str:
+    return "\n".join(f"- {lab}: {binding['panel'][k]}" for k, lab in PANEL_LABEL)
 
 
 def fill_case_query(template: str, binding: dict[str, Any]) -> str:

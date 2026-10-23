@@ -17,12 +17,12 @@ DATA_DIR = ROOT / "data" / "medical"
 
 @dataclass(frozen=True)
 class MedicalPaths:
-    nodes: Path = DATA_DIR / "노드_v0.9.csv"
-    events: Path = DATA_DIR / "사건연결표_v0.9.csv"
-    alias: Path = DATA_DIR / "표현_노드_매핑표_v0.9.csv"
-    o1: Path = DATA_DIR / "O1_seed_registry_med_v0.7.xlsx"
-    o2: Path = DATA_DIR / "O2_seed_registry_med_v0.7_previous_disclosure_placeholder.xlsx"
-    case_queries: Path = DATA_DIR / "사례검색질문_Registry_v0.1.xlsx"
+    nodes: Path = DATA_DIR / "노드_v0.10.csv"
+    events: Path = DATA_DIR / "사건연결표_v0.10.csv"
+    alias: Path = DATA_DIR / "표현_노드_매핑표_v0.10.csv"
+    o1: Path = DATA_DIR / "O1_seed_registry_med_v0.13.xlsx"
+    o2: Path = DATA_DIR / "O2_seed_registry_med_v0.13_previous_disclosure_placeholder.xlsx"
+    case_queries: Path = DATA_DIR / "사례검색질문_Registry_v0.2.xlsx"
 
     def as_dict(self) -> dict[str, str]:
         return {k: str(v) for k, v in asdict(self).items()}

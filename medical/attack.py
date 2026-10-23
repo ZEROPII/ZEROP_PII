@@ -2,9 +2,10 @@
 #
 # 통제 조건(Controlled Uniform)만 구현한다 (명세 §11-4). 피드백 가중치를 쓰는 적응 조건은 통제 조건 결과를 본 뒤
 # 한재이 파트(fuzzer/feedback.py 전략 선택)와 함께 정한다.
-#   Seed      : 의료 O1 72 + O2 63 (v0.7-med). 적용 조건은 seed_select.target이 사례 A의 State로 판정
-#   선택      : 이 trial에서 덜 쓴 방식(S1–S4) → 아직 안 쓴 Seed → 균등 무작위
-#   연산자    : M1 Rephrase · M3 Context Reframing · M4 Indirect Reframing (S3 방식이면 M4 제외) 중 균등
+#   Seed      : 의료 O1·O2 140행 (v0.13-med). 적용 조건은 seed_select.target이 사례 A의 State로 판정
+#   선택      : 이 trial에서 덜 쓴 variant(BASE·REPHRASE·REROUTE) → 아직 안 쓴 Seed → 균등 무작위 (하네스 v0.2)
+#               선택 정책을 바꾸는 피드백 모드(fuzzer_proto 전략)는 medical/adaptive.py
+#   연산자    : M1 Rephrase · M3 Context Reframing · M4 Indirect Reframing (REROUTE 행이면 M4 제외) 중 균등
 #   변형기    : 채운 Seed 문장·목표 단서·목적·방식·주체·연산자 계약·역할만 받는다 (정답·문서·사실표는 주지 않음)
 #   검사      : 구조(결정적) → 의미(LLM 검사기 JSON 6항목 모두 true). 실패하면 max_mutation_retries까지 재생성
 
@@ -52,8 +53,8 @@ def load_case_queries(paths: MedicalPaths, main_experiment: bool) -> dict[str, l
 
 def applicable_ops(seed: dict[str, Any], operators: tuple[str, ...]) -> list[str]:
     ops = list(operators)
-    if str(seed["scenario_id"]).startswith("S3") and "M4" in ops:
-        ops.remove("M4")       # 이미 간접형(S3)은 간접화 대상 아님 (설계 §9.12)
+    if seed.get("variant") == "REROUTE" and "M4" in ops:
+        ops.remove("M4")       # REROUTE는 이미 다른 경로로 묻는 행 → 간접화 대상 아님 (설계 §9.12, 하네스 v0.2)
     return ops
 
 
@@ -62,8 +63,8 @@ def choose_seed(seeds: list[dict[str, Any]], state: dict[Any, str], node: dict[s
     ok = [(s, t) for s in seeds for t in [target(s, state, node, children, True)] if t is not None]
     if not ok:
         return None
-    m = min(scen_count[s["scenario_id"]] for s, _ in ok)
-    pool = [x for x in ok if scen_count[x[0]["scenario_id"]] == m]
+    m = min(scen_count[s["variant"]] for s, _ in ok)
+    pool = [x for x in ok if scen_count[x[0]["variant"]] == m]
     fresh = [x for x in pool if x[0]["seed_id"] not in used]
     return rng.choice(fresh or pool)
 
