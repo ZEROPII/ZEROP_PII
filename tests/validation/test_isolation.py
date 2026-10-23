@@ -9,7 +9,7 @@ import pytest
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_PACKAGES = ("orchestrator", "adapters", "attack", "ontology", "normalizer", "qi_extractor",
-                    "target_llm", "fuzzer", "risk_defender", "core")
+                    "target_llm", "fuzzer", "risk_defender", "risk_defender_synthpai", "core")
 
 
 def imported_modules(path: Path) -> set[str]:

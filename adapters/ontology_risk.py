@@ -37,7 +37,7 @@ from core.schemas import QI_TYPE_SET, QI_TYPES
 from normalizer.normalizer import NormalizedObservation
 from ontology.defender import DeltaItem, plan_release
 from ontology.index import PopulationIndex
-from risk_defender.schema import QIObservation
+from risk_defender_synthpai.schema import QIObservation
 
 BACKEND_NAME = "ontology_d1"
 

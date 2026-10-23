@@ -7,7 +7,7 @@ import pytest
 
 from ontology.defender import DeltaItem, plan_release
 from ontology.index import PopulationIndex
-from risk_defender.demo import DEFAULT_DATA_PATH
+from risk_defender_synthpai.demo import DEFAULT_DATA_PATH
 from tests.orchestrator.sample_data import RAW_PROFILES
 
 

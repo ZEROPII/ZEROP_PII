@@ -9,7 +9,7 @@ from typing import Any, Mapping, Protocol
 from adapters.risk_adapter import ReferencePopulation
 from ontology.index import PopulationIndex
 from ontology.mapper import ProfileMapper
-from risk_defender.risk import calculate_k
+from risk_defender_synthpai.risk import calculate_k
 
 
 class Verdict(str, Enum):

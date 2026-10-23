@@ -13,7 +13,7 @@ import subprocess
 import sys
 
 from core.config import PROJECT_ROOT
-from risk_defender.demo import (
+from risk_defender_synthpai.demo import (
     DEFAULT_DATA_PATH,
     DEFAULT_DATA_URL,
     DEFAULT_SYNTH_PATH,

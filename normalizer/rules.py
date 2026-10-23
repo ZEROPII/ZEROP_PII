@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import re
 
-from risk_defender.schema import to_age_band
+from risk_defender_synthpai.schema import to_age_band
 
 
 # ──────────────────────────────────────────────────────────────

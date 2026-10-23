@@ -36,11 +36,11 @@ from typing import Any, Mapping, Protocol, Sequence
 
 from core.schemas import RISK_DEFENDER_QI_TYPES
 from normalizer.normalizer import NormalizedObservation
-from risk_defender.defender import defend_candidate_qis
-from risk_defender.demo import DEFAULT_DATA_PATH, DEFAULT_SYNTH_PATH
-from risk_defender.loader import PersonaRecord, load_expanded_population, load_population
-from risk_defender.risk import calculate_k, evaluate_projected_risk
-from risk_defender.schema import PrivacyState, QIObservation, is_more_specific, update_state
+from risk_defender_synthpai.defender import defend_candidate_qis
+from risk_defender_synthpai.demo import DEFAULT_DATA_PATH, DEFAULT_SYNTH_PATH
+from risk_defender_synthpai.loader import PersonaRecord, load_expanded_population, load_population
+from risk_defender_synthpai.risk import calculate_k, evaluate_projected_risk
+from risk_defender_synthpai.schema import PrivacyState, QIObservation, is_more_specific, update_state
 
 
 # 이유진 파트 README 결정값 (2026-10-04): 일반화 기준 5, 억제 기준 3

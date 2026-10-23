@@ -30,8 +30,8 @@ from adapters.risk_adapter import (
 )
 from evaluation_v1.log_schema_v1 import ExperimentLogRecord
 from normalizer.normalizer import MappingReason, MappingStatus, NormalizedObservation
-from risk_defender.demo import DEFAULT_DATA_PATH, DEFAULT_SYNTH_PATH
-from risk_defender.loader import PersonaRecord
+from risk_defender_synthpai.demo import DEFAULT_DATA_PATH, DEFAULT_SYNTH_PATH
+from risk_defender_synthpai.loader import PersonaRecord
 
 ROWS = [
     ("p1", "30s", "Zurich, Switzerland", "software engineer", "Master's", "single"),

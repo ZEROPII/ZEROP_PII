@@ -28,7 +28,7 @@ from orchestrator.rewriter import load_prompt as load_rewriter_prompt
 from qi_extractor.extractor import DEFAULT_PROMPT_VERSION as DEFAULT_EXTRACTOR_PROMPT
 from qi_extractor.extractor import RESPONSE_SECTION_HEADER
 from qi_extractor.extractor import load_prompt as load_extractor_prompt
-from risk_defender.loader import PersonaRecord
+from risk_defender_synthpai.loader import PersonaRecord
 from target_llm.corpus import PersonaComment
 from target_llm.responder import load_prompt as load_target_prompt
 from target_llm.retriever import RetrievalResult
