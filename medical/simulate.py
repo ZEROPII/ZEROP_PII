@@ -188,9 +188,11 @@ class OracleRoleLLM(MockRoleLLM):
             pick = next((x for x in cands if x[0] == anchor), None) or (cands[0] if cands else None)
         else:
             mine = d.events[anchor].get(attr, [])
-            pick = next(((anchor, r) for r in mine if r["node_id"] not in said), None)
+            # 이미 말한 값(정규화 뒤 노드가 그 기록의 상위일 수 있음: SNOMED 진단 → ICD 범주)은 다시 말하지 않는다
+            new = lambda r: not any(s in self.data.anc(r["node_id"]) for s in said)
+            pick = next(((anchor, r) for r in mine if new(r)), None)
             if pick is None:
-                pick = next(((e, r) for e in d.order for r in d.events[e].get(attr, []) if r["node_id"] not in said), None)
+                pick = next(((e, r) for e in d.order for r in d.events[e].get(attr, []) if new(r)), None)
         if pick is None:
             pick = d.first(attr)
         if pick:

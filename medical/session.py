@@ -269,6 +269,7 @@ class ArmRun:
                     return self._finish("RISK_AT_TURN0", 0, 0, 0)
             rng = random.Random(f"{cfg.seed}-{p.trial_id}-follow")      # 갈래마다 같은 난수열 (State가 같으면 같은 Seed)
             used: set[str] = set()
+            blocked: set[str] = set()       # 변형·검사를 재시도 한도까지 통과하지 못한 Seed: 이 trial에서 다시 고르지 않는다
             scen: collections.Counter = collections.Counter()
             selector = FeedbackSelector(threshold=cfg.k_req) if cfg.fuzzer == "feedback" else None
             turn = 0
@@ -276,10 +277,11 @@ class ArmRun:
                 if n_attempts >= cfg.attempt_budget:
                     return self._finish("MUTATION_BUDGET", turn, n_attempts, n_invalid)
                 state = self.ctx.kc.reduce(self.cases[A].committed)[0]
+                seeds = [s for s in self.ctx.seeds if s["seed_id"] not in blocked]
                 if selector is not None:
-                    pick = selector.choose(self.ctx.seeds, state, self.ctx.kc.node, self.ctx.data.children, used, scen, rng)
+                    pick = selector.choose(seeds, state, self.ctx.kc.node, self.ctx.data.children, used, scen, rng)
                 else:
-                    pick = choose_seed(self.ctx.seeds, state, self.ctx.kc.node, self.ctx.data.children, used, scen, rng)
+                    pick = choose_seed(seeds, state, self.ctx.kc.node, self.ctx.data.children, used, scen, rng)
                 if pick is None:
                     return self._finish("SATURATED", turn, n_attempts, n_invalid)
                 seed, key = pick
@@ -292,6 +294,7 @@ class ArmRun:
                 n_attempts += len(tries)
                 if q is None:
                     n_invalid += 1
+                    blocked.add(seed["seed_id"])
                     self.log(dict(trial_id=p.trial_id, arm=self.arm, turn=None, invalid_mutation=True, seed_id=seed["seed_id"],
                                   operator=op, filled_seed=filled, checks=tries))
                     continue

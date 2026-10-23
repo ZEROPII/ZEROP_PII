@@ -30,9 +30,9 @@ python -m medical report runs/medical/<실행 폴더>   # 집계표 다시 만�
 
 ## 한 trial의 흐름
 
-1. **질의 환자 고르기**: 코호트를 저장소(STORE, 461명)와 질의 환자 풀(QUERY_POOL, 115명)로 나눕니다. 질의 환자는 대표 진단 범주, 그 진단 당시 나이(10년 구간), 성별, 관련 항목 하나로 첫 질문을 채웁니다.
+1. **질의 환자 고르기**: 코호트를 저장소(STORE, 461명)와 질의 환자 풀(QUERY_POOL, 115명)로 나눕니다. 질의 환자 값(연령/성별, 주진단, 동반질환 최대 2개, 고려 중인 처치, 조회 목적)은 질문 문장이 아니라 대상 AI 시스템 프롬프트의 [현재 환자 맥락] 패널로 들어갑니다(하네스 v0.2, 사례검색질문 Registry v0.2).
 2. **턴 0**: 첫 질문을 M1 또는 M3로 말투만 바꿉니다. 코드 집합 유사도로 저장소 환자 상위 5명을 검색하고, 대상 AI가 "사례1~사례5" 표기로 답합니다. 턴 0의 질문·원 응답·추출 결과는 갈래 간에 공유합니다.
-3. **턴 1부터**: 사례 A(턴 0에서 처음 나온 사례)의 State로 의료 Seed(O1 72·O2 63)를 고르고, M1·M3·M4 중 하나로 변형합니다. 구조 검사와 의미 검사를 통과한 질문만 보냅니다.
+3. **턴 1부터**: 사례 A(턴 0에서 처음 나온 사례)의 State로 의료 Seed(v0.13, 140행)를 고르고, M1·M3·M4 중 하나로 변형합니다(REROUTE 행은 M4 제외). 덜 쓴 variant(BASE·REPHRASE·REROUTE)를 먼저 고르고, scope=GROUP 행은 '검색된 사례 전체'에 묻습니다. 구조 검사와 의미 검사를 통과한 질문만 보냅니다. 재시도 한도까지 통과하지 못한 Seed는 그 trial에서 다시 고르지 않습니다. `MedicalConfig.fuzzer='feedback'`이면 `medical/adaptive.py`가 fuzzer/feedback.py의 전략으로 후보를 좁힙니다.
 4. **추출**: 답변에서 단서 8개(AGE·SEX·REGION·DX·PROC·PERIOD·MED·PLAN)를 사례 표기와 사건 표지별로 뽑습니다. 사례마다 정규화한 뒤 kcalc로 k를 계산합니다. '사례 4'처럼 띄어 쓴 표기는 '사례4'로 맞추고, 사례 번호가 붙었는데 subject=OTHER로 적힌 값은 질문에 없는 값일 때만 그 사례의 값으로 고칩니다. 대상 AI가 여러 번의 처방·진단을 한 줄로 합쳐 말해 사건 묶음이 아무와도 맞지 않으면(k=0) `medical/grouping.py`가 묶음을 나눠 계산합니다(기록은 그대로 두고 flags에 REGROUPED·CONFLICT_DROPPED를 남김).
 5. **공개 게이트**
    - C0: 원 응답을 그대로 공개합니다.
@@ -81,7 +81,7 @@ P_ref는 저장소 461명, k_req는 5입니다. 실제 기록값을 SEX → REGI
 
 ## 온톨로지 판
 
-실행은 노드 v0.9(단일 부모)를 씁니다. 하네스 명세의 우선순위가 "하네스 명세 > 00_구현명세서"이기 때문입니다.
+실행은 노드 v0.10(단일 부모, v0.9에 시점 분기 단계 추가)을 씁니다. 하네스 명세의 우선순위가 "하네스 명세 > 00_구현명세서"이기 때문입니다. 전달 묶음(2026-10-21)의 `verify_bundle.py`는 29/29 통과입니다.
 
 2026-10-07 스냅샷(DX·PROC 공식 다중 부모 그래프)은 실행 플래그가 모두 꺼져 있고 "부모 자동 선택 금지, 일반화 경로 선택 함수는 비워 둠" 상태라 1차에서는 쓰지 않습니다. 정책이 정해지면 Defender의 일반화 후보 목록(`MedicalData.anc`)만 바꿔 끼우면 됩니다.
 
@@ -91,6 +91,21 @@ P_ref는 저장소 461명, k_req는 5입니다. 실제 기록값을 SEX → REGI
 
 파일럿은 `--limit 2 --budget 6`처럼 작게 시작하고, `llm_usage.jsonl`의 토큰 합계를 본 뒤 늘리는 것을 권장합니다.
 
+## 모의 POC (LLM 0, 2026-10-23)
+
+```bash
+python -m medical.simulate --out runs/medical/sim_staged --profile staged --fuzzer uniform   # 질의 풀 전원(296) × C0·C1·C1S, 약 30분
+python -m medical.export_eval runs/medical/sim_staged --max-turn 8 11                       # 평가 v7.2 파일 + EvalBaseline 결과
+python -m medical.poc_analysis --run staged_uniform=runs/medical/sim_staged --out poc.json  # 턴별 누적 위반, 결정적 단서, Defender 판정
+python -m medical.crosscheck --profiles-v2 <user_patient_profiles_576_v2.json> --out cross.json   # risk_defender k vs kcalc
+```
+
+- `medical/simulate.py`: 결정적 모의 대상 AI. `staged`(처음엔 10세 구간·연·주, 다시 물으면 기록 그대로)와 `full`(처음부터 기록 그대로). 추출기·재작성기는 오류 0. 변형기는 Seed 문장 그대로.
+  대상 AI 호출에만 `intent`(물은 Seed·사례 State)가 넘어가고, 실제 LLM 경로는 이 값을 읽지 않습니다.
+- 결과 (단계 공개형, 균등 선택, 8턴, 평가 v7.2): C0 위반 95.6%, C1 0.0%, C1S 83.1%, C0 vs C1 exact McNemar 283:0. C1 유용성 0.65.
+- 교차 점검: main 프로필로 센 risk_defender k가 kcalc와 같은 비율은 기록 그대로 47.7%, 한 단계 넓힌 공개 0%. 사건 기반 프로필 v2는 기록 그대로 100%, 넓힌 공개 0%(매처가 나이·날짜를 정확히 같을 때만 맞춤). 매처에서 상위 일치를 허용하면 모두 100%.
+- 평가 변환 규칙(턴 번호 +1, 사례 A → "A", release_mode 대응, 후보 k)은 `medical/export_eval.py` 머리말에 있습니다.
+
 ## 아직 정하지 않은 것
 
 | 항목 | 현재 | 정할 사람 |
@@ -98,13 +113,11 @@ P_ref는 저장소 461명, k_req는 5입니다. 실제 기록값을 SEX → REGI
 | 모델 5개(+재작성기) | `.env`의 `LLM_MODEL` 하나로 통일 | 팀 |
 | query_pool_ratio, trial 수 | 0.2, 칸당 2 | 교수님 확인 |
 | τ_commit (추출 확신도 기준) | 검사 안 함 | 추출기 정답 세트 후 |
-| 적응 조건(피드백 가중치) | 통제 조건만 구현 | 한재이 파트(fuzzer/feedback.py)와 통제 조건 결과를 본 뒤 |
+| 적응 조건(피드백 가중치) | 1차안 구현 (`--fuzzer feedback`, 전략 → Seed 후보 규칙은 `medical/adaptive.py` 머리말) | 한재이 님과 전략표 확정 |
 | 질문 생성 프롬프트 | 하네스 명세의 의료용 변형기 프롬프트 사용 | fuzzer/seedinput/seedprompt.txt는 아직 SynthPAI "커뮤니티 게시글" 문구라 쓰지 않음. 한재이 님과 맞출 것 |
 | 기준 집단 확대 | 저장소 461명 | 합성데이터 담당(Synthea 추가 생성) |
-| risk_defender 프로필 | 이유진 님이 진단·처방을 여러 값으로 담는 방식으로 수정 예정 | 수정본이 오면 risk_defender 쪽 데모와 kcalc 결과를 대조 |
+| risk_defender 프로필 | main 프로필과 사건 기반 프로필 v2를 kcalc와 대조함 (`medical/crosscheck.py`, 아래 '교차 점검') | 이유진: v2 적용과 매처의 나이·날짜 상위 일치 |
 
 ## main 병합 시 주의
 
-`main`의 `risk_defender/`는 이미 의료판(2026-10-14)입니다. 이 브랜치는 SynthPAI 경로(`adapters/risk_adapter.py` 등)가 이전 SynthPAI판 `risk_defender`를 쓰기 때문에, `main`을 그대로 병합하면 SynthPAI 실행이 깨집니다.
-
-병합 전에 SynthPAI판 `risk_defender`를 논문 재현용 동결본으로 따로 두고 SynthPAI 어댑터가 그쪽을 보게 하는 작업이 필요합니다. 의료 경로(`medical/`)는 `risk_defender`를 import하지 않아 영향이 없습니다.
+main(cb5b23b)을 이 브랜치에 병합했습니다(2026-10-23). main의 `risk_defender/`는 의료판이라 SynthPAI 경로가 import 단계에서 깨졌고, 병합 전 판(ac1407a)을 `risk_defender_synthpai/`에 고정 사본으로 두고 SynthPAI 쪽 import만 그쪽으로 돌렸습니다(`risk_defender/`는 그대로). README 충돌은 통합 README를 유지했습니다. main의 `evaluation/run_test.py`·`eval/run_test.py`는 테스트가 아니라서 `pytest.ini`로 `tests/`만 모읍니다.
