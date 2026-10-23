@@ -54,6 +54,8 @@ class MedicalConfig:
     max_rewrite_retries: int = 2
     # 실행 갈래: C0 방어 없음 / C1 누적 State Defender / C1S 매 턴 빈 State로 판정하는 대조군
     arms: tuple[str, ...] = ("C0", "C1", "C1S")
+    # 질문 쪽 Seed 선택: uniform(통제 조건, 명세 §11-4) | feedback(fuzzer_proto k 피드백 전략, medical/adaptive.py)
+    fuzzer: str = "uniform"
     documents: str = "template"         # template(사실 나열, LLM 0) | llm(문서 작성기 LLM)
     temperature: float = 0.0
     models: dict[str, str] = field(default_factory=dict)   # 역할별 모델. 비어 있으면 .env의 LLM_MODEL

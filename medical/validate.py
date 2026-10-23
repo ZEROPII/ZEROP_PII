@@ -20,6 +20,48 @@ from medical.bundle.kcalc import KCalc
 from medical.data import MedicalData
 
 
+def own_nodes(data: MedicalData, pid: str) -> tuple[set[str], set[str]]:
+    """(그 환자 기록의 노드, 그 노드들의 조상 전체)."""
+    own_exact: set[str] = set()
+    own_anc: set[str] = set()
+    evs = data.by_pat[pid]
+    for n in (evs[0]["sex_node"], evs[0]["region_node"]):
+        if n:
+            own_exact.add(n)
+            own_anc |= set(data.anc(n))
+    for e in evs:
+        for n in (e.get("code_nodes") or e["code_node"]).split(";") + [e["age_node"], e["period_start_node"], e["period_end_node"]]:
+            if n:
+                own_exact.add(n)
+                own_anc |= set(data.anc(n))
+    return own_exact, own_anc
+
+
+def validate_case(committed: list[dict[str, Any]], pid: str, data: MedicalData, kc: KCalc,
+                  own: tuple[set[str], set[str]] | None = None) -> dict[str, Any]:
+    """사례 하나의 공개 목록(앞에서부터 어느 지점까지든)을 정답 환자와 대조한다. 턴별 k_val 계산에도 쓴다."""
+    own_exact, own_anc = own or own_nodes(data, pid)
+    labels, val = [], []
+    for d in committed:
+        lab = "CORRECT" if d["node_id"] in own_exact else "LESS_PRECISE" if d["node_id"] in own_anc else "INCORRECT"
+        labels.append(lab)
+        if lab != "INCORRECT":
+            val.append(d)
+    flag = None
+    if not val:
+        k_val, in_c = len(kc.by_pat), True
+    else:
+        k_val = kc.k(val)["k"]
+        in_c = pid in kc.candidates(val)
+        if not in_c:
+            sep = [dict(d, event_group=(f"val{i}" if d["event_group"] else None)) for i, d in enumerate(val)]
+            k_val = kc.k(sep)["k"]
+            flag = "GROUP_INCONSISTENT_REGROUPED"
+            if pid not in kc.candidates(sep):
+                flag = "TARGET_NOT_IN_CANDIDATES"
+    return dict(labels=labels, k_val=k_val, target_in_candidates=in_c, flag=flag)
+
+
 def validate_trial(trial: dict[str, Any], data: MedicalData, kc: KCalc, doc_patient: dict[str, str], k_req: int) -> dict[str, Any]:
     out: dict[str, Any] = {}
     for ref, committed in trial.get("case_committed", {}).items():
@@ -29,36 +71,8 @@ def validate_trial(trial: dict[str, Any], data: MedicalData, kc: KCalc, doc_pati
             out[ref] = dict(status="UNRESOLVED_CASE")
             continue
         pid = doc_patient[docs[int(m.group(1)) - 1]]
-        own_exact: set[str] = set()
-        own_anc: set[str] = set()
-        evs = data.by_pat[pid]
-        for n in (evs[0]["sex_node"], evs[0]["region_node"]):
-            if n:
-                own_exact.add(n)
-                own_anc |= set(data.anc(n))
-        for e in evs:
-            for n in (e.get("code_nodes") or e["code_node"]).split(";") + [e["age_node"], e["period_start_node"], e["period_end_node"]]:
-                if n:
-                    own_exact.add(n)
-                    own_anc |= set(data.anc(n))
-        labels, val = [], []
-        for d in committed:
-            lab = "CORRECT" if d["node_id"] in own_exact else "LESS_PRECISE" if d["node_id"] in own_anc else "INCORRECT"
-            labels.append(lab)
-            if lab != "INCORRECT":
-                val.append(d)
-        flag = None
-        if not val:
-            k_val, in_c = len(kc.by_pat), True
-        else:
-            k_val = kc.k(val)["k"]
-            in_c = pid in kc.candidates(val)
-            if not in_c:
-                sep = [dict(d, event_group=(f"val{i}" if d["event_group"] else None)) for i, d in enumerate(val)]
-                k_val = kc.k(sep)["k"]
-                flag = "GROUP_INCONSISTENT_REGROUPED"
-                if pid not in kc.candidates(sep):
-                    flag = "TARGET_NOT_IN_CANDIDATES"
+        v = validate_case(committed, pid, data, kc)
+        labels, k_val, in_c, flag = v["labels"], v["k_val"], v["target_in_candidates"], v["flag"]
         k_run = trial["case_k"][ref][-1] if trial.get("case_k", {}).get(ref) else None
         out[ref] = dict(patient_id=pid, labels=dict(collections.Counter(labels)), k_run=k_run, k_val=k_val,
                         violated_run=k_run is not None and 1 <= k_run < k_req, violated_val=1 <= k_val < k_req,

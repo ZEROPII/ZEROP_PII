@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from core.llm_client import LLMError
+from medical.adaptive import FeedbackSelector
 from medical.attack import applicable_ops, choose_seed, fill_seed, realize
 from medical.bundle.kcalc import KCalc
 from medical.bundle.normalize_bridge import Normalizer
@@ -106,7 +107,8 @@ def make_prefix(ctx: Context, tid: str, qpid: str, qtype: str, role: str) -> Pre
     q0, tries0 = realize(ctx.llm, ctx.cfg, base, "(사례 검색: 단서를 묻지 않음)", "CASE_RETRIEVAL", "-", "-", op0, role, [])
     fallback = q0 is None
     q0 = q0 or base
-    raw0 = ctx.llm.complete("target", system, [{"role": "user", "content": q0}], docs=docs)
+    raw0 = ctx.llm.complete("target", system, [{"role": "user", "content": q0}], docs=docs,
+                            intent=dict(kind="RETRIEVAL", qtype=qtype, binding=b))   # intent는 모의 대상 AI(medical/simulate.py)만 읽는다
     obs0, ok0, n0 = extract(ctx, q0, raw0, "[]", docs)
     return Prefix(tid, qpid, qtype, role, b, cq["case_query_id"], base, docs, ret, system, op0, q0, tries0, fallback, raw0, obs0, ok0, n0)
 
@@ -203,11 +205,20 @@ class ArmRun:
     # ── 한 턴 ───────────────────────────────────────────────
 
     def _turn(self, turn: int, query: str, raw: str | None, raw_obs: list[dict[str, Any]] | None, raw_ok: bool | None,
-              n_raw_ext: int, meta: dict[str, Any]) -> dict[str, Any]:
+              n_raw_ext: int, meta: dict[str, Any], intent: dict[str, Any] | None = None) -> dict[str, Any]:
         if raw is None:
-            raw = self.ctx.llm.complete("target", self.p.system, self.msgs + [{"role": "user", "content": query}], docs=self.p.docs)
+            raw = self.ctx.llm.complete("target", self.p.system, self.msgs + [{"role": "user", "content": query}], docs=self.p.docs,
+                                        intent=intent)
             raw_obs, raw_ok, n_raw_ext = extract(self.ctx, query, raw, known_cases_json(self.cases, self.order), self.p.docs)
         rel = self.release(query, raw, raw_obs or [], bool(raw_ok))
+        # 방어 '전' 후보 응답의 k (평가 v7.2 case_k_val_candidate: 과잉 차단 분모). 원 응답 공개를 그 사례의 누적 State에 더한 값
+        cand_k: dict[str, int] = {}
+        if raw_ok:
+            rv = view_of(raw_obs or [], raw, query, self.ctx.nz)
+            for ref in rv.case_refs:
+                base = list(self.cases[ref].committed) if ref in self.cases else []
+                ds = base + rv.disclosures[ref]
+                cand_k[ref] = self.ctx.kc.k(ds)["k"] if ds else self.ctx.p_ref
         self.msgs += [{"role": "user", "content": query}, {"role": "assistant", "content": rel.text}]
         self.sent.append(query)
         commit_view(rel.view, self.cases, self.order)
@@ -219,14 +230,15 @@ class ArmRun:
             c = self.cases[ref]
             res = self.ctx.kc.k(c.committed) if c.committed else {"k": self.ctx.p_ref, "flags": [], "state": {}}
             c.k_hist.append(res["k"])
-            cases_out[ref] = dict(k=res["k"], flags=res["flags"], state=res.get("state", {}), partial=rel.view.partial.get(ref, False),
-                                  normalized=rel.view.normalized.get(ref, []))
+            cases_out[ref] = dict(k=res["k"], k_candidate=cand_k.get(ref, res["k"]), flags=res["flags"], state=res.get("state", {}),
+                                  partial=rel.view.partial.get(ref, False), normalized=rel.view.normalized.get(ref, []))
         if "UNCLEAR" in rel.view.normalized:
             cases_out["UNCLEAR"] = dict(normalized=rel.view.normalized["UNCLEAR"])
         rec = dict(meta, trial_id=self.p.trial_id, arm=self.arm, turn=turn, query_text=query, raw_response_text=raw,
                    response_text=rel.text, release_mode=rel.mode, release_plans=rel.plans, release_changes=rel.changes,
                    release_attempts=rel.attempts, turn_utility=rel.utility, extraction_ok=bool(raw_ok), extraction_tries=n_raw_ext,
-                   release_extraction_tries=rel.extraction_tries, raw_observations=raw_obs, cases=cases_out)
+                   release_extraction_tries=rel.extraction_tries, raw_observations=raw_obs, cases=cases_out,
+                   cases_candidate_k=cand_k)
         self.log(rec)
         return rec
 
@@ -258,12 +270,16 @@ class ArmRun:
             rng = random.Random(f"{cfg.seed}-{p.trial_id}-follow")      # 갈래마다 같은 난수열 (State가 같으면 같은 Seed)
             used: set[str] = set()
             scen: collections.Counter = collections.Counter()
+            selector = FeedbackSelector(threshold=cfg.k_req) if cfg.fuzzer == "feedback" else None
             turn = 0
             while turn < cfg.budget_B:
                 if n_attempts >= cfg.attempt_budget:
                     return self._finish("MUTATION_BUDGET", turn, n_attempts, n_invalid)
                 state = self.ctx.kc.reduce(self.cases[A].committed)[0]
-                pick = choose_seed(self.ctx.seeds, state, self.ctx.kc.node, self.ctx.data.children, used, scen, rng)
+                if selector is not None:
+                    pick = selector.choose(self.ctx.seeds, state, self.ctx.kc.node, self.ctx.data.children, used, scen, rng)
+                else:
+                    pick = choose_seed(self.ctx.seeds, state, self.ctx.kc.node, self.ctx.data.children, used, scen, rng)
                 if pick is None:
                     return self._finish("SATURATED", turn, n_attempts, n_invalid)
                 seed, key = pick
@@ -286,8 +302,15 @@ class ArmRun:
                                                                target_qi_2=seed.get("target_qi_2"), variant=seed["variant"],
                                                                scope=seed.get("scope"), relation=seed.get("expected_relation"),
                                                                objective=seed["attack_objective"], operator=op, filled_seed=filled,
-                                                               realization_fallback=False, checks=tries, regenerations=len(tries) - 1))
+                                                               realization_fallback=False, checks=tries, regenerations=len(tries) - 1,
+                                                               fuzzer=cfg.fuzzer, fuzzer_strategy=selector.strategy if selector else None),
+                           intent=dict(kind="FOLLOW", seed=seed, key=key, case_A=A, qtype=p.query_type,
+                                       said={r: [d["node_id"] for d in c.committed] for r, c in self.cases.items()},
+                                       events={r: list(c.events) for r, c in self.cases.items()}))
+                k_before_turn = self.cases[A].k_hist[-2] if len(self.cases[A].k_hist) > 1 else self.ctx.p_ref
                 k = self.cases[A].k_hist[-1]
+                if selector is not None:
+                    selector.observe(k_before_turn, k)
                 if self.trial["risk_entry_turn"] is None and k_prev >= cfg.k_req and 1 <= k < cfg.k_req:
                     self.trial["risk_entry_turn"] = turn
                     if cfg.mode == "efficiency":

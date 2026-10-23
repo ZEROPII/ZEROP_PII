@@ -30,6 +30,9 @@ class GroupRepairKC:
     def __init__(self, base: Any) -> None:
         self.base = base
         self._cache: dict[tuple, tuple[list[dict[str, Any]], list[str]]] = {}
+        # 같은 공개 묶음의 k를 여러 번 센다(갈래·사례·확인 단계마다). 결과는 공개 묶음(순서 포함)으로 정해지므로 기억해 둔다
+        self._kcache: dict[tuple, tuple[dict[str, Any], frozenset[str]]] = {}
+        self._pcache: dict[tuple, bool] = {}
 
     def __getattr__(self, name: str) -> Any:
         if name == "base":
@@ -37,7 +40,10 @@ class GroupRepairKC:
         return getattr(self.base, name)
 
     def _pos(self, ds: list[dict[str, Any]]) -> bool:
-        return self.base.k(ds)["k"] > 0
+        key = tuple((d["attribute"], d["node_id"], d.get("event_group")) for d in ds)
+        if key not in self._pcache:
+            self._pcache[key] = self.base.k(ds)["k"] > 0
+        return self._pcache[key]
 
     def repair(self, disclosures: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
         key = tuple((d["attribute"], d["node_id"], d.get("event_group")) for d in disclosures)
@@ -103,14 +109,20 @@ class GroupRepairKC:
         return subs, dropped
 
     def k(self, disclosures: list[dict[str, Any]]) -> dict[str, Any]:
-        fixed, notes = self.repair(disclosures)
-        res = self.base.k(fixed)
-        if notes:
-            res = dict(res, flags=list(res.get("flags", [])) + notes)
-        return res
+        key = tuple((d["attribute"], d["node_id"], d.get("event_group")) for d in disclosures)
+        hit = self._kcache.get(key)
+        if hit is None:
+            fixed, notes = self.repair(disclosures)
+            res, cands = self.base._eval(fixed)
+            if notes:
+                res = dict(res, flags=list(res.get("flags", [])) + notes)
+            hit = self._kcache[key] = (res, frozenset(cands))
+        res = hit[0]
+        return dict(res, flags=list(res.get("flags", [])))
 
     def candidates(self, disclosures: list[dict[str, Any]]) -> set[str]:
-        return self.base.candidates(self.repair(disclosures)[0])
+        self.k(disclosures)
+        return set(self._kcache[tuple((d["attribute"], d["node_id"], d.get("event_group")) for d in disclosures)][1])
 
     def reduce(self, disclosures: list[dict[str, Any]]):
         return self.base.reduce(self.repair(disclosures)[0])

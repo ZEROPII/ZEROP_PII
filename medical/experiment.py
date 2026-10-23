@@ -91,10 +91,11 @@ def build_context(cfg: MedicalConfig, llm: RoleLLM, out: Path, *, paths: Medical
 
 def run_experiment(cfg: MedicalConfig, llm: RoleLLM, out: Path, *, limit: int | None = None, docs_from: Path | None = None,
                    store_limit: int | None = None, data: MedicalData | None = None,
-                   progress: Callable[[str], None] = print) -> dict[str, Any]:
+                   progress: Callable[[str], None] = print,
+                   planner: Callable[[MedicalData, dict[str, str], MedicalConfig], list[tuple[str, str, str, str]]] | None = None) -> dict[str, Any]:
     out.mkdir(parents=True, exist_ok=True)
     ctx, split = build_context(cfg, llm, out, docs_from=docs_from, store_limit=store_limit, data=data)
-    plan = plan_trials(ctx.data, split, cfg, limit)
+    plan = planner(ctx.data, split, cfg) if planner else plan_trials(ctx.data, split, cfg, limit)
     doc_patient = {d["doc_id"]: p for p, d in ctx.docs.items()}
     trials: list[dict[str, Any]] = []
     with open(out / "턴기록.jsonl", "w", encoding="utf-8") as tf:
