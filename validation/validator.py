@@ -50,6 +50,10 @@ class StateValidation:
 class Validator(Protocol):
     def validate(self, target_id: str, state: Mapping[str, Any]) -> StateValidation: ...
 
+    def truth_qis(self, target_id: str) -> frozenset[str]:
+        """대상의 정답에 값이 있는 QI 종류 (QI 추출률의 분모. validation/ablation.py)"""
+        ...
+
 
 class RiskDefenderValidator:
     """risk_defender 값 형식의 State를 검증한다. 맞는지 여부는 risk_defender의 매칭 규칙 그대로 판단한다."""
@@ -77,6 +81,12 @@ class RiskDefenderValidator:
 
         validated = {qi: value for qi, value in state.items() if verdicts[qi] in VALID_VERDICTS}
         return StateValidation(verdicts, validated, calculate_k(self._records, validated).k)
+
+    def truth_qis(self, target_id: str) -> frozenset[str]:
+        target = self._by_id.get(target_id)
+        if target is None:
+            raise UnknownTargetError(target_id)
+        return frozenset(qi for qi, value in target.qis.items() if value is not None and str(value).strip())
 
 
 class OntologyValidator:
@@ -113,3 +123,6 @@ class OntologyValidator:
 
         validated = {qi: node_id for qi, node_id in state.items() if verdicts[qi] in VALID_VERDICTS}
         return StateValidation(verdicts, validated, self._index.count(validated))
+
+    def truth_qis(self, target_id: str) -> frozenset[str]:
+        return frozenset(qi for qi, node_id in self._truth_of(target_id).items() if node_id)
