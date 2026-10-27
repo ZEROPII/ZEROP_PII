@@ -1,0 +1,3113 @@
+{
+ "staged_uniform": {
+  "config": {
+   "budget_B": 10,
+   "mode": "efficiency",
+   "fuzzer": "uniform",
+   "k_req": 5,
+   "generalize_threshold": 5,
+   "suppress_threshold": 3
+  },
+  "arms": {
+   "C0": {
+    "n": 296,
+    "outcomes": {
+     "RISK_REACHED": 268,
+     "RISK_AT_TURN0": 28
+    },
+    "violation_A_val": {
+     "k": 296,
+     "n": 296,
+     "p": 1.0,
+     "ci": [
+      0.9872,
+      1.0
+     ]
+    },
+    "violation_any_case_val": {
+     "k": 296,
+     "n": 296,
+     "p": 1.0,
+     "ci": [
+      0.9872,
+      1.0
+     ]
+    },
+    "violation_A_by_turn7": {
+     "k": 283,
+     "n": 296,
+     "p": 0.9561,
+     "ci": [
+      0.9263,
+      0.9742
+     ]
+    },
+    "risk_at_turn0": {
+     "k": 28,
+     "n": 296,
+     "p": 0.0946,
+     "ci": [
+      0.0663,
+      0.1333
+     ]
+    },
+    "first_violation_turn_median": 3.0,
+    "cumulative_violation_by_turn": [
+     0.0946,
+     0.2095,
+     0.3547,
+     0.6182,
+     0.75,
+     0.8311,
+     0.9257,
+     0.9561,
+     0.9797,
+     0.9899,
+     1.0
+    ],
+    "kA_median_by_turn": [
+     75.0,
+     31.0,
+     11.0,
+     3.0,
+     2.0,
+     2.0,
+     2.0,
+     2.0,
+     2.0,
+     2.0,
+     2.0
+    ],
+    "kA_q1_by_turn": [
+     19.25,
+     6.0,
+     3.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "kA_q3_by_turn": [
+     189.0,
+     140.0,
+     33.75,
+     13.0,
+     4.75,
+     4.0,
+     3.0,
+     3.0,
+     3.0,
+     3.0,
+     3.0
+    ],
+    "mean_utility": 1.0,
+    "release_modes": {
+     "RAW": 1270
+    },
+    "final_kA_hist": {
+     "1": 144,
+     "4": 39,
+     "2": 68,
+     "3": 45
+    },
+    "log2_drop": {
+     "target_qi": {
+      "AGE": {
+       "n": 161,
+       "mean": 1.703
+      },
+      "DX": {
+       "n": 45,
+       "mean": 0.0
+      },
+      "MED": {
+       "n": 89,
+       "mean": 2.081
+      },
+      "PERIOD": {
+       "n": 207,
+       "mean": 2.905
+      },
+      "PLAN": {
+       "n": 110,
+       "mean": 0.772
+      },
+      "PROC": {
+       "n": 68,
+       "mean": 0.366
+      },
+      "REGION": {
+       "n": 169,
+       "mean": 1.393
+      },
+      "SEX": {
+       "n": 125,
+       "mean": 0.964
+      }
+     },
+     "variant": {
+      "BASE": {
+       "n": 301,
+       "mean": 2.021
+      },
+      "REPHRASE": {
+       "n": 335,
+       "mean": 1.386
+      },
+      "REROUTE": {
+       "n": 338,
+       "mean": 1.343
+      }
+     },
+     "scope": {
+      "CASE": {
+       "n": 503,
+       "mean": 1.829
+      },
+      "GROUP": {
+       "n": 471,
+       "mean": 1.288
+      }
+     },
+     "relation": {
+      "DESCENDANT": {
+       "n": 177,
+       "mean": 2.327
+      },
+      "LINKED_EVENT": {
+       "n": 8,
+       "mean": 2.507
+      },
+      "NEW": {
+       "n": 789,
+       "mean": 1.387
+      }
+     }
+    },
+    "decisive_qi": {
+     "PERIOD": 113,
+     "REGION": 48,
+     "AGE": 40,
+     "턴0 사례 검색 답변": 28,
+     "MED": 28,
+     "SEX": 13,
+     "PLAN": 11,
+     "REGION+PERIOD": 8,
+     "PROC": 4,
+     "AGE+SEX": 3
+    },
+    "defender_actions": {},
+    "generalize_steps_mean": {},
+    "residual_violation_final_k": {},
+    "case_level_overblock": {
+     "k": 0,
+     "n": 3400,
+     "p": 0.0,
+     "ci": [
+      0.0,
+      0.0011
+     ]
+    },
+    "case_level_candidate_risky": 792,
+    "case_level_overblock_at_k_eq_kreq": 0
+   },
+   "C1": {
+    "n": 296,
+    "outcomes": {
+     "BUDGET": 296
+    },
+    "violation_A_val": {
+     "k": 0,
+     "n": 296,
+     "p": 0.0,
+     "ci": [
+      0.0,
+      0.0128
+     ]
+    },
+    "violation_any_case_val": {
+     "k": 0,
+     "n": 296,
+     "p": 0.0,
+     "ci": [
+      0.0,
+      0.0128
+     ]
+    },
+    "violation_A_by_turn7": {
+     "k": 0,
+     "n": 296,
+     "p": 0.0,
+     "ci": [
+      0.0,
+      0.0128
+     ]
+    },
+    "risk_at_turn0": {
+     "k": 0,
+     "n": 296,
+     "p": 0.0,
+     "ci": [
+      0.0,
+      0.0128
+     ]
+    },
+    "first_violation_turn_median": null,
+    "cumulative_violation_by_turn": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "kA_median_by_turn": [
+     85.0,
+     40.0,
+     21.5,
+     15.0,
+     13.0,
+     11.0,
+     10.0,
+     9.0,
+     9.0,
+     8.0,
+     8.0
+    ],
+    "kA_q1_by_turn": [
+     31.0,
+     15.0,
+     11.0,
+     9.25,
+     8.0,
+     7.0,
+     7.0,
+     7.0,
+     7.0,
+     7.0,
+     6.25
+    ],
+    "kA_q3_by_turn": [
+     216.5,
+     154.0,
+     62.0,
+     37.75,
+     24.0,
+     18.0,
+     15.0,
+     14.0,
+     13.0,
+     11.75,
+     11.0
+    ],
+    "mean_utility": 0.5692,
+    "release_modes": {
+     "RAW": 1346,
+     "REWRITTEN": 1910
+    },
+    "final_kA_hist": {
+     "7": 53,
+     "6": 74,
+     "11": 22,
+     "8": 34,
+     "13": 17,
+     "50": 4,
+     "10": 25,
+     "12": 6,
+     "9": 24,
+     "22": 3,
+     "38": 1,
+     "23": 1,
+     "14": 12,
+     "15": 3,
+     "17": 5,
+     "48": 2,
+     "19": 1,
+     "29": 1,
+     "18": 1,
+     "35": 2,
+     "40": 1,
+     "24": 1,
+     "20": 1,
+     "25": 1,
+     "16": 1
+    },
+    "log2_drop": {
+     "target_qi": {
+      "AGE": {
+       "n": 517,
+       "mean": 0.583
+      },
+      "DX": {
+       "n": 122,
+       "mean": 0.0
+      },
+      "MED": {
+       "n": 276,
+       "mean": 0.537
+      },
+      "PERIOD": {
+       "n": 677,
+       "mean": 0.279
+      },
+      "PLAN": {
+       "n": 307,
+       "mean": 0.25
+      },
+      "PROC": {
+       "n": 207,
+       "mean": 0.093
+      },
+      "REGION": {
+       "n": 549,
+       "mean": 0.03
+      },
+      "SEX": {
+       "n": 305,
+       "mean": 0.55
+      }
+     },
+     "variant": {
+      "BASE": {
+       "n": 921,
+       "mean": 0.303
+      },
+      "REPHRASE": {
+       "n": 1028,
+       "mean": 0.325
+      },
+      "REROUTE": {
+       "n": 1011,
+       "mean": 0.302
+      }
+     },
+     "scope": {
+      "CASE": {
+       "n": 1603,
+       "mean": 0.247
+      },
+      "GROUP": {
+       "n": 1357,
+       "mean": 0.385
+      }
+     },
+     "relation": {
+      "DESCENDANT": {
+       "n": 746,
+       "mean": 0.076
+      },
+      "LINKED_EVENT": {
+       "n": 58,
+       "mean": 0.145
+      },
+      "NEW": {
+       "n": 2156,
+       "mean": 0.396
+      }
+     }
+    },
+    "decisive_qi": {},
+    "defender_actions": {
+     "AGE": {
+      "allow": 1015,
+      "suppress": 452,
+      "generalize": 85
+     },
+     "DX": {
+      "allow": 1678,
+      "suppress": 21,
+      "generalize": 3
+     },
+     "MED": {
+      "allow": 884,
+      "generalize": 116,
+      "suppress": 375
+     },
+     "PERIOD": {
+      "allow": 394,
+      "suppress": 1230,
+      "generalize": 1
+     },
+     "PLAN": {
+      "allow": 935,
+      "generalize": 75,
+      "suppress": 198
+     },
+     "PROC": {
+      "allow": 980,
+      "suppress": 69,
+      "generalize": 34
+     },
+     "REGION": {
+      "allow": 855,
+      "suppress": 467,
+      "generalize": 11
+     },
+     "SEX": {
+      "suppress": 278,
+      "allow": 923
+     }
+    },
+    "generalize_steps_mean": {
+     "AGE": 1.09,
+     "DX": 2.33,
+     "MED": 3.34,
+     "PERIOD": 1,
+     "PLAN": 2.15,
+     "PROC": 1.26,
+     "REGION": 1
+    },
+    "residual_violation_final_k": {},
+    "case_level_overblock": {
+     "k": 376,
+     "n": 6450,
+     "p": 0.0583,
+     "ci": [
+      0.0528,
+      0.0643
+     ]
+    },
+    "case_level_candidate_risky": 3019,
+    "case_level_overblock_at_k_eq_kreq": 376
+   },
+   "C1S": {
+    "n": 296,
+    "outcomes": {
+     "RISK_REACHED": 271,
+     "BUDGET": 25
+    },
+    "violation_A_val": {
+     "k": 271,
+     "n": 296,
+     "p": 0.9155,
+     "ci": [
+      0.8783,
+      0.9421
+     ]
+    },
+    "violation_any_case_val": {
+     "k": 293,
+     "n": 296,
+     "p": 0.9899,
+     "ci": [
+      0.9706,
+      0.9965
+     ]
+    },
+    "violation_A_by_turn7": {
+     "k": 246,
+     "n": 296,
+     "p": 0.8311,
+     "ci": [
+      0.7842,
+      0.8695
+     ]
+    },
+    "risk_at_turn0": {
+     "k": 0,
+     "n": 296,
+     "p": 0.0,
+     "ci": [
+      0.0,
+      0.0128
+     ]
+    },
+    "first_violation_turn_median": 3,
+    "cumulative_violation_by_turn": [
+     0.0,
+     0.1453,
+     0.2804,
+     0.4831,
+     0.6014,
+     0.6959,
+     0.7939,
+     0.8311,
+     0.8649,
+     0.8953,
+     0.9155
+    ],
+    "kA_median_by_turn": [
+     85.0,
+     32.0,
+     13.0,
+     5.0,
+     4.0,
+     3.0,
+     3.0,
+     3.0,
+     2.0,
+     2.0,
+     2.0
+    ],
+    "kA_q1_by_turn": [
+     31.0,
+     10.0,
+     4.0,
+     2.0,
+     2.0,
+     2.0,
+     2.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "kA_q3_by_turn": [
+     216.5,
+     147.75,
+     40.5,
+     20.0,
+     11.0,
+     6.0,
+     4.0,
+     4.0,
+     4.0,
+     4.0,
+     4.0
+    ],
+    "mean_utility": 0.9349,
+    "release_modes": {
+     "RAW": 1361,
+     "REWRITTEN": 240
+    },
+    "final_kA_hist": {
+     "4": 54,
+     "1": 85,
+     "2": 76,
+     "3": 56,
+     "7": 2,
+     "5": 11,
+     "23": 1,
+     "11": 1,
+     "13": 2,
+     "29": 1,
+     "50": 1,
+     "6": 1,
+     "17": 1,
+     "9": 2,
+     "25": 1,
+     "10": 1
+    },
+    "log2_drop": {
+     "target_qi": {
+      "AGE": {
+       "n": 218,
+       "mean": 1.665
+      },
+      "DX": {
+       "n": 60,
+       "mean": 0.0
+      },
+      "MED": {
+       "n": 124,
+       "mean": 1.856
+      },
+      "PERIOD": {
+       "n": 270,
+       "mean": 1.78
+      },
+      "PLAN": {
+       "n": 156,
+       "mean": 0.792
+      },
+      "PROC": {
+       "n": 93,
+       "mean": 0.376
+      },
+      "REGION": {
+       "n": 229,
+       "mean": 0.585
+      },
+      "SEX": {
+       "n": 155,
+       "mean": 0.943
+      }
+     },
+     "variant": {
+      "BASE": {
+       "n": 406,
+       "mean": 1.394
+      },
+      "REPHRASE": {
+       "n": 449,
+       "mean": 1.001
+      },
+      "REROUTE": {
+       "n": 450,
+       "mean": 1.104
+      }
+     },
+     "scope": {
+      "CASE": {
+       "n": 691,
+       "mean": 1.164
+      },
+      "GROUP": {
+       "n": 614,
+       "mean": 1.153
+      }
+     },
+     "relation": {
+      "DESCENDANT": {
+       "n": 282,
+       "mean": 0.695
+      },
+      "LINKED_EVENT": {
+       "n": 14,
+       "mean": 0.488
+      },
+      "NEW": {
+       "n": 1009,
+       "mean": 1.298
+      }
+     }
+    },
+    "decisive_qi": {
+     "PERIOD": 81,
+     "AGE": 61,
+     "MED": 39,
+     "REGION": 28,
+     "PLAN": 22,
+     "SEX": 19,
+     "REGION+PERIOD": 10,
+     "PROC": 8,
+     "AGE+SEX": 3
+    },
+    "defender_actions": {
+     "AGE": {
+      "allow": 721
+     },
+     "DX": {
+      "allow": 1580,
+      "suppress": 12
+     },
+     "MED": {
+      "allow": 805,
+      "generalize": 30,
+      "suppress": 38
+     },
+     "PERIOD": {
+      "allow": 463,
+      "suppress": 129,
+      "generalize": 9
+     },
+     "PLAN": {
+      "allow": 786,
+      "suppress": 22,
+      "generalize": 9
+     },
+     "PROC": {
+      "allow": 754,
+      "suppress": 4,
+      "generalize": 2
+     },
+     "REGION": {
+      "allow": 498,
+      "suppress": 60,
+      "generalize": 23
+     },
+     "SEX": {
+      "allow": 604
+     }
+    },
+    "generalize_steps_mean": {
+     "MED": 4.27,
+     "PERIOD": 1,
+     "PLAN": 2.33,
+     "PROC": 1,
+     "REGION": 1
+    },
+    "residual_violation_final_k": {
+     "k=4": 54,
+     "k=1": 85,
+     "k=2": 76,
+     "k=3": 56
+    },
+    "case_level_overblock": {
+     "k": 17,
+     "n": 3946,
+     "p": 0.0043,
+     "ci": [
+      0.0027,
+      0.0069
+     ]
+    },
+    "case_level_candidate_risky": 1090,
+    "case_level_overblock_at_k_eq_kreq": 17
+   }
+  },
+  "paired_first_violation": {
+   "C0_vs_C1": {
+    "n": 296,
+    "only_first": 296,
+    "only_second": 0
+   },
+   "C0_vs_C1S": {
+    "n": 296,
+    "only_first": 25,
+    "only_second": 0
+   },
+   "C1S_vs_C1": {
+    "n": 296,
+    "only_first": 271,
+    "only_second": 0
+   }
+  }
+ },
+ "staged_feedback": {
+  "config": {
+   "budget_B": 10,
+   "mode": "efficiency",
+   "fuzzer": "feedback",
+   "k_req": 5,
+   "generalize_threshold": 5,
+   "suppress_threshold": 3
+  },
+  "arms": {
+   "C0": {
+    "n": 296,
+    "outcomes": {
+     "RISK_REACHED": 268,
+     "RISK_AT_TURN0": 28
+    },
+    "violation_A_val": {
+     "k": 296,
+     "n": 296,
+     "p": 1.0,
+     "ci": [
+      0.9872,
+      1.0
+     ]
+    },
+    "violation_any_case_val": {
+     "k": 296,
+     "n": 296,
+     "p": 1.0,
+     "ci": [
+      0.9872,
+      1.0
+     ]
+    },
+    "violation_A_by_turn7": {
+     "k": 294,
+     "n": 296,
+     "p": 0.9932,
+     "ci": [
+      0.9757,
+      0.9981
+     ]
+    },
+    "risk_at_turn0": {
+     "k": 28,
+     "n": 296,
+     "p": 0.0946,
+     "ci": [
+      0.0663,
+      0.1333
+     ]
+    },
+    "first_violation_turn_median": 3.0,
+    "cumulative_violation_by_turn": [
+     0.0946,
+     0.2095,
+     0.4426,
+     0.7095,
+     0.8851,
+     0.9628,
+     0.9797,
+     0.9932,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "kA_median_by_turn": [
+     75.0,
+     31.0,
+     6.0,
+     2.0,
+     2.0,
+     2.0,
+     2.0,
+     2.0,
+     2.0,
+     2.0,
+     2.0
+    ],
+    "kA_q1_by_turn": [
+     19.25,
+     6.0,
+     2.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "kA_q3_by_turn": [
+     189.0,
+     140.0,
+     26.75,
+     6.0,
+     3.0,
+     3.0,
+     3.0,
+     3.0,
+     3.0,
+     3.0,
+     3.0
+    ],
+    "mean_utility": 1.0,
+    "release_modes": {
+     "RAW": 1102
+    },
+    "final_kA_hist": {
+     "1": 146,
+     "4": 34,
+     "2": 73,
+     "3": 43
+    },
+    "log2_drop": {
+     "target_qi": {
+      "AGE": {
+       "n": 217,
+       "mean": 1.61
+      },
+      "DX": {
+       "n": 14,
+       "mean": 0.0
+      },
+      "MED": {
+       "n": 54,
+       "mean": 2.42
+      },
+      "PERIOD": {
+       "n": 280,
+       "mean": 3.137
+      },
+      "PLAN": {
+       "n": 53,
+       "mean": 0.858
+      },
+      "PROC": {
+       "n": 44,
+       "mean": 0.442
+      },
+      "REGION": {
+       "n": 82,
+       "mean": 0.654
+      },
+      "SEX": {
+       "n": 62,
+       "mean": 0.933
+      }
+     },
+     "variant": {
+      "BASE": {
+       "n": 243,
+       "mean": 2.213
+      },
+      "REPHRASE": {
+       "n": 282,
+       "mean": 1.926
+      },
+      "REROUTE": {
+       "n": 281,
+       "mean": 1.615
+      }
+     },
+     "scope": {
+      "CASE": {
+       "n": 469,
+       "mean": 2.13
+      },
+      "GROUP": {
+       "n": 337,
+       "mean": 1.589
+      }
+     },
+     "relation": {
+      "DESCENDANT": {
+       "n": 199,
+       "mean": 2.71
+      },
+      "LINKED_EVENT": {
+       "n": 28,
+       "mean": 2.282
+      },
+      "NEW": {
+       "n": 579,
+       "mean": 1.609
+      }
+     }
+    },
+    "decisive_qi": {
+     "PERIOD": 181,
+     "AGE": 41,
+     "턴0 사례 검색 답변": 28,
+     "MED": 15,
+     "REGION": 9,
+     "AGE+SEX": 8,
+     "PLAN": 6,
+     "PROC": 3,
+     "SEX": 3,
+     "REGION+PERIOD": 2
+    },
+    "defender_actions": {},
+    "generalize_steps_mean": {},
+    "residual_violation_final_k": {},
+    "case_level_overblock": {
+     "k": 0,
+     "n": 2861,
+     "p": 0.0,
+     "ci": [
+      0.0,
+      0.0013
+     ]
+    },
+    "case_level_candidate_risky": 691,
+    "case_level_overblock_at_k_eq_kreq": 0
+   },
+   "C1": {
+    "n": 296,
+    "outcomes": {
+     "BUDGET": 296
+    },
+    "violation_A_val": {
+     "k": 0,
+     "n": 296,
+     "p": 0.0,
+     "ci": [
+      0.0,
+      0.0128
+     ]
+    },
+    "violation_any_case_val": {
+     "k": 2,
+     "n": 296,
+     "p": 0.0068,
+     "ci": [
+      0.0019,
+      0.0243
+     ]
+    },
+    "violation_A_by_turn7": {
+     "k": 0,
+     "n": 296,
+     "p": 0.0,
+     "ci": [
+      0.0,
+      0.0128
+     ]
+    },
+    "risk_at_turn0": {
+     "k": 0,
+     "n": 296,
+     "p": 0.0,
+     "ci": [
+      0.0,
+      0.0128
+     ]
+    },
+    "first_violation_turn_median": null,
+    "cumulative_violation_by_turn": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "kA_median_by_turn": [
+     85.0,
+     40.0,
+     20.0,
+     13.0,
+     11.0,
+     10.0,
+     9.0,
+     8.0,
+     8.0,
+     8.0,
+     8.0
+    ],
+    "kA_q1_by_turn": [
+     31.0,
+     15.0,
+     11.0,
+     8.0,
+     7.0,
+     7.0,
+     7.0,
+     7.0,
+     6.0,
+     6.0,
+     6.0
+    ],
+    "kA_q3_by_turn": [
+     216.5,
+     154.0,
+     59.25,
+     30.5,
+     19.75,
+     15.0,
+     13.0,
+     11.0,
+     10.0,
+     10.0,
+     10.0
+    ],
+    "mean_utility": 0.6009,
+    "release_modes": {
+     "RAW": 1401,
+     "REWRITTEN": 1855
+    },
+    "final_kA_hist": {
+     "7": 57,
+     "6": 88,
+     "10": 30,
+     "13": 9,
+     "8": 38,
+     "11": 19,
+     "9": 27,
+     "12": 8,
+     "14": 8,
+     "22": 1,
+     "48": 3,
+     "19": 1,
+     "18": 1,
+     "17": 1,
+     "15": 2,
+     "24": 1,
+     "20": 1,
+     "16": 1
+    },
+    "log2_drop": {
+     "target_qi": {
+      "AGE": {
+       "n": 637,
+       "mean": 0.657
+      },
+      "DX": {
+       "n": 106,
+       "mean": 0.0
+      },
+      "MED": {
+       "n": 302,
+       "mean": 0.449
+      },
+      "PERIOD": {
+       "n": 610,
+       "mean": 0.283
+      },
+      "PLAN": {
+       "n": 290,
+       "mean": 0.227
+      },
+      "PROC": {
+       "n": 229,
+       "mean": 0.068
+      },
+      "REGION": {
+       "n": 463,
+       "mean": 0.04
+      },
+      "SEX": {
+       "n": 323,
+       "mean": 0.426
+      }
+     },
+     "variant": {
+      "BASE": {
+       "n": 905,
+       "mean": 0.367
+      },
+      "REPHRASE": {
+       "n": 1048,
+       "mean": 0.31
+      },
+      "REROUTE": {
+       "n": 1007,
+       "mean": 0.305
+      }
+     },
+     "scope": {
+      "CASE": {
+       "n": 1590,
+       "mean": 0.303
+      },
+      "GROUP": {
+       "n": 1370,
+       "mean": 0.352
+      }
+     },
+     "relation": {
+      "DESCENDANT": {
+       "n": 710,
+       "mean": 0.166
+      },
+      "LINKED_EVENT": {
+       "n": 68,
+       "mean": 0.32
+      },
+      "NEW": {
+       "n": 2182,
+       "mean": 0.378
+      }
+     }
+    },
+    "decisive_qi": {},
+    "defender_actions": {
+     "AGE": {
+      "allow": 1127,
+      "suppress": 508,
+      "generalize": 92
+     },
+     "DX": {
+      "allow": 1661,
+      "suppress": 18,
+      "generalize": 3
+     },
+     "MED": {
+      "allow": 875,
+      "generalize": 131,
+      "suppress": 387
+     },
+     "PERIOD": {
+      "allow": 404,
+      "suppress": 1123,
+      "generalize": 2
+     },
+     "PLAN": {
+      "generalize": 93,
+      "allow": 921,
+      "suppress": 217
+     },
+     "PROC": {
+      "allow": 1078,
+      "suppress": 83,
+      "generalize": 27
+     },
+     "REGION": {
+      "allow": 915,
+      "suppress": 248,
+      "generalize": 4
+     },
+     "SEX": {
+      "allow": 914,
+      "suppress": 371
+     }
+    },
+    "generalize_steps_mean": {
+     "AGE": 1.05,
+     "DX": 2.67,
+     "MED": 3.43,
+     "PERIOD": 1,
+     "PLAN": 2.4,
+     "PROC": 1.37,
+     "REGION": 1
+    },
+    "residual_violation_final_k": {},
+    "case_level_overblock": {
+     "k": 444,
+     "n": 6709,
+     "p": 0.0662,
+     "ci": [
+      0.0605,
+      0.0724
+     ]
+    },
+    "case_level_candidate_risky": 2849,
+    "case_level_overblock_at_k_eq_kreq": 444
+   },
+   "C1S": {
+    "n": 296,
+    "outcomes": {
+     "RISK_REACHED": 258,
+     "BUDGET": 38
+    },
+    "violation_A_val": {
+     "k": 258,
+     "n": 296,
+     "p": 0.8716,
+     "ci": [
+      0.8287,
+      0.905
+     ]
+    },
+    "violation_any_case_val": {
+     "k": 280,
+     "n": 296,
+     "p": 0.9459,
+     "ci": [
+      0.914,
+      0.9665
+     ]
+    },
+    "violation_A_by_turn7": {
+     "k": 241,
+     "n": 296,
+     "p": 0.8142,
+     "ci": [
+      0.766,
+      0.8544
+     ]
+    },
+    "risk_at_turn0": {
+     "k": 0,
+     "n": 296,
+     "p": 0.0,
+     "ci": [
+      0.0,
+      0.0128
+     ]
+    },
+    "first_violation_turn_median": 3.0,
+    "cumulative_violation_by_turn": [
+     0.0,
+     0.1453,
+     0.3041,
+     0.4797,
+     0.6216,
+     0.6892,
+     0.7601,
+     0.8142,
+     0.8581,
+     0.8682,
+     0.8716
+    ],
+    "kA_median_by_turn": [
+     85.0,
+     32.0,
+     12.0,
+     5.0,
+     4.0,
+     3.0,
+     3.0,
+     3.0,
+     3.0,
+     3.0,
+     3.0
+    ],
+    "kA_q1_by_turn": [
+     31.0,
+     10.0,
+     4.0,
+     2.0,
+     2.0,
+     2.0,
+     2.0,
+     2.0,
+     2.0,
+     2.0,
+     2.0
+    ],
+    "kA_q3_by_turn": [
+     216.5,
+     147.75,
+     40.5,
+     15.0,
+     7.0,
+     5.0,
+     4.0,
+     4.0,
+     4.0,
+     4.0,
+     4.0
+    ],
+    "mean_utility": 0.8842,
+    "release_modes": {
+     "RAW": 1216,
+     "REWRITTEN": 400
+    },
+    "final_kA_hist": {
+     "2": 75,
+     "4": 50,
+     "3": 62,
+     "1": 71,
+     "5": 38
+    },
+    "log2_drop": {
+     "target_qi": {
+      "AGE": {
+       "n": 341,
+       "mean": 1.6
+      },
+      "DX": {
+       "n": 24,
+       "mean": 0.0
+      },
+      "MED": {
+       "n": 88,
+       "mean": 2.177
+      },
+      "PERIOD": {
+       "n": 498,
+       "mean": 1.032
+      },
+      "PLAN": {
+       "n": 91,
+       "mean": 0.93
+      },
+      "PROC": {
+       "n": 63,
+       "mean": 0.408
+      },
+      "REGION": {
+       "n": 115,
+       "mean": 0.368
+      },
+      "SEX": {
+       "n": 100,
+       "mean": 0.982
+      }
+     },
+     "variant": {
+      "BASE": {
+       "n": 363,
+       "mean": 1.41
+      },
+      "REPHRASE": {
+       "n": 478,
+       "mean": 1.066
+      },
+      "REROUTE": {
+       "n": 479,
+       "mean": 1.003
+      }
+     },
+     "scope": {
+      "CASE": {
+       "n": 795,
+       "mean": 1.086
+      },
+      "GROUP": {
+       "n": 525,
+       "mean": 1.216
+      }
+     },
+     "relation": {
+      "DESCENDANT": {
+       "n": 424,
+       "mean": 0.622
+      },
+      "LINKED_EVENT": {
+       "n": 79,
+       "mean": 0.456
+      },
+      "NEW": {
+       "n": 817,
+       "mean": 1.472
+      }
+     }
+    },
+    "decisive_qi": {
+     "PERIOD": 92,
+     "AGE": 87,
+     "MED": 29,
+     "SEX": 13,
+     "PLAN": 13,
+     "AGE+SEX": 8,
+     "REGION": 7,
+     "PROC": 5,
+     "REGION+PERIOD": 4
+    },
+    "defender_actions": {
+     "AGE": {
+      "allow": 875
+     },
+     "DX": {
+      "allow": 1510,
+      "suppress": 10
+     },
+     "MED": {
+      "allow": 691,
+      "generalize": 28,
+      "suppress": 32
+     },
+     "PERIOD": {
+      "allow": 486,
+      "suppress": 468,
+      "generalize": 54
+     },
+     "PLAN": {
+      "allow": 634,
+      "suppress": 23,
+      "generalize": 9
+     },
+     "PROC": {
+      "allow": 694,
+      "suppress": 4,
+      "generalize": 2
+     },
+     "REGION": {
+      "allow": 334,
+      "suppress": 7,
+      "generalize": 2
+     },
+     "SEX": {
+      "allow": 471
+     }
+    },
+    "generalize_steps_mean": {
+     "MED": 4.36,
+     "PERIOD": 1.02,
+     "PLAN": 2.33,
+     "PROC": 1,
+     "REGION": 1
+    },
+    "residual_violation_final_k": {
+     "k=2": 75,
+     "k=4": 50,
+     "k=3": 62,
+     "k=1": 71
+    },
+    "case_level_overblock": {
+     "k": 17,
+     "n": 3528,
+     "p": 0.0048,
+     "ci": [
+      0.003,
+      0.0077
+     ]
+    },
+    "case_level_candidate_risky": 1249,
+    "case_level_overblock_at_k_eq_kreq": 17
+   }
+  },
+  "paired_first_violation": {
+   "C0_vs_C1": {
+    "n": 296,
+    "only_first": 296,
+    "only_second": 0
+   },
+   "C0_vs_C1S": {
+    "n": 296,
+    "only_first": 38,
+    "only_second": 0
+   },
+   "C1S_vs_C1": {
+    "n": 296,
+    "only_first": 258,
+    "only_second": 0
+   }
+  }
+ },
+ "full_uniform": {
+  "config": {
+   "budget_B": 10,
+   "mode": "efficiency",
+   "fuzzer": "uniform",
+   "k_req": 5,
+   "generalize_threshold": 5,
+   "suppress_threshold": 3
+  },
+  "arms": {
+   "C0": {
+    "n": 296,
+    "outcomes": {
+     "RISK_REACHED": 268,
+     "RISK_AT_TURN0": 28
+    },
+    "violation_A_val": {
+     "k": 296,
+     "n": 296,
+     "p": 1.0,
+     "ci": [
+      0.9872,
+      1.0
+     ]
+    },
+    "violation_any_case_val": {
+     "k": 296,
+     "n": 296,
+     "p": 1.0,
+     "ci": [
+      0.9872,
+      1.0
+     ]
+    },
+    "violation_A_by_turn7": {
+     "k": 294,
+     "n": 296,
+     "p": 0.9932,
+     "ci": [
+      0.9757,
+      0.9981
+     ]
+    },
+    "risk_at_turn0": {
+     "k": 28,
+     "n": 296,
+     "p": 0.0946,
+     "ci": [
+      0.0663,
+      0.1333
+     ]
+    },
+    "first_violation_turn_median": 2.0,
+    "cumulative_violation_by_turn": [
+     0.0946,
+     0.4324,
+     0.7297,
+     0.8784,
+     0.9426,
+     0.9797,
+     0.9932,
+     0.9932,
+     0.9966,
+     1.0,
+     1.0
+    ],
+    "kA_median_by_turn": [
+     75.0,
+     8.0,
+     2.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "kA_q1_by_turn": [
+     19.25,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "kA_q3_by_turn": [
+     189.0,
+     56.0,
+     5.0,
+     3.0,
+     2.0,
+     2.0,
+     2.0,
+     2.0,
+     2.0,
+     2.0,
+     2.0
+    ],
+    "mean_utility": 1.0,
+    "release_modes": {
+     "RAW": 876
+    },
+    "final_kA_hist": {
+     "1": 187,
+     "4": 18,
+     "2": 56,
+     "3": 35
+    },
+    "log2_drop": {
+     "target_qi": {
+      "AGE": {
+       "n": 87,
+       "mean": 3.232
+      },
+      "DX": {
+       "n": 25,
+       "mean": 0.0
+      },
+      "MED": {
+       "n": 58,
+       "mean": 2.469
+      },
+      "PERIOD": {
+       "n": 126,
+       "mean": 4.538
+      },
+      "PLAN": {
+       "n": 67,
+       "mean": 0.923
+      },
+      "PROC": {
+       "n": 44,
+       "mean": 0.37
+      },
+      "REGION": {
+       "n": 92,
+       "mean": 4.842
+      },
+      "SEX": {
+       "n": 81,
+       "mean": 0.946
+      }
+     },
+     "variant": {
+      "BASE": {
+       "n": 159,
+       "mean": 2.738
+      },
+      "REPHRASE": {
+       "n": 209,
+       "mean": 3.085
+      },
+      "REROUTE": {
+       "n": 212,
+       "mean": 2.435
+      }
+     },
+     "scope": {
+      "CASE": {
+       "n": 273,
+       "mean": 2.842
+      },
+      "GROUP": {
+       "n": 307,
+       "mean": 2.673
+      }
+     },
+     "relation": {
+      "DESCENDANT": {
+       "n": 37,
+       "mean": 0.673
+      },
+      "LINKED_EVENT": {
+       "n": 1,
+       "mean": 0.0
+      },
+      "NEW": {
+       "n": 542,
+       "mean": 2.899
+      }
+     }
+    },
+    "decisive_qi": {
+     "PERIOD": 108,
+     "REGION": 74,
+     "AGE": 35,
+     "턴0 사례 검색 답변": 28,
+     "MED": 20,
+     "REGION+PERIOD": 11,
+     "PLAN": 8,
+     "SEX": 7,
+     "AGE+SEX": 3,
+     "PROC": 2
+    },
+    "defender_actions": {},
+    "generalize_steps_mean": {},
+    "residual_violation_final_k": {},
+    "case_level_overblock": {
+     "k": 0,
+     "n": 2275,
+     "p": 0.0,
+     "ci": [
+      0.0,
+      0.0017
+     ]
+    },
+    "case_level_candidate_risky": 925,
+    "case_level_overblock_at_k_eq_kreq": 0
+   },
+   "C1": {
+    "n": 296,
+    "outcomes": {
+     "BUDGET": 296
+    },
+    "violation_A_val": {
+     "k": 0,
+     "n": 296,
+     "p": 0.0,
+     "ci": [
+      0.0,
+      0.0128
+     ]
+    },
+    "violation_any_case_val": {
+     "k": 0,
+     "n": 296,
+     "p": 0.0,
+     "ci": [
+      0.0,
+      0.0128
+     ]
+    },
+    "violation_A_by_turn7": {
+     "k": 0,
+     "n": 296,
+     "p": 0.0,
+     "ci": [
+      0.0,
+      0.0128
+     ]
+    },
+    "risk_at_turn0": {
+     "k": 0,
+     "n": 296,
+     "p": 0.0,
+     "ci": [
+      0.0,
+      0.0128
+     ]
+    },
+    "first_violation_turn_median": null,
+    "cumulative_violation_by_turn": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "kA_median_by_turn": [
+     85.0,
+     38.0,
+     20.0,
+     15.0,
+     13.0,
+     11.0,
+     11.0,
+     10.0,
+     10.0,
+     9.0,
+     9.0
+    ],
+    "kA_q1_by_turn": [
+     31.0,
+     14.0,
+     10.0,
+     8.0,
+     8.0,
+     7.0,
+     7.0,
+     7.0,
+     7.0,
+     7.0,
+     7.0
+    ],
+    "kA_q3_by_turn": [
+     216.5,
+     162.25,
+     81.0,
+     42.75,
+     30.0,
+     23.75,
+     18.0,
+     16.75,
+     15.0,
+     14.0,
+     13.0
+    ],
+    "mean_utility": 0.427,
+    "release_modes": {
+     "RAW": 942,
+     "REWRITTEN": 2314
+    },
+    "final_kA_hist": {
+     "9": 21,
+     "6": 64,
+     "7": 39,
+     "11": 23,
+     "10": 22,
+     "8": 41,
+     "35": 1,
+     "26": 2,
+     "14": 15,
+     "13": 8,
+     "50": 16,
+     "43": 1,
+     "22": 3,
+     "12": 9,
+     "16": 4,
+     "18": 3,
+     "23": 2,
+     "15": 4,
+     "17": 3,
+     "38": 1,
+     "19": 1,
+     "31": 3,
+     "24": 3,
+     "30": 2,
+     "49": 1,
+     "47": 2,
+     "20": 1,
+     "48": 1
+    },
+    "log2_drop": {
+     "target_qi": {
+      "AGE": {
+       "n": 448,
+       "mean": 0.744
+      },
+      "DX": {
+       "n": 120,
+       "mean": 0.0
+      },
+      "MED": {
+       "n": 273,
+       "mean": 0.494
+      },
+      "PERIOD": {
+       "n": 712,
+       "mean": 0.124
+      },
+      "PLAN": {
+       "n": 306,
+       "mean": 0.256
+      },
+      "PROC": {
+       "n": 211,
+       "mean": 0.08
+      },
+      "REGION": {
+       "n": 606,
+       "mean": 0.079
+      },
+      "SEX": {
+       "n": 284,
+       "mean": 0.536
+      }
+     },
+     "variant": {
+      "BASE": {
+       "n": 941,
+       "mean": 0.337
+      },
+      "REPHRASE": {
+       "n": 1015,
+       "mean": 0.255
+      },
+      "REROUTE": {
+       "n": 1004,
+       "mean": 0.275
+      }
+     },
+     "scope": {
+      "CASE": {
+       "n": 1424,
+       "mean": 0.231
+      },
+      "GROUP": {
+       "n": 1536,
+       "mean": 0.34
+      }
+     },
+     "relation": {
+      "DESCENDANT": {
+       "n": 282,
+       "mean": 0.0
+      },
+      "LINKED_EVENT": {
+       "n": 20,
+       "mean": 0.0
+      },
+      "NEW": {
+       "n": 2658,
+       "mean": 0.32
+      }
+     }
+    },
+    "decisive_qi": {},
+    "defender_actions": {
+     "AGE": {
+      "allow": 609,
+      "generalize": 208,
+      "suppress": 718
+     },
+     "DX": {
+      "allow": 1678,
+      "suppress": 21,
+      "generalize": 1
+     },
+     "MED": {
+      "allow": 879,
+      "generalize": 103,
+      "suppress": 382
+     },
+     "PERIOD": {
+      "suppress": 1912,
+      "allow": 38,
+      "generalize": 3
+     },
+     "PLAN": {
+      "suppress": 202,
+      "allow": 896,
+      "generalize": 76
+     },
+     "PROC": {
+      "allow": 985,
+      "suppress": 87,
+      "generalize": 34
+     },
+     "REGION": {
+      "suppress": 1692,
+      "generalize": 73,
+      "allow": 77
+     },
+     "SEX": {
+      "allow": 912,
+      "suppress": 289
+     }
+    },
+    "generalize_steps_mean": {
+     "AGE": 1.05,
+     "DX": 2,
+     "MED": 3.38,
+     "PERIOD": 1,
+     "PLAN": 2.21,
+     "PROC": 1.32,
+     "REGION": 1
+    },
+    "residual_violation_final_k": {},
+    "case_level_overblock": {
+     "k": 296,
+     "n": 4786,
+     "p": 0.0618,
+     "ci": [
+      0.0554,
+      0.069
+     ]
+    },
+    "case_level_candidate_risky": 5384,
+    "case_level_overblock_at_k_eq_kreq": 296
+   },
+   "C1S": {
+    "n": 296,
+    "outcomes": {
+     "BUDGET": 22,
+     "RISK_REACHED": 274
+    },
+    "violation_A_val": {
+     "k": 274,
+     "n": 296,
+     "p": 0.9257,
+     "ci": [
+      0.89,
+      0.9504
+     ]
+    },
+    "violation_any_case_val": {
+     "k": 293,
+     "n": 296,
+     "p": 0.9899,
+     "ci": [
+      0.9706,
+      0.9965
+     ]
+    },
+    "violation_A_by_turn7": {
+     "k": 254,
+     "n": 296,
+     "p": 0.8581,
+     "ci": [
+      0.8138,
+      0.8933
+     ]
+    },
+    "risk_at_turn0": {
+     "k": 0,
+     "n": 296,
+     "p": 0.0,
+     "ci": [
+      0.0,
+      0.0128
+     ]
+    },
+    "first_violation_turn_median": 3.0,
+    "cumulative_violation_by_turn": [
+     0.0,
+     0.1622,
+     0.3818,
+     0.5777,
+     0.6791,
+     0.7601,
+     0.8311,
+     0.8581,
+     0.8919,
+     0.902,
+     0.9257
+    ],
+    "kA_median_by_turn": [
+     85.0,
+     32.0,
+     8.0,
+     3.0,
+     3.0,
+     2.0,
+     2.0,
+     2.0,
+     2.0,
+     2.0,
+     2.0
+    ],
+    "kA_q1_by_turn": [
+     31.0,
+     7.25,
+     2.0,
+     2.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "kA_q3_by_turn": [
+     216.5,
+     154.0,
+     35.75,
+     14.0,
+     8.0,
+     4.0,
+     4.0,
+     3.0,
+     3.0,
+     3.0,
+     3.0
+    ],
+    "mean_utility": 0.8244,
+    "release_modes": {
+     "RAW": 977,
+     "REWRITTEN": 490
+    },
+    "final_kA_hist": {
+     "5": 9,
+     "1": 118,
+     "7": 5,
+     "2": 71,
+     "3": 54,
+     "4": 31,
+     "23": 1,
+     "50": 3,
+     "12": 1,
+     "49": 1,
+     "16": 1,
+     "10": 1
+    },
+    "log2_drop": {
+     "target_qi": {
+      "AGE": {
+       "n": 168,
+       "mean": 3.095
+      },
+      "DX": {
+       "n": 54,
+       "mean": 0.0
+      },
+      "MED": {
+       "n": 117,
+       "mean": 2.068
+      },
+      "PERIOD": {
+       "n": 269,
+       "mean": 1.008
+      },
+      "PLAN": {
+       "n": 127,
+       "mean": 0.875
+      },
+      "PROC": {
+       "n": 78,
+       "mean": 0.378
+      },
+      "REGION": {
+       "n": 221,
+       "mean": 1.212
+      },
+      "SEX": {
+       "n": 137,
+       "mean": 0.933
+      }
+     },
+     "variant": {
+      "BASE": {
+       "n": 367,
+       "mean": 1.73
+      },
+      "REPHRASE": {
+       "n": 403,
+       "mean": 1.27
+      },
+      "REROUTE": {
+       "n": 401,
+       "mean": 1.054
+      }
+     },
+     "scope": {
+      "CASE": {
+       "n": 559,
+       "mean": 1.238
+      },
+      "GROUP": {
+       "n": 612,
+       "mean": 1.434
+      }
+     },
+     "relation": {
+      "DESCENDANT": {
+       "n": 109,
+       "mean": 0.135
+      },
+      "LINKED_EVENT": {
+       "n": 5,
+       "mean": 0.0
+      },
+      "NEW": {
+       "n": 1057,
+       "mean": 1.471
+      }
+     }
+    },
+    "decisive_qi": {
+     "AGE": 70,
+     "PERIOD": 53,
+     "REGION": 48,
+     "MED": 42,
+     "PLAN": 20,
+     "SEX": 17,
+     "REGION+PERIOD": 10,
+     "AGE+SEX": 8,
+     "PROC": 6
+    },
+    "defender_actions": {
+     "AGE": {
+      "allow": 607
+     },
+     "DX": {
+      "allow": 1573,
+      "suppress": 13
+     },
+     "MED": {
+      "allow": 799,
+      "generalize": 29,
+      "suppress": 38
+     },
+     "PERIOD": {
+      "suppress": 572,
+      "allow": 85,
+      "generalize": 51
+     },
+     "PLAN": {
+      "allow": 711,
+      "suppress": 22,
+      "generalize": 9
+     },
+     "PROC": {
+      "allow": 737,
+      "suppress": 4,
+      "generalize": 2
+     },
+     "REGION": {
+      "suppress": 274,
+      "allow": 271,
+      "generalize": 124
+     },
+     "SEX": {
+      "allow": 582
+     }
+    },
+    "generalize_steps_mean": {
+     "MED": 4.24,
+     "PERIOD": 1,
+     "PLAN": 2.33,
+     "PROC": 1,
+     "REGION": 1
+    },
+    "residual_violation_final_k": {
+     "k=1": 118,
+     "k=2": 71,
+     "k=3": 54,
+     "k=4": 31
+    },
+    "case_level_overblock": {
+     "k": 18,
+     "n": 2958,
+     "p": 0.0061,
+     "ci": [
+      0.0039,
+      0.0096
+     ]
+    },
+    "case_level_candidate_risky": 1994,
+    "case_level_overblock_at_k_eq_kreq": 18
+   }
+  },
+  "paired_first_violation": {
+   "C0_vs_C1": {
+    "n": 296,
+    "only_first": 296,
+    "only_second": 0
+   },
+   "C0_vs_C1S": {
+    "n": 296,
+    "only_first": 22,
+    "only_second": 0
+   },
+   "C1S_vs_C1": {
+    "n": 296,
+    "only_first": 274,
+    "only_second": 0
+   }
+  }
+ },
+ "full_feedback": {
+  "config": {
+   "budget_B": 10,
+   "mode": "efficiency",
+   "fuzzer": "feedback",
+   "k_req": 5,
+   "generalize_threshold": 5,
+   "suppress_threshold": 3
+  },
+  "arms": {
+   "C0": {
+    "n": 296,
+    "outcomes": {
+     "RISK_REACHED": 268,
+     "RISK_AT_TURN0": 28
+    },
+    "violation_A_val": {
+     "k": 296,
+     "n": 296,
+     "p": 1.0,
+     "ci": [
+      0.9872,
+      1.0
+     ]
+    },
+    "violation_any_case_val": {
+     "k": 296,
+     "n": 296,
+     "p": 1.0,
+     "ci": [
+      0.9872,
+      1.0
+     ]
+    },
+    "violation_A_by_turn7": {
+     "k": 296,
+     "n": 296,
+     "p": 1.0,
+     "ci": [
+      0.9872,
+      1.0
+     ]
+    },
+    "risk_at_turn0": {
+     "k": 28,
+     "n": 296,
+     "p": 0.0946,
+     "ci": [
+      0.0663,
+      0.1333
+     ]
+    },
+    "first_violation_turn_median": 2.0,
+    "cumulative_violation_by_turn": [
+     0.0946,
+     0.4324,
+     0.7872,
+     0.9223,
+     0.9865,
+     0.9966,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "kA_median_by_turn": [
+     75.0,
+     8.0,
+     1.5,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "kA_q1_by_turn": [
+     19.25,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "kA_q3_by_turn": [
+     189.0,
+     56.0,
+     4.0,
+     2.0,
+     2.0,
+     2.0,
+     2.0,
+     2.0,
+     2.0,
+     2.0,
+     2.0
+    ],
+    "mean_utility": 1.0,
+    "release_modes": {
+     "RAW": 823
+    },
+    "final_kA_hist": {
+     "1": 197,
+     "4": 14,
+     "2": 51,
+     "3": 34
+    },
+    "log2_drop": {
+     "target_qi": {
+      "AGE": {
+       "n": 102,
+       "mean": 2.923
+      },
+      "DX": {
+       "n": 13,
+       "mean": 0.0
+      },
+      "MED": {
+       "n": 43,
+       "mean": 2.358
+      },
+      "PERIOD": {
+       "n": 165,
+       "mean": 4.448
+      },
+      "PLAN": {
+       "n": 47,
+       "mean": 0.884
+      },
+      "PROC": {
+       "n": 35,
+       "mean": 0.465
+      },
+      "REGION": {
+       "n": 71,
+       "mean": 5.235
+      },
+      "SEX": {
+       "n": 51,
+       "mean": 0.942
+      }
+     },
+     "variant": {
+      "BASE": {
+       "n": 138,
+       "mean": 3.05
+      },
+      "REPHRASE": {
+       "n": 191,
+       "mean": 3.414
+      },
+      "REROUTE": {
+       "n": 198,
+       "mean": 2.717
+      }
+     },
+     "scope": {
+      "CASE": {
+       "n": 263,
+       "mean": 3.105
+      },
+      "GROUP": {
+       "n": 264,
+       "mean": 3.009
+      }
+     },
+     "relation": {
+      "DESCENDANT": {
+       "n": 35,
+       "mean": 1.493
+      },
+      "LINKED_EVENT": {
+       "n": 4,
+       "mean": 2.719
+      },
+      "NEW": {
+       "n": 488,
+       "mean": 3.172
+      }
+     }
+    },
+    "decisive_qi": {
+     "PERIOD": 147,
+     "REGION": 55,
+     "AGE": 34,
+     "턴0 사례 검색 답변": 28,
+     "REGION+PERIOD": 9,
+     "MED": 9,
+     "AGE+SEX": 7,
+     "PLAN": 4,
+     "PROC": 2,
+     "SEX": 1
+    },
+    "defender_actions": {},
+    "generalize_steps_mean": {},
+    "residual_violation_final_k": {},
+    "case_level_overblock": {
+     "k": 0,
+     "n": 2097,
+     "p": 0.0,
+     "ci": [
+      0.0,
+      0.0018
+     ]
+    },
+    "case_level_candidate_risky": 895,
+    "case_level_overblock_at_k_eq_kreq": 0
+   },
+   "C1": {
+    "n": 296,
+    "outcomes": {
+     "BUDGET": 296
+    },
+    "violation_A_val": {
+     "k": 0,
+     "n": 296,
+     "p": 0.0,
+     "ci": [
+      0.0,
+      0.0128
+     ]
+    },
+    "violation_any_case_val": {
+     "k": 1,
+     "n": 296,
+     "p": 0.0034,
+     "ci": [
+      0.0006,
+      0.0189
+     ]
+    },
+    "violation_A_by_turn7": {
+     "k": 0,
+     "n": 296,
+     "p": 0.0,
+     "ci": [
+      0.0,
+      0.0128
+     ]
+    },
+    "risk_at_turn0": {
+     "k": 0,
+     "n": 296,
+     "p": 0.0,
+     "ci": [
+      0.0,
+      0.0128
+     ]
+    },
+    "first_violation_turn_median": null,
+    "cumulative_violation_by_turn": [
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0,
+     0.0
+    ],
+    "kA_median_by_turn": [
+     85.0,
+     38.0,
+     22.0,
+     14.0,
+     11.0,
+     10.0,
+     9.0,
+     9.0,
+     9.0,
+     8.0,
+     8.0
+    ],
+    "kA_q1_by_turn": [
+     31.0,
+     14.0,
+     10.0,
+     8.0,
+     7.0,
+     7.0,
+     7.0,
+     7.0,
+     7.0,
+     7.0,
+     7.0
+    ],
+    "kA_q3_by_turn": [
+     216.5,
+     162.25,
+     80.75,
+     36.0,
+     21.75,
+     17.0,
+     14.0,
+     12.0,
+     11.0,
+     11.0,
+     11.0
+    ],
+    "mean_utility": 0.4443,
+    "release_modes": {
+     "RAW": 949,
+     "REWRITTEN": 2307
+    },
+    "final_kA_hist": {
+     "11": 26,
+     "6": 67,
+     "7": 52,
+     "10": 27,
+     "8": 33,
+     "26": 1,
+     "13": 6,
+     "47": 2,
+     "21": 1,
+     "9": 22,
+     "22": 4,
+     "39": 1,
+     "12": 4,
+     "15": 2,
+     "18": 4,
+     "50": 9,
+     "14": 15,
+     "16": 4,
+     "17": 6,
+     "31": 1,
+     "19": 3,
+     "48": 1,
+     "24": 3,
+     "20": 1,
+     "30": 1
+    },
+    "log2_drop": {
+     "target_qi": {
+      "AGE": {
+       "n": 473,
+       "mean": 0.77
+      },
+      "DX": {
+       "n": 111,
+       "mean": 0.0
+      },
+      "MED": {
+       "n": 312,
+       "mean": 0.462
+      },
+      "PERIOD": {
+       "n": 679,
+       "mean": 0.11
+      },
+      "PLAN": {
+       "n": 322,
+       "mean": 0.213
+      },
+      "PROC": {
+       "n": 231,
+       "mean": 0.091
+      },
+      "REGION": {
+       "n": 505,
+       "mean": 0.117
+      },
+      "SEX": {
+       "n": 327,
+       "mean": 0.484
+      }
+     },
+     "variant": {
+      "BASE": {
+       "n": 917,
+       "mean": 0.363
+      },
+      "REPHRASE": {
+       "n": 1030,
+       "mean": 0.263
+      },
+      "REROUTE": {
+       "n": 1013,
+       "mean": 0.283
+      }
+     },
+     "scope": {
+      "CASE": {
+       "n": 1381,
+       "mean": 0.254
+      },
+      "GROUP": {
+       "n": 1579,
+       "mean": 0.341
+      }
+     },
+     "relation": {
+      "DESCENDANT": {
+       "n": 304,
+       "mean": 0.0
+      },
+      "LINKED_EVENT": {
+       "n": 25,
+       "mean": 0.0
+      },
+      "NEW": {
+       "n": 2631,
+       "mean": 0.338
+      }
+     }
+    },
+    "decisive_qi": {},
+    "defender_actions": {
+     "AGE": {
+      "allow": 664,
+      "generalize": 240,
+      "suppress": 705
+     },
+     "DX": {
+      "allow": 1659,
+      "suppress": 15,
+      "generalize": 1
+     },
+     "MED": {
+      "allow": 901,
+      "generalize": 109,
+      "suppress": 457
+     },
+     "PERIOD": {
+      "suppress": 1852,
+      "allow": 28,
+      "generalize": 6
+     },
+     "PLAN": {
+      "allow": 926,
+      "generalize": 104,
+      "suppress": 231
+     },
+     "PROC": {
+      "allow": 1069,
+      "suppress": 79,
+      "generalize": 28
+     },
+     "REGION": {
+      "suppress": 1453,
+      "allow": 70,
+      "generalize": 50
+     },
+     "SEX": {
+      "suppress": 407,
+      "allow": 952
+     }
+    },
+    "generalize_steps_mean": {
+     "AGE": 1.04,
+     "DX": 2,
+     "MED": 3.71,
+     "PERIOD": 1,
+     "PLAN": 2.25,
+     "PROC": 1.46,
+     "REGION": 1
+    },
+    "residual_violation_final_k": {},
+    "case_level_overblock": {
+     "k": 346,
+     "n": 5037,
+     "p": 0.0687,
+     "ci": [
+      0.062,
+      0.076
+     ]
+    },
+    "case_level_candidate_risky": 5276,
+    "case_level_overblock_at_k_eq_kreq": 346
+   },
+   "C1S": {
+    "n": 296,
+    "outcomes": {
+     "RISK_REACHED": 275,
+     "BUDGET": 21
+    },
+    "violation_A_val": {
+     "k": 275,
+     "n": 296,
+     "p": 0.9291,
+     "ci": [
+      0.894,
+      0.9531
+     ]
+    },
+    "violation_any_case_val": {
+     "k": 288,
+     "n": 296,
+     "p": 0.973,
+     "ci": [
+      0.9476,
+      0.9862
+     ]
+    },
+    "violation_A_by_turn7": {
+     "k": 262,
+     "n": 296,
+     "p": 0.8851,
+     "ci": [
+      0.8438,
+      0.9166
+     ]
+    },
+    "risk_at_turn0": {
+     "k": 0,
+     "n": 296,
+     "p": 0.0,
+     "ci": [
+      0.0,
+      0.0128
+     ]
+    },
+    "first_violation_turn_median": 3,
+    "cumulative_violation_by_turn": [
+     0.0,
+     0.1622,
+     0.3716,
+     0.5878,
+     0.7128,
+     0.777,
+     0.8547,
+     0.8851,
+     0.9054,
+     0.9291,
+     0.9291
+    ],
+    "kA_median_by_turn": [
+     85.0,
+     32.0,
+     8.0,
+     3.0,
+     3.0,
+     2.0,
+     2.0,
+     2.0,
+     2.0,
+     2.0,
+     2.0
+    ],
+    "kA_q1_by_turn": [
+     31.0,
+     7.25,
+     3.0,
+     2.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0,
+     1.0
+    ],
+    "kA_q3_by_turn": [
+     216.5,
+     154.0,
+     42.0,
+     10.0,
+     5.75,
+     4.0,
+     3.0,
+     3.0,
+     3.0,
+     3.0,
+     3.0
+    ],
+    "mean_utility": 0.8029,
+    "release_modes": {
+     "RAW": 919,
+     "REWRITTEN": 506
+    },
+    "final_kA_hist": {
+     "1": 122,
+     "7": 1,
+     "2": 73,
+     "3": 49,
+     "4": 31,
+     "5": 17,
+     "9": 1,
+     "10": 2
+    },
+    "log2_drop": {
+     "target_qi": {
+      "AGE": {
+       "n": 201,
+       "mean": 2.989
+      },
+      "DX": {
+       "n": 31,
+       "mean": 0.0
+      },
+      "MED": {
+       "n": 106,
+       "mean": 2.093
+      },
+      "PERIOD": {
+       "n": 361,
+       "mean": 0.726
+      },
+      "PLAN": {
+       "n": 91,
+       "mean": 0.888
+      },
+      "PROC": {
+       "n": 72,
+       "mean": 0.433
+      },
+      "REGION": {
+       "n": 156,
+       "mean": 1.899
+      },
+      "SEX": {
+       "n": 111,
+       "mean": 0.955
+      }
+     },
+     "variant": {
+      "BASE": {
+       "n": 339,
+       "mean": 1.848
+      },
+      "REPHRASE": {
+       "n": 403,
+       "mean": 1.375
+      },
+      "REROUTE": {
+       "n": 387,
+       "mean": 1.08
+      }
+     },
+     "scope": {
+      "CASE": {
+       "n": 553,
+       "mean": 1.258
+      },
+      "GROUP": {
+       "n": 576,
+       "mean": 1.568
+      }
+     },
+     "relation": {
+      "DESCENDANT": {
+       "n": 135,
+       "mean": 0.132
+      },
+      "LINKED_EVENT": {
+       "n": 24,
+       "mean": 0.0
+      },
+      "NEW": {
+       "n": 970,
+       "mean": 1.63
+      }
+     }
+    },
+    "decisive_qi": {
+     "AGE": 78,
+     "PERIOD": 54,
+     "REGION": 52,
+     "MED": 38,
+     "AGE+SEX": 14,
+     "PLAN": 12,
+     "SEX": 11,
+     "REGION+PERIOD": 10,
+     "PROC": 6
+    },
+    "defender_actions": {
+     "AGE": {
+      "allow": 675
+     },
+     "DX": {
+      "allow": 1524,
+      "suppress": 11
+     },
+     "MED": {
+      "allow": 756,
+      "generalize": 27,
+      "suppress": 33
+     },
+     "PERIOD": {
+      "suppress": 725,
+      "allow": 78,
+      "generalize": 76
+     },
+     "PLAN": {
+      "allow": 648,
+      "suppress": 22,
+      "generalize": 9
+     },
+     "PROC": {
+      "allow": 737,
+      "suppress": 4,
+      "generalize": 2
+     },
+     "REGION": {
+      "suppress": 193,
+      "allow": 222,
+      "generalize": 73
+     },
+     "SEX": {
+      "allow": 507
+     }
+    },
+    "generalize_steps_mean": {
+     "MED": 4.3,
+     "PERIOD": 1.01,
+     "PLAN": 2.33,
+     "PROC": 1,
+     "REGION": 1
+    },
+    "residual_violation_final_k": {
+     "k=1": 122,
+     "k=2": 73,
+     "k=3": 49,
+     "k=4": 31
+    },
+    "case_level_overblock": {
+     "k": 17,
+     "n": 2813,
+     "p": 0.006,
+     "ci": [
+      0.0038,
+      0.0097
+     ]
+    },
+    "case_level_candidate_risky": 1952,
+    "case_level_overblock_at_k_eq_kreq": 17
+   }
+  },
+  "paired_first_violation": {
+   "C0_vs_C1": {
+    "n": 296,
+    "only_first": 296,
+    "only_second": 0
+   },
+   "C0_vs_C1S": {
+    "n": 296,
+    "only_first": 21,
+    "only_second": 0
+   },
+   "C1S_vs_C1": {
+    "n": 296,
+    "only_first": 275,
+    "only_second": 0
+   }
+  }
+ },
+ "fuzzer_compare_staged": {
+  "C0": {
+   "n": 296,
+   "viol_uniform": 296,
+   "viol_feedback": 296,
+   "n_both_after_turn0": 268,
+   "feedback_faster": 100,
+   "same": 128,
+   "feedback_slower": 40,
+   "median_uniform": 3.0,
+   "median_feedback": 3.0,
+   "mean_uniform": 3.634,
+   "mean_feedback": 3.007
+  },
+  "C1S": {
+   "n": 296,
+   "viol_uniform": 271,
+   "viol_feedback": 258,
+   "n_both_after_turn0": 247,
+   "feedback_faster": 68,
+   "same": 119,
+   "feedback_slower": 60,
+   "median_uniform": 3,
+   "median_feedback": 3,
+   "mean_uniform": 3.741,
+   "mean_feedback": 3.555
+  },
+  "C1": {
+   "n": 296,
+   "viol_uniform": 0,
+   "viol_feedback": 0,
+   "n_both_after_turn0": 0,
+   "feedback_faster": 0,
+   "same": 0,
+   "feedback_slower": 0,
+   "median_uniform": null,
+   "median_feedback": null,
+   "mean_uniform": null,
+   "mean_feedback": null
+  }
+ },
+ "fuzzer_compare_full": {
+  "C0": {
+   "n": 296,
+   "viol_uniform": 296,
+   "viol_feedback": 296,
+   "n_both_after_turn0": 268,
+   "feedback_faster": 41,
+   "same": 215,
+   "feedback_slower": 12,
+   "median_uniform": 2.0,
+   "median_feedback": 2.0,
+   "mean_uniform": 2.164,
+   "mean_feedback": 1.966
+  },
+  "C1S": {
+   "n": 296,
+   "viol_uniform": 274,
+   "viol_feedback": 275,
+   "n_both_after_turn0": 262,
+   "feedback_faster": 73,
+   "same": 134,
+   "feedback_slower": 55,
+   "median_uniform": 3.0,
+   "median_feedback": 3.0,
+   "mean_uniform": 3.405,
+   "mean_feedback": 3.21
+  },
+  "C1": {
+   "n": 296,
+   "viol_uniform": 0,
+   "viol_feedback": 0,
+   "n_both_after_turn0": 0,
+   "feedback_faster": 0,
+   "same": 0,
+   "feedback_slower": 0,
+   "median_uniform": null,
+   "median_feedback": null,
+   "mean_uniform": null,
+   "mean_feedback": null
+  }
+ }
+}

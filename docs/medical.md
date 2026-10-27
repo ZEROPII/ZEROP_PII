@@ -15,6 +15,7 @@ python -m medical audit                          # 기준 집단 사전 점검 (
 python -m medical run --dry-run --limit 6        # 가짜 LLM으로 끝까지 (토큰 0, 숫자는 의미 없음)
 python -m medical run --limit 2 --budget 6       # 실제 LLM 소규모 파일럿 (.env 필요)
 python -m medical report runs/medical/<실행 폴더>   # 집계표 다시 만들기 (LLM 0)
+python -m webdemo                                # 데모 웹앱 (의료진 화면·보안 관제·레드팀, LLM 0) — webdemo/README.md
 ```
 
 | 옵션 | 기본값 | 뜻 |
