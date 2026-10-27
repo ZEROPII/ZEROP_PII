@@ -20,8 +20,8 @@ function setArmPill() {
 }
 
 async function route() {
-  const name = (location.hash.replace("#/", "") || "clinician").split("?")[0];
-  current = routes[name] ? name : "clinician";
+  const name = (location.hash.replace("#/", "") || "security").split("?")[0];
+  current = routes[name] ? name : "security";
   document.querySelectorAll(".nav a").forEach((a) => a.classList.toggle("on", a.dataset.route === current));
   setArmPill();
   const view = document.getElementById("view");

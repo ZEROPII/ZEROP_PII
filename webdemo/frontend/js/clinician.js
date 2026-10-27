@@ -18,7 +18,7 @@ export async function mount(root) {
             <option value="full">전면 공개형 — 처음부터 기록대로</option>
           </select>
           <button id="go" class="btn block">유사 사례 검색</button>
-          <p class="hint">T0014는 결과 보고 슬라이드 18의 대화입니다. 보안 관제 화면에서 같은 대화를 세 조건으로 나란히 볼 수 있습니다.</p>
+          <p class="hint">이 화면은 우리 도구가 지키는 의료 AI 서비스를 의료진 입장에서 흉내 낸 것입니다. 같은 대화를 보안 관제 화면에서 세 조건으로 나란히 볼 수 있습니다. T0014는 결과 보고 슬라이드 18의 대화입니다.</p>
         </div>
       </section>
       <section class="card">

@@ -241,3 +241,6 @@ table.t td.r, table.t th.r { text-align: right; }
 .toast { position: fixed; right: 20px; bottom: 20px; background: var(--text); color: #fff; padding: 10px 16px; border-radius: 10px; font-size: 13.5px; box-shadow: 0 6px 20px rgba(0, 0, 0, .2); z-index: 50; max-width: 420px; }
 .loading { position: fixed; inset: 60px 0 0 0; background: rgba(242, 245, 249, .6); display: grid; place-items: center; z-index: 40; font-size: 14px; color: var(--text-2); }
 .hidden { display: none !important; }
+
+@media (max-width: 1460px) { .target-note { display: none; } }
+@media (max-width: 1240px) { .topbar { gap: 16px; padding: 0 16px; } .nav a { padding: 8px 10px; } .brand small { display: none; } }
