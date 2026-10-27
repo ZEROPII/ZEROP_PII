@@ -67,6 +67,10 @@ export interface ProtectionResult {
   explanation: string;
   kBefore: number;
   kAfter: number;
+  /** 실제 백엔드만: 공개 방식 (RAW · REWRITTEN · REWRITTEN_FALLBACK · REFUSAL · REFUSAL_EXTRACTION_FAILED) */
+  releaseMode?: string;
+  /** 실제 백엔드만: 원 응답 QI 추출 성공 여부. false면 이번 답변의 공개가 k에 반영되지 않았을 수 있다. */
+  extractionOk?: boolean;
 }
 
 // ── 대화 ──────────────────────────────────────────────────────────────────────
@@ -169,6 +173,8 @@ export interface PreflightRiskAssessment {
   affectedAttributes: string[];
   suggestions: SuggestedQuestion[];
   source: DataSource;
+  /** false면 백엔드에 사전 평가 기능이 없다 (실제 연구 모듈에는 질문만으로 k를 계산하는 기능이 없음). */
+  supported?: boolean;
 }
 
 export interface PolicyDecisionRationale {
@@ -202,4 +208,6 @@ export interface SendQuestionResponse {
   assistantMessage: ChatMessage;
   riskState: CaseRiskState;
   newDisclosures: DisclosureHistoryEntry[];
+  /** 이 답변이 다른 사례도 언급해 그 사례의 State가 바뀐 경우, 그 사례들의 최신 상태 (각 사례 State는 따로 쌓인다). */
+  relatedRiskStates?: CaseRiskState[];
 }

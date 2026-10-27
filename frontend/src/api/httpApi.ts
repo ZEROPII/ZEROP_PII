@@ -1,7 +1,7 @@
 // 실제 백엔드 HTTP 구현.
 //
-// 주의: 이 저장소(ZEROP_PII)에는 아직 HTTP API 서버가 없다. 아래 경로는 프론트엔드가 제안하는 명세이며,
-// 백엔드가 만들어지면 그 명세에 맞춰 이 파일만 고치면 된다 (UI 코드는 ClinicalCaseApi만 사용).
+// 백엔드는 저장소 루트의 api_server/ (python -m api_server, 경로 접두사 /api). 아래 경로와 응답 모양이 그대로 맞는다.
+// UI 코드는 ClinicalCaseApi만 사용한다.
 // 인증은 쿠키 세션(credentials: 'include')을 전제로 해 토큰을 브라우저 저장소·로그에 두지 않는다.
 
 import type { CaseId, SendQuestionRequest } from '../types/domain';

@@ -116,7 +116,9 @@ export function ChatPanel() {
               ? '재식별 위험 사전 평가 중…'
               : preflight.status === 'error'
                 ? '사전 평가를 받지 못했습니다 (전송 시 서버가 검증합니다)'
-                : '전송 시 서버가 공개 정책을 다시 검증합니다'}
+                : assessment?.supported === false
+                  ? '사전 위험 평가 미지원 (연구 모듈에 없음) · 전송 시 Defender가 판정합니다'
+                  : '전송 시 서버가 공개 정책을 다시 검증합니다'}
           </span>
         </p>
       </div>

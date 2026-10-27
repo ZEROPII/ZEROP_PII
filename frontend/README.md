@@ -70,8 +70,9 @@ Mock이 알아듣는 질문 (키워드 규칙, `mockData.ts`의 `QI_PATTERNS`·`
 
 ## 실제 백엔드 연동
 
-1. `.env.example`을 `.env.local`로 복사하고 `VITE_API_MODE=http`, `VITE_API_BASE_URL=<주소>` 설정.
-2. 이 저장소에는 아직 HTTP API가 없다. `src/api/httpApi.ts`의 경로는 제안 명세다:
+1. 백엔드 실행: 저장소 루트에서 `python -m api_server` (실제 LLM, `.env` 필요) 또는 `python -m api_server --dry-run` (가짜 LLM). 자세한 것은 `../api_server/README.md`.
+2. `.env.example`을 `.env.local`로 복사하고 `VITE_API_MODE=http`, `VITE_API_BASE_URL=/api` 설정 (개발 서버가 `/api`를 127.0.0.1:8000으로 프록시).
+3. 경로 (백엔드 `api_server`가 모두 구현, 접두사 `/api`):
 
 | 메서드 | 경로 | 응답 타입 |
 |---|---|---|
@@ -86,5 +87,7 @@ Mock이 알아듣는 질문 (키워드 규칙, `mockData.ts`의 `QI_PATTERNS`·`
 | GET | /cases/{id}/disclosures | DisclosureHistory |
 | GET | /cases/{id}/policy-decision | PolicyDecisionRationale |
 
-3. 백엔드 명세가 다르면 `httpApi.ts`(필요하면 응답 변환 함수)만 고친다. UI 컴포넌트는 `ClinicalCaseApi`만 쓰므로 바꿀 필요가 없다.
-4. 백엔드 쪽 대응 관계: `PrivacyAction`은 `medical/defense.py`의 allow · generalize · suppress, `ProtectionPolicy.minK/suppressK`는 `generalize_threshold/suppress_threshold`, `arm`은 C0 · C1 · C1S.
+   http 모드에서 사전 위험 평가(preflight)는 연구 모듈에 해당 기능이 없어 `supported: false`로 오고, 입력창 아래에 미지원으로 표시된다.
+   사례 목록에는 검색 순위·유사도만 오고 사례 진단명은 오지 않는다 (Defender를 거치지 않은 공개가 되므로).
+4. 백엔드 명세가 다르면 `httpApi.ts`(필요하면 응답 변환 함수)만 고친다. UI 컴포넌트는 `ClinicalCaseApi`만 쓰므로 바꿀 필요가 없다.
+5. 백엔드 쪽 대응 관계: `PrivacyAction`은 `medical/defense.py`의 allow · generalize · suppress, `ProtectionPolicy.minK/suppressK`는 `generalize_threshold/suppress_threshold`, `arm`은 C0 · C1 · C1S.

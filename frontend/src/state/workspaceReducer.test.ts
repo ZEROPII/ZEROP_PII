@@ -74,6 +74,22 @@ describe('workspaceReducer', () => {
     expect(s.riskStates.data!.a.k).toBe(7);
   });
 
+  it('다른 사례가 함께 언급되면 그 사례의 위험 상태만 갱신하고 대화는 섞지 않는다', () => {
+    let s = seeded();
+    const response: SendQuestionResponse = {
+      userMessage: msg('u', 'a', 'user'),
+      assistantMessage: msg('ai', 'a', 'assistant'),
+      riskState: risk('a', 7, 4),
+      newDisclosures: [],
+      relatedRiskStates: [risk('b', 12, 4)],
+    };
+    s = workspaceReducer(s, { type: 'send/success', caseId: 'a', clientMessageId: 'u', response });
+    expect(s.riskStates.data!.b.k).toBe(12);
+    expect(s.sessions.b.data!.messages).toHaveLength(0);
+    expect(s.disclosures.b.status).toBe('idle');
+    expect(s.disclosures.a.status).toBe('success');
+  });
+
   it('전송 실패는 메시지를 failed로 두고 sendError를 남긴다', () => {
     let s = seeded();
     s = workspaceReducer(s, { type: 'send/start', caseId: 'a', pending: msg('tmp', 'a', 'user', 'pending') });

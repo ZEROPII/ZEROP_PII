@@ -149,7 +149,16 @@ export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction)
           },
         };
       }
-      return applyRiskState(next, riskState);
+      next = applyRiskState(next, riskState);
+      // 다른 사례가 함께 언급돼 그 사례의 State가 바뀌었으면 위험 상태를 갱신하고, 공개 이력은 다음 선택 때 다시 불러온다.
+      for (const related of action.response.relatedRiskStates ?? []) {
+        if (related.caseId === action.caseId) continue;
+        next = applyRiskState(next, related);
+        if (next.disclosures[related.caseId]) {
+          next = { ...next, disclosures: { ...next.disclosures, [related.caseId]: { status: 'idle' } } };
+        }
+      }
+      return next;
     }
 
     case 'send/failure':
