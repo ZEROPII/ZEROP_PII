@@ -16,7 +16,12 @@ python -m medical run --dry-run --limit 6        # 가짜 LLM으로 끝까지 (�
 python -m medical run --limit 2 --budget 6       # 실제 LLM 소규모 파일럿 (.env 필요)
 python -m medical report runs/medical/<실행 폴더>   # 집계표 다시 만들기 (LLM 0)
 python -m webdemo                                # 데모 웹앱 (의료진 화면·보안 관제·레드팀, LLM 0) — webdemo/README.md
+python -m medical.extract_accuracy runs/medical/<실행 폴더>             # 단서 추출 재현율·정밀도 (LLM 0, 실제 LLM 실행 기록에 쓴다)
+python -m medical reextract runs/medical/<실행 폴더> --limit 1000      # 기록된 원 응답에 지금 추출기 프롬프트만 다시 적용 (.env 필요, 답 수만큼 호출)
+python -m medical.extract_accuracy runs/medical/<실행 폴더> --reextract # 다시 뽑은 결과로 재기
 ```
+
+단서 추출 정확도의 정답은 원 응답의 '사례N' 구간에 사실표 값이 정해진 표기로 나온 것만 자동으로 센다(바꿔 말한 표현, 연도만, 나이 범위, 주 이름만은 빠짐). 사람 검토 전 기준이므로 표본을 사람이 확인해 보정한다. 결정적 응답기 실행에는 쓰지 않는다(추출기가 응답기 줄 형식을 읽으므로 100%).
 
 | 옵션 | 기본값 | 뜻 |
 | --- | --- | --- |

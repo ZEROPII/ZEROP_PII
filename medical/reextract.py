@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import collections
 import glob
+import hashlib
 import json
 import unicodedata
 from pathlib import Path
@@ -48,7 +49,8 @@ def reextract(run_dir: Path, limit: int = 4, model: str | None = None) -> list[d
         obs = parse_json(text, "array")
         v = view_of([o for o in (obs or []) if isinstance(o, dict)], raw, r["query_text"], nz)
         status = collections.Counter(o["mapping_status"] for os_ in v.normalized.values() for o in os_)
-        rec = dict(trial_id=r["trial_id"], turn=r.get("turn"), parsed=obs is not None, n_obs=len(obs or []),
+        rec = dict(trial_id=r["trial_id"], turn=r.get("turn"), raw_sha=hashlib.sha1(raw.encode("utf-8")).hexdigest(),
+                   observations=[o for o in (obs or []) if isinstance(o, dict)], parsed=obs is not None, n_obs=len(obs or []),
                    cases=v.case_refs, status=dict(status),
                    unmapped=[o["raw_value"] for os_ in v.normalized.values() for o in os_ if o["mapping_status"] == "UNMAPPED"][:15],
                    old_n_obs=len(r.get("raw_observations") or []), old_ok=r.get("extraction_ok"))
