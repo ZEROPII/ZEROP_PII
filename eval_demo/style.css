@@ -1,0 +1,102 @@
+:root{
+  --nav:#162b6a; --navy:#1e2c91; --ink:#141c3c; --mute:#6b7694; --line:#dfe4ef; --bg:#f3f5f9; --paper:#fff; --zebra:#f6f7fb;
+  --red:#c62530; --teal:#188474; --blue:#4a6cf7; --slate:#5e6576; --tint:#eef1ff; --green:#4cd98a;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:'Pretendard','Noto Sans KR','Malgun Gothic','Apple SD Gothic Neo',system-ui,sans-serif;line-height:1.5}
+a{color:var(--navy)}
+[hidden]{display:none!important}
+
+/* ── 상단 앱 바 (Clinical Case Finder) ── */
+.appbar{display:flex;align-items:center;gap:20px;flex-wrap:wrap;padding:12px 28px;background:var(--nav);color:#fff}
+.brand{display:flex;align-items:center;gap:12px}
+.brand b{font-size:20px;white-space:nowrap;letter-spacing:-.01em}
+.brand small{font-size:13px;color:#9fb0e6}
+.logo{width:34px;height:34px;border-radius:9px;background:#4a74d6;position:relative;flex:none}
+.logo::after{content:"";position:absolute;inset:9px;border-radius:50%;border:4px solid #fff;background:#4a74d6}
+.tabs{display:flex;gap:6px;flex-wrap:wrap}
+.tabs a{color:#cfd9f7;text-decoration:none;padding:8px 10px;border-radius:8px;font-size:15px;white-space:nowrap}
+.tabs a:hover{color:#fff}
+.tabs a[aria-current="page"]{color:#fff;background:rgba(255,255,255,.14)}
+.right{margin-left:auto;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.mode{display:flex;align-items:center;gap:8px;padding:5px 10px 5px 14px;border:1px solid #3c5199;border-radius:999px;font-size:15px}
+.dot{width:9px;height:9px;border-radius:50%;background:var(--green)}
+.dot.off{background:#ff6b73}
+.mode select{font:inherit;color:#fff;background:#24397e;border:0;border-radius:999px;padding:6px 10px;cursor:pointer}
+.mode select option{color:#141c3c;background:#fff}
+.target{font-size:12px;color:#b9c6ef;white-space:nowrap}
+a:focus-visible,button:focus-visible,select:focus-visible,input:focus-visible{outline:3px solid #8fa0ff;outline-offset:2px}
+
+/* ── 본문 ── */
+.page{max-width:1240px;margin:0 auto;padding:24px}
+.panel{background:var(--paper);border:1px solid var(--line);border-radius:12px;padding:32px}
+.panel h2{margin:36px 0 6px}
+.panel>h2:first-child{margin-top:0}
+h1{margin:0;font-size:24px;letter-spacing:-.01em}
+h2{font-size:20px;letter-spacing:-.01em}
+.hint{margin:0 0 14px;font-size:14px;color:var(--mute)}
+.head{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.panel .head+*{margin-top:28px}
+.switch{font-size:14px;color:var(--navy);cursor:pointer;display:flex;align-items:center;gap:6px}
+
+/* 이미지 4: 2×2 요약 */
+.kpis{display:grid;grid-template-columns:1fr 1fr;gap:34px 80px;max-width:820px}
+.kpi .l{font-size:18px;color:#555}
+.kpi .v{margin:4px 0 2px;font-size:36px;font-weight:800;letter-spacing:-.02em;line-height:1.2}
+.kpi .v.pending{font-size:26px;color:var(--mute);font-weight:700}
+.kpi .c{font-size:15px;color:#555}
+.good{color:var(--teal)}
+.note{margin:26px 0 0;font-size:14px;color:#555}
+
+.controls{display:flex;flex-wrap:wrap;gap:12px 28px;align-items:center;margin-top:32px!important;padding:14px 16px;background:var(--tint);border-radius:10px}
+.seg{display:flex;align-items:center;gap:10px}
+.seg-label{font-size:13px;font-weight:700;color:var(--navy)}
+.seg>div{display:flex;gap:6px}
+button{font:inherit;font-size:14px;border:1px solid #cfd6ee;background:#fff;color:var(--navy);border-radius:999px;padding:6px 14px;cursor:pointer}
+button[aria-pressed="true"]{background:var(--navy);border-color:var(--navy);color:#fff}
+.cond{margin:0;font-size:13px;color:var(--navy)}
+.filters{display:flex;gap:6px;flex-wrap:wrap;margin:10px 0 14px}
+
+.wrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px}
+table{width:100%;border-collapse:collapse;font-size:14px;min-width:900px}
+th{background:var(--navy);color:#fff;padding:12px 10px;font-weight:700;white-space:nowrap}
+td{padding:12px 10px;border-bottom:1px solid #e6e9f1;vertical-align:middle}
+tbody tr:nth-child(even){background:var(--zebra)}
+tbody tr:last-child td{border-bottom:0}
+td.metric{font-weight:700;text-align:center;font-size:15px;white-space:nowrap}
+td.left{text-align:left}
+td.dir{text-align:center;white-space:nowrap;font-weight:700}
+.dir.down{color:var(--red)}.dir.up{color:var(--teal)}.dir.more{color:var(--blue)}.dir.neutral{color:var(--slate)}
+td.res{min-width:190px}
+.res b{display:block;font-size:15px}
+.res small,.memo{display:block;font-size:12px;color:var(--mute);line-height:1.4}
+.pending{color:var(--mute)}
+.pill{display:inline-block;min-width:76px;text-align:center;border-radius:999px;padding:6px 12px;color:#fff;font-size:12px;font-weight:700;white-space:nowrap}
+.pill.protect{background:var(--red)}.pill.utility{background:var(--teal)}.pill.explore{background:var(--blue)}.pill.speed{background:var(--slate)}.pill.extract{background:var(--navy)}
+.state{display:inline-block;font-size:12px;font-weight:700;border-radius:6px;padding:2px 8px;margin-right:6px}
+.state.done{background:#dff3ee;color:var(--teal)}.state.todo{background:#eceef4;color:var(--slate)}.state.graph{background:var(--tint);color:var(--navy)}.state.demo{background:#fff1d6;color:#9a6200}
+.foot{font-size:12px;line-height:1.7;margin:12px 0 0;color:var(--mute)}
+.process{margin:16px 0 0;padding:14px 16px;background:var(--tint);border-radius:10px;color:var(--navy);font-weight:700;font-size:14px}
+
+.two{display:grid;grid-template-columns:1.5fr 1fr;gap:40px}
+.chart{border:1px solid var(--line);border-radius:10px;padding:8px;background:#fff;touch-action:pan-y}
+.chart svg{display:block;width:100%;height:auto}
+.readout{min-height:1.6em;margin:8px 0 0;font-size:13px;color:var(--navy)}
+.bars{display:grid;gap:18px;margin-top:6px}
+.bar .row{display:flex;justify-content:space-between;font-size:14px;margin-bottom:6px}
+.bar .row b{font-size:16px}
+.track{height:14px;background:#e8ebf5;border-radius:7px;overflow:hidden}
+.fill{height:100%;border-radius:7px;background:var(--slate);transition:width .5s ease}
+.bar.ours .fill{background:var(--teal)}
+.bar small{display:block;margin-top:4px;color:var(--mute);font-size:12px}
+
+.facts{display:grid;grid-template-columns:max-content 1fr;gap:10px 28px;margin:0;font-size:15px}
+.facts dt{color:var(--mute)}.facts dd{margin:0;font-weight:700}
+
+@media (max-width:860px){
+  .appbar{padding:12px 16px;gap:14px}.right{margin-left:0}
+  .page{padding:10px}.panel{padding:18px}
+  .kpis{grid-template-columns:1fr 1fr;gap:24px 24px}.kpi .v{font-size:28px}
+  .two{grid-template-columns:1fr;gap:32px}
+}
+@media (prefers-reduced-motion:reduce){.fill{transition:none}}

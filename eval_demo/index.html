@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Clinical Case Finder · ZEROP_PII 데모</title>
+  <meta name="description" content="Clinical Case Finder — 비식별화 성능 평가 대시보드">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="appbar">
+  <div class="brand">
+    <span class="logo" aria-hidden="true"></span>
+    <b>Clinical Case Finder</b>
+    <small>ZEROP_PII 데모</small>
+  </div>
+  <nav class="tabs" id="tabs" aria-label="화면 이동">
+    <a href="#monitor" data-tab="monitor">보안 관제</a>
+    <a href="#targets" data-tab="targets">검사 대상 서비스</a>
+    <a href="#redteam" data-tab="redteam">레드팀 실행</a>
+    <a href="#poc" data-tab="poc">POC 결과</a>
+  </nav>
+  <div class="right">
+    <label class="mode">
+      <span class="dot" id="dot"></span>
+      <span id="modeName">보호 모드</span>
+      <select id="armSel" aria-label="방어 조건"></select>
+    </label>
+    <span class="target">대상 AI: 결정적 응답기 · LLM 호출 없음</span>
+  </div>
+</header>
+
+<main class="page">
+  <section class="panel" data-tab="monitor" hidden>
+    <h2>보안 관제</h2>
+    <p class="hint">대화가 쌓이면서 “이 환자일 수 있는 사람”이 몇 명으로 좁혀지는지(k)를 턴마다 살펴보는 화면입니다.
+      현재는 <a href="#poc">POC 결과</a>의 턴별 그래프로 확인할 수 있습니다.</p>
+    <dl class="facts" id="factsMonitor"></dl>
+  </section>
+
+  <section class="panel" data-tab="targets" hidden>
+    <h2>검사 대상 서비스</h2>
+    <p class="hint">점검 대상 AI와 비교 명단 조건입니다.</p>
+    <dl class="facts" id="factsTargets"></dl>
+  </section>
+
+  <section class="panel" data-tab="redteam" hidden>
+    <h2>레드팀 실행</h2>
+    <p class="hint">공격 질문을 고르는 두 가지 방식과 실행 조건입니다.</p>
+    <dl class="facts" id="factsRedteam"></dl>
+  </section>
+
+  <section class="panel" data-tab="poc" hidden>
+    <div class="head">
+      <h1>비식별화 성능 평가 대시보드</h1>
+      <label class="switch"><input type="checkbox" id="demo"> 화면 예시값 보기</label>
+    </div>
+    <div class="kpis" id="kpis"></div>
+    <p class="note" id="kpiNote"></p>
+
+    <div class="controls" aria-label="실험 조건 선택">
+      <div class="seg" role="group" aria-label="시나리오"><span class="seg-label">시나리오</span><div id="segScenario"></div></div>
+      <div class="seg" role="group" aria-label="질문 선택 방식"><span class="seg-label">질문 선택 방식</span><div id="segFuzzer"></div></div>
+      <p class="cond" id="cond"></p>
+    </div>
+
+    <h2>평가 지표</h2>
+    <div class="filters" id="filters" role="group" aria-label="구분 필터"></div>
+    <div class="wrap">
+      <table id="metricTable">
+        <thead><tr><th>구분</th><th>지표</th><th>뜻</th><th>좋은 방향</th><th>결과</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <p class="foot" id="foot1"></p>
+
+    <div class="two">
+      <div>
+        <h2>턴이 지날수록 위반이 쌓이는 속도</h2>
+        <p class="hint">누적 위반율: 환자 후보가 5명 미만으로 좁혀진 환자의 비율. 낮을수록 좋습니다.</p>
+        <div class="chart" id="chart" role="img" aria-label="턴별 누적 위반율 선 그래프"></div>
+        <p class="readout" id="readout" aria-live="polite">그래프 위에 마우스를 올리거나 터치하면 턴별 값이 보입니다.</p>
+      </div>
+      <div>
+        <h2>위반 0%일 때 남는 정보</h2>
+        <p class="hint">정보 유지율은 높을수록 좋습니다. SynthPAI 실험(실제 LLM 응답) 기준입니다.</p>
+        <div class="bars" id="bars"></div>
+      </div>
+    </div>
+
+    <h2>방어 조건별 비교</h2>
+    <div class="wrap">
+      <table id="armTable">
+        <thead><tr><th>조건</th><th>8턴 위반율</th><th>끝까지 본 위반율</th><th>첫 위반 턴(중앙값)</th><th>평균 유용 점수</th><th>수정해서 내보낸 비율</th><th>과잉 수정률</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <p class="foot" id="foot2"></p>
+
+    <h2>전체 평가 지표 22개</h2>
+    <div class="filters" id="filters22" role="group" aria-label="영역 필터"></div>
+    <div class="wrap">
+      <table id="allTable">
+        <thead><tr><th>평가 영역</th><th>지표 항목</th><th>정의 / 측정 방법</th><th>좋은 방향</th><th>결과</th><th>메모 / 산출 기준</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <p class="foot" id="foot3"></p>
+    <p class="process">평가 순서: ① 보안 기준 통과 여부 → ② 정보 유지율 · 후속 과업 성능 → ③ 평균/p95 처리 시간 · 비용 → ④ 보호–활용 Pareto 분석</p>
+  </section>
+</main>
+
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
