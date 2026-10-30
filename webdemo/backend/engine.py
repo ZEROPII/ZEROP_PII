@@ -126,14 +126,15 @@ class Engine:
         return out
 
     # ── 세션 ──
-    def new_session(self, trial_id: str, profile: str = "staged", fuzzer: str = "uniform") -> "Session":
+    def new_session(self, trial_id: str, profile: str = "staged", fuzzer: str = "uniform", *, source: str = "manual",
+                    budget: int | None = None) -> "Session":
         if trial_id not in self.trial_of:
             raise DemoError(f"없는 trial입니다: {trial_id}")
         if profile not in PROFILES or fuzzer not in FUZZERS:
             raise DemoError("profile은 staged|full, fuzzer는 uniform|feedback 중 하나입니다.")
         with self.lock:
             sid = f"S{next(self._ids):04d}"
-            s = Session(self, sid, trial_id, profile, fuzzer)
+            s = Session(self, sid, trial_id, profile, fuzzer, source=source, budget=budget)
             self.sessions[sid] = s
             self._trim_usage()
             return s
@@ -166,13 +167,17 @@ class Engine:
 # ── 세션 ────────────────────────────────────────────────────
 
 class Session:
-    def __init__(self, eng: Engine, sid: str, trial_id: str, profile: str, fuzzer: str) -> None:
+    def __init__(self, eng: Engine, sid: str, trial_id: str, profile: str, fuzzer: str, *, source: str = "manual",
+                 budget: int | None = None) -> None:
         self.eng, self.id, self.trial_id, self.profile, self.fuzzer = eng, sid, trial_id, profile, fuzzer
         self.ctx = eng.ctx[profile]
         self.cfg = self.ctx.cfg
+        self.budget = budget or self.cfg.budget_B           # 의료진 화면 대화는 더 길게 쓸 수 있게 늘린다
+        self.source = source                                # clinic(의료진 화면) · simulation(시작할 때 돌린 레드팀 대화) · manual
         pid, qt = eng.trial_of[trial_id]
         self.patient_id, self.qtype = pid, qt
-        self.created = time.time()
+        self.created = self.last_active = time.time()
+        self.review: dict[str, Any] | None = None           # 보안 담당자 검토 표시 (관제 화면)
         p = self.prefix = make_prefix(self.ctx, trial_id, pid, qt, "DOCTOR")
         self.logs: dict[str, list[dict[str, Any]]] = {a: [] for a in ARMS}
         self.runs = {a: ArmRun(self.ctx, p, a, self.logs[a].append) for a in ARMS}
@@ -194,15 +199,17 @@ class Session:
         r = self.runs[arm]
         return r.order[0] if r.order else None
 
-    def _state(self, arm: str) -> tuple[str, dict[Any, str]]:
-        A = self.case_a(arm)
+    def _state(self, arm: str, case: str | None = None) -> tuple[str, dict[Any, str]]:
+        """case를 주면 그 사례(의료진이 고른 탭)를 기준으로, 없으면 검색 1순위 사례(POC와 같음)를 기준으로."""
+        A = case or self.case_a(arm)
         if A is None:
             raise DemoError("사례 검색 답변에 사례가 없어 이어서 물을 수 없습니다.")
-        return A, self.ctx.kc.reduce(self.runs[arm].cases[A].committed)[0]
+        c = self.runs[arm].cases.get(A)
+        return A, self.ctx.kc.reduce(c.committed)[0] if c and c.committed else {}
 
-    def _key_for(self, arm: str, seed: dict[str, Any]) -> tuple[Any, str | None]:
+    def _key_for(self, arm: str, seed: dict[str, Any], case: str | None = None) -> tuple[Any, str | None]:
         """그 조건의 공개 상태에서 Seed가 무엇을 좁힐지. (key, 메모). key가 None이면 그 조건은 이 질문을 건너뛴다."""
-        _, state = self._state(arm)
+        _, state = self._state(arm, case)
         kc, data = self.ctx.kc, self.ctx.data
         key = target(seed, state, kc.node, data.children, True)
         if key is not None:
@@ -214,24 +221,25 @@ class Session:
             return keys[0], "더 좁힐 하위 값이 없거나 사건이 정해지지 않은 상태에서 다시 묻는 질문입니다."
         return None, "이 조건에서는 그 단서가 공개되지 않아 '더 자세히' 물을 값이 없습니다."
 
-    def _fill(self, arm: str, seed: dict[str, Any], key: Any) -> str:
-        A, state = self._state(arm)
-        evtxt = {f"{A}:{g}": v for g, v in self.runs[arm].cases[A].events.items()}
+    def _fill(self, arm: str, seed: dict[str, Any], key: Any, case: str | None = None) -> str:
+        A, state = self._state(arm, case)
+        c = self.runs[arm].cases.get(A)
+        evtxt = {f"{A}:{g}": v for g, v in c.events.items()} if c else {}
         subj = f"{A} 환자" if seed.get("scope") != "GROUP" else "검색된 사례 전체"
         return fill_seed(seed, key, state, self.ctx.data.N, subj, evtxt)
 
-    def _intent(self, arm: str, seed: dict[str, Any], key: Any) -> dict[str, Any]:
-        r, A = self.runs[arm], self.case_a(arm)
+    def _intent(self, arm: str, seed: dict[str, Any], key: Any, case: str | None = None) -> dict[str, Any]:
+        r, A = self.runs[arm], case or self.case_a(arm)
         return dict(kind="FOLLOW", seed=seed, key=key, case_A=A, qtype=self.qtype,
                     said={ref: [d["node_id"] for d in c.committed] for ref, c in r.cases.items()},
                     events={ref: list(c.events) for ref, c in r.cases.items()})
 
     # ── 질문 후보 ──
-    def questions(self, arm: str = "C1") -> list[dict[str, Any]]:
+    def questions(self, arm: str = "C1", case: str | None = None) -> list[dict[str, Any]]:
         """화면에 보이는 조건의 공개 상태에서 지금 물을 수 있는 Seed (이미 쓴 것 제외)."""
-        if self.turn >= self.cfg.budget_B:
+        if self.turn >= self.budget:
             return []
-        A, state = self._state(arm)
+        A, state = self._state(arm, case)
         kc, data = self.ctx.kc, self.ctx.data
         sent = set(self.runs[arm].sent)
         out = []
@@ -241,7 +249,7 @@ class Session:
             key = target(s, state, kc.node, data.children, True)
             if key is None:
                 continue
-            text = self._fill(arm, s, key)
+            text = self._fill(arm, s, key, case)
             if text in sent:
                 continue
             out.append(dict(seed_id=s["seed_id"], text=text, target_qi=s["target_qi"], target_qi_2=s.get("target_qi_2"),
@@ -252,16 +260,16 @@ class Session:
         return out
 
     # ── 보내기 전 확인 ──
-    def preview(self, seed_id: str, arm: str = "C1") -> dict[str, Any]:
+    def preview(self, seed_id: str, arm: str = "C1", case: str | None = None, text: str | None = None) -> dict[str, Any]:
         """이 질문에 대상 AI가 기록대로 답하면 사례별 후보 수가 어떻게 되는지 (State는 바꾸지 않는다)."""
         seed = self._seed(seed_id)
-        key, note = self._key_for(arm, seed)
+        key, note = self._key_for(arm, seed, case)
         if key is None:
             return dict(seed_id=seed_id, applicable=False, note=note, cases=[])
         r = self.runs[arm]
-        q = self._fill(arm, seed, key)
+        q = text or self._fill(arm, seed, key, case)
         raw = self.ctx.llm.complete("target", self.prefix.system, r.msgs + [{"role": "user", "content": q}], docs=self.prefix.docs,
-                                    intent=self._intent(arm, seed, key))
+                                    intent=self._intent(arm, seed, key, case))
         obs, ok, _ = extract(self.ctx, q, raw, known_cases_json(r.cases, r.order), self.prefix.docs)
         v = view_of(obs, raw, q, self.ctx.nz)
         kc, d = self.ctx.kc, self.ctx.defender
@@ -279,7 +287,7 @@ class Session:
             cases.append(dict(ref=ref, k_now=k_now, k_if_raw=k_raw, below=1 <= k_raw < self.cfg.k_req,
                               attributes=sorted({ATTR_KO.get(x["attribute"], x["attribute"]) for x in new}),
                               defender=dict(gate) if gate is not None else None))
-        alt = [x for x in self.questions(arm) if x["seed_id"] != seed_id and x["target_qi"] not in ("PERIOD", seed["target_qi"])][:2]
+        alt = [x for x in self.questions(arm, case) if x["seed_id"] != seed_id and x["target_qi"] not in ("PERIOD", seed["target_qi"])][:2]
         self.eng._trim_usage()
         return dict(seed_id=seed_id, applicable=True, note=note, question=q, cases=cases,
                     warn=any(c["below"] for c in cases), alternatives=alt)
@@ -292,8 +300,8 @@ class Session:
     # ── 한 턴 ──
     def step(self, seed_id: str | None = None, arm: str = "C1") -> dict[str, Any]:
         """seed_id가 없으면 퍼저가 고른다 (화면 조건의 State 기준, POC와 같은 규칙)."""
-        if self.turn >= self.cfg.budget_B:
-            raise DemoError(f"질문 예산 {self.cfg.budget_B}턴을 다 썼습니다.")
+        if self.turn >= self.budget:
+            raise DemoError(f"질문 예산 {self.budget}턴을 다 썼습니다.")
         A, state = self._state(arm)
         picked_by = "clinician"
         while True:
@@ -317,21 +325,28 @@ class Session:
             if seed_id is not None:
                 raise DemoError("이 질문은 이미 같은 문장으로 보냈거나 검사를 통과하지 못했습니다. 다른 질문을 고르세요.")
 
-    def _send(self, seed: dict[str, Any], op: str, primary: str, picked_by: str) -> dict[str, Any] | None:
+    def _send(self, seed: dict[str, Any], op: str, primary: str, picked_by: str, case: str | None = None,
+              text: str | None = None) -> dict[str, Any] | None:
+        """case·text는 의료진이 직접 쓴 질문용: 그 사례를 기준으로, 질문 문장은 의료진이 쓴 그대로 세 조건에 보낸다."""
         turn = self.turn + 1
-        kA_before = self.runs[primary].cases[self.case_a(primary)].k_hist[-1]
+        A0 = case or self.case_a(primary)
+        c0 = self.runs[primary].cases.get(A0)
+        kA_before = c0.k_hist[-1] if c0 and c0.k_hist else self.ctx.p_ref
         prepared: dict[str, Any] = {}
         for a in ARMS:
-            key, note = self._key_for(a, seed)
+            key, note = self._key_for(a, seed, case)
             if key is None:
                 prepared[a] = dict(status="SKIPPED", note=note)
                 continue
             try:
-                filled = self._fill(a, seed, key)
+                filled = self._fill(a, seed, key, case)
             except (KeyError, IndexError):
                 prepared[a] = dict(status="SKIPPED", note="이 조건의 공개 상태로는 질문 문장을 채울 수 없습니다.")
                 continue
-            A = self.case_a(a)
+            if text is not None:
+                prepared[a] = dict(status="READY", key=key, note=note, q=text, filled=filled, tries=[])
+                continue
+            A = case or self.case_a(a)
             subj = f"{A} 환자" if seed.get("scope") != "GROUP" else "검색된 사례 전체"
             q, tries = realize(self.ctx.llm, self.cfg, filled, seed["target_qi"], seed["attack_objective"], seed["variant"],
                                subj, op, "DOCTOR", self.runs[a].sent)
@@ -352,21 +367,29 @@ class Session:
             r._turn(turn, pr["q"], None, None, None, 0,
                     dict(seed_id=seed["seed_id"], target_qi=seed["target_qi"], target_qi_2=seed.get("target_qi_2"), variant=seed["variant"],
                          scope=seed.get("scope"), relation=seed.get("expected_relation"), objective=seed["attack_objective"], operator=op,
-                         filled_seed=pr["filled"], realization_fallback=False, checks=pr["tries"], regenerations=len(pr["tries"]) - 1,
+                         filled_seed=pr["filled"], realization_fallback=False, checks=pr["tries"], regenerations=max(len(pr["tries"]) - 1, 0),
                          fuzzer=self.fuzzer if picked_by.startswith("fuzzer") else None,
                          fuzzer_strategy=self.selector.strategy if self.selector else None, picked_by=picked_by),
-                    intent=self._intent(a, seed, pr["key"]))
+                    intent=self._intent(a, seed, pr["key"], case))
             pr["status"] = "ANSWERED"
-        if self.selector is not None:
-            self.selector.observe(kA_before, self.runs[primary].cases[self.case_a(primary)].k_hist[-1])
-        self.steps.append(dict(turn=turn, seed_id=seed["seed_id"], picked_by=picked_by, operator=op,
+        if self.selector is not None and A0 in self.runs[primary].cases:
+            self.selector.observe(kA_before, self.runs[primary].cases[A0].k_hist[-1])
+        self.steps.append(dict(turn=turn, seed_id=seed["seed_id"], picked_by=picked_by, operator=op, case=case,
                                arms={a: dict(status=prepared[a]["status"], note=prepared[a].get("note")) for a in ARMS}))
+        self.last_active = time.time()
         self.eng._trim_usage()
         return dict(turn=turn, seed_id=seed["seed_id"], picked_by=picked_by, arms=self.steps[-1]["arms"])
 
+    def ask(self, seed: dict[str, Any], case: str, text: str, primary: str = "C1") -> dict[str, Any] | None:
+        """의료진이 쓴 질문 한 건. 질문 뜻에 맞는 Seed를 받아 그 사례 기준으로 세 조건에 보낸다. 화면 조건에서 못 물으면 None."""
+        if self.turn >= self.budget:
+            raise DemoError(f"이 대화의 질문 예산 {self.budget}턴을 다 썼습니다. 새 환자로 다시 시작하세요.")
+        op = self.rng.choice(applicable_ops(seed, self.cfg.operators))
+        return self._send(seed, op, primary, "clinician", case=case, text=text)
+
     def run_to_end(self, arm: str = "C1") -> int:
         n = 0
-        while self.turn < self.cfg.budget_B:
+        while self.turn < self.budget:
             try:
                 self.step(None, arm)
             except DemoError:
@@ -437,7 +460,8 @@ class Session:
     def _summary(self) -> dict[str, Any]:
         return dict(id=self.id, trial_id=self.trial_id, patient=self.patient_id[:8], qtype=self.qtype, qtype_label=QTYPE_KO[self.qtype],
                     profile=self.profile, profile_label=PROFILE_KO[self.profile], fuzzer=self.fuzzer, fuzzer_label=FUZZER_KO[self.fuzzer],
-                    turn=self.turn, budget=self.cfg.budget_B, k_req=self.cfg.k_req, p_ref=self.ctx.p_ref,
+                    turn=self.turn, budget=self.budget, k_req=self.cfg.k_req, p_ref=self.ctx.p_ref, source=self.source,
+                    created=self.created, last_active=self.last_active, review=self.review,
                     panel=[dict(label=lab, value=self.prefix.binding["panel"][k]) for k, lab in PANEL_LABEL])
 
     def clinician_view(self, arm: str = "C1") -> dict[str, Any]:
