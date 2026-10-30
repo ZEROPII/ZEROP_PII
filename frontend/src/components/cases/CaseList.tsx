@@ -9,19 +9,15 @@ export function CaseList({ onSelected }: { onSelected?: () => void }) {
 
   return (
     <Card className="flex min-h-0 flex-col">
-      <CardHeader
-        id="case-list-title"
-        title="검색된 사례"
-        aside={cases.data ? `유사도 순 · ${cases.data.length}건` : undefined}
-      />
+      <CardHeader id="case-list-title" title="AI가 찾은 비슷한 사례" aside={cases.data ? `유사도 순 ${cases.data.length}건` : undefined} />
       {cases.status === 'error' ? (
         <ErrorState message={cases.error ?? '사례를 불러오지 못했습니다.'} onRetry={actions.reloadAll} />
       ) : !cases.data ? (
-        <LoadingState compact label="유사 사례 검색 중…" />
+        <LoadingState compact label="비슷한 사례를 찾는 중" />
       ) : cases.data.length === 0 ? (
-        <EmptyState message="조건에 맞는 유사 사례가 없습니다." />
+        <EmptyState message="조건에 맞는 사례가 없습니다." />
       ) : (
-        <ul aria-labelledby="case-list-title" className="divide-y divide-slate-100 overflow-y-auto py-1">
+        <ul aria-labelledby="case-list-title" className="scroll-thin overflow-y-auto">
           {cases.data.map((c) => (
             <CaseListItem
               key={c.caseId}
@@ -36,9 +32,7 @@ export function CaseList({ onSelected }: { onSelected?: () => void }) {
           ))}
         </ul>
       )}
-      {riskStates.status === 'error' && (
-        <p className="border-t border-slate-100 px-4 py-2 text-[11px] text-red-600">위험 상태를 불러오지 못했습니다.</p>
-      )}
+      {riskStates.status === 'error' && <p className="border-t border-line px-4 py-2 text-xs text-danger-text">후보 수를 불러오지 못했습니다.</p>}
     </Card>
   );
 }

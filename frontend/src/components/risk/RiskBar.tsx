@@ -19,20 +19,15 @@ export function RiskBar({ risk, threshold, max }: Props) {
   const marker = logPosition(threshold, max);
   return (
     <div
-      className="relative h-2 rounded-full bg-slate-100"
+      className="relative h-2 rounded-full bg-surface-2"
       role="meter"
       aria-valuemin={1}
       aria-valuemax={max}
       aria-valuenow={risk.k}
-      aria-valuetext={`후보 수 k ${risk.k}, ${risk.statusLabel}, 기준 k ${threshold}`}
+      aria-valuetext={`후보 ${risk.k}명, ${risk.statusLabel}, 기준 ${threshold}명`}
     >
-      <div className={`h-full rounded-full transition-[width] duration-500 ${RISK_TONE[risk.riskLevel].bar}`} style={{ width: `${width}%` }} />
-      <span
-        className="absolute -top-1 h-4 w-0.5 rounded bg-slate-700"
-        style={{ left: `calc(${marker}% - 1px)` }}
-        title={`기준 k = ${threshold}`}
-        aria-hidden
-      />
+      <div className={`h-full rounded-full transition-[width] duration-500 ease-zp ${RISK_TONE[risk.riskLevel].bar}`} style={{ width: `${width}%` }} />
+      <span className="absolute -top-1 h-4 w-0.5 rounded bg-ink" style={{ left: `calc(${marker}% - 1px)` }} title={`기준 ${threshold}명`} aria-hidden />
     </div>
   );
 }
@@ -41,13 +36,13 @@ export function RiskBar({ risk, threshold, max }: Props) {
 export function RiskAxis({ threshold, max }: { threshold: number; max: number }) {
   const ticks = [1, 10, 100, max].filter((t, i, arr) => t <= max && arr.indexOf(t) === i);
   return (
-    <div className="relative mt-1 h-4 text-[10px] tabular-nums text-slate-400" aria-hidden>
+    <div className="num relative mt-1 h-4 text-[11px] text-ink-3" aria-hidden>
       {ticks.map((t) => (
         <span key={t} className="absolute -translate-x-1/2 first:translate-x-0 last:-translate-x-full" style={{ left: `${logPosition(t, max)}%` }}>
           {t}
         </span>
       ))}
-      <span className="absolute -translate-x-1/2 font-semibold text-slate-700" style={{ left: `${logPosition(threshold, max)}%` }}>
+      <span className="absolute -translate-x-1/2 font-bold text-ink" style={{ left: `${logPosition(threshold, max)}%` }}>
         {threshold}
       </span>
     </div>

@@ -2,6 +2,109 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Zero PII 디자인 토큰 v1.0 (대비·색각 검사 통과값). 색은 위험도에만 켠다. */
+:root {
+  color-scheme: light;
+  --zp-page: #f4f5f9;
+  --zp-surface: #ffffff;
+  --zp-surface-2: #eceef4;
+  --zp-line: #dee1ea;
+  --zp-line-input: #868ca2;
+  --zp-text: #161827;
+  --zp-text-2: #4b5068;
+  --zp-text-3: #666b83;
+  --zp-iris: #5b5bf0;
+  --zp-iris-text: #4747db;
+  --zp-iris-tint: #ebebfd;
+  --zp-on-iris: #ffffff;
+  --zp-focus: #5b5bf0;
+  --zp-safe: #16a374;
+  --zp-safe-text: #0a6e4c;
+  --zp-safe-tint: #e3f4ee;
+  --zp-caution: #d29500;
+  --zp-caution-text: #7f5300;
+  --zp-caution-tint: #faf2e0;
+  --zp-danger: #dc3d43;
+  --zp-danger-text: #b0222a;
+  --zp-danger-tint: #fce9ea;
+  --zp-series-1: #5b5bf0;
+  --zp-series-2: #019fc3;
+  --zp-series-3: #a12c7b;
+  --zp-hatch-ink: #c9cdda;
+  --zp-toast: #161827;
+  --zp-toast-text: #f4f5f9;
+  --zp-scrim: rgba(22, 24, 39, 0.4);
+  --zp-shadow-overlay: 0 1px 2px rgba(22, 24, 39, 0.06), 0 12px 32px rgba(22, 24, 39, 0.14);
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+  --zp-page: #0d0f17;
+  --zp-surface: #151826;
+  --zp-surface-2: #1c2032;
+  --zp-line: #2a2f45;
+  --zp-line-input: #626987;
+  --zp-text: #ecedf5;
+  --zp-text-2: #a9aec2;
+  --zp-text-3: #8a90a8;
+  --zp-iris: #5b5bf0;
+  --zp-iris-text: #a3a3ff;
+  --zp-iris-tint: #252846;
+  --zp-focus: #8b8bff;
+  --zp-safe: #1fa678;
+  --zp-safe-text: #62e0b0;
+  --zp-safe-tint: #173331;
+  --zp-caution: #d9a12e;
+  --zp-caution-text: #f6c463;
+  --zp-caution-tint: #352e21;
+  --zp-danger: #e0504c;
+  --zp-danger-text: #ff8f86;
+  --zp-danger-tint: #39222a;
+  --zp-series-1: #7373f5;
+  --zp-series-2: #0da2c6;
+  --zp-series-3: #b0378b;
+  --zp-hatch-ink: #3a4060;
+  --zp-toast: #ecedf5;
+  --zp-toast-text: #0d0f17;
+  --zp-scrim: rgba(0, 0, 0, 0.55);
+  --zp-shadow-overlay: 0 0 0 1px #2a2f45, 0 16px 40px rgba(0, 0, 0, 0.5);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    color-scheme: dark;
+    --zp-page: #0d0f17;
+    --zp-surface: #151826;
+    --zp-surface-2: #1c2032;
+    --zp-line: #2a2f45;
+    --zp-line-input: #626987;
+    --zp-text: #ecedf5;
+    --zp-text-2: #a9aec2;
+    --zp-text-3: #8a90a8;
+    --zp-iris: #5b5bf0;
+    --zp-iris-text: #a3a3ff;
+    --zp-iris-tint: #252846;
+    --zp-focus: #8b8bff;
+    --zp-safe: #1fa678;
+    --zp-safe-text: #62e0b0;
+    --zp-safe-tint: #173331;
+    --zp-caution: #d9a12e;
+    --zp-caution-text: #f6c463;
+    --zp-caution-tint: #352e21;
+    --zp-danger: #e0504c;
+    --zp-danger-text: #ff8f86;
+    --zp-danger-tint: #39222a;
+    --zp-series-1: #7373f5;
+    --zp-series-2: #0da2c6;
+    --zp-series-3: #b0378b;
+    --zp-hatch-ink: #3a4060;
+    --zp-toast: #ecedf5;
+    --zp-toast-text: #0d0f17;
+    --zp-scrim: rgba(0, 0, 0, 0.55);
+    --zp-shadow-overlay: 0 0 0 1px #2a2f45, 0 16px 40px rgba(0, 0, 0, 0.5);
+  }
+}
+
 @layer base {
   html,
   body,
@@ -9,7 +112,72 @@
     height: 100%;
   }
   body {
-    @apply bg-slate-100 font-sans text-slate-800 antialiased;
+    @apply bg-page font-sans text-ink antialiased;
+    font-size: 14px;
+    line-height: 1.55;
+    letter-spacing: -0.005em;
+    font-feature-settings: 'tnum' 1;
     word-break: keep-all;
+  }
+  :focus-visible {
+    outline: 2px solid var(--zp-focus);
+    outline-offset: 2px;
+  }
+  ::selection {
+    background: var(--zp-iris-tint);
+  }
+}
+
+@layer components {
+  .panel {
+    @apply rounded-panel border border-line bg-surface;
+  }
+  .chip {
+    @apply inline-flex h-6 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-full pl-2 pr-2.5 text-xs font-semibold;
+  }
+  .btn {
+    @apply inline-flex h-9 items-center justify-center gap-2 whitespace-nowrap rounded-control border border-transparent px-3.5 text-sm font-semibold transition-colors duration-150 ease-zp disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-primary {
+    @apply btn bg-iris text-iris-on hover:brightness-110;
+  }
+  .btn-secondary {
+    @apply btn border-line-input bg-surface text-ink hover:bg-surface-2;
+  }
+  .btn-ghost {
+    @apply btn text-ink-2 hover:bg-surface-2 hover:text-ink;
+  }
+  .btn-sm {
+    @apply h-[30px] px-2.5 text-xs;
+  }
+  .kbd {
+    @apply inline-flex h-5 min-w-5 items-center justify-center rounded-[5px] border border-line bg-surface-2 px-1 font-mono text-[11px] text-ink-2;
+  }
+  .redact {
+    display: inline-block;
+    vertical-align: middle;
+    height: 1.05em;
+    min-width: 64px;
+    border-radius: 4px;
+    background: repeating-linear-gradient(135deg, var(--zp-hatch-ink) 0 2px, transparent 2px 6px), var(--zp-surface-2);
+  }
+  .term {
+    @apply cursor-help border-b border-dashed border-ink-3;
+  }
+  .num {
+    font-variant-numeric: tabular-nums;
+  }
+  .scroll-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--zp-line) transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0ms !important;
+    transition-duration: 0ms !important;
   }
 }

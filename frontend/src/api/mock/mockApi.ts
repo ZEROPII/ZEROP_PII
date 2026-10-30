@@ -402,6 +402,7 @@ export function createMockApi(options: MockApiOptions = {}): ClinicalCaseApi {
         return MOCK_CASES;
       }, signal),
     getConversation: (caseId, signal) => delay(() => ensureStore(caseId).session, signal),
+    listSuggestions: (caseId, signal) => delay(() => SUGGESTED_QUESTIONS[caseId] ?? [], signal),
     sendQuestion: (req: SendQuestionRequest, signal) =>
       delay(() => {
         if (req.question.includes(MOCK_ERROR_TRIGGER)) throw new ApiError('Mock 서버 오류: 응답을 생성하지 못했습니다.', 500);

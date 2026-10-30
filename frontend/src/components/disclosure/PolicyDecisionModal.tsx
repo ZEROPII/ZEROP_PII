@@ -18,19 +18,19 @@ type LoadState = { status: 'loading' } | { status: 'error'; message: string } | 
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="grid grid-cols-[110px_1fr] gap-3 py-2 text-xs">
-      <dt className="text-slate-500">{label}</dt>
-      <dd className="text-slate-800">{children}</dd>
+    <div className="grid grid-cols-[120px_1fr] gap-3 py-2.5 text-[13px]">
+      <dt className="text-ink-3">{label}</dt>
+      <dd className="text-ink">{children}</dd>
     </div>
   );
 }
 
 function Chips({ items, empty }: { items: string[]; empty: string }) {
-  if (!items.length) return <span className="text-slate-400">{empty}</span>;
+  if (!items.length) return <span className="text-ink-3">{empty}</span>;
   return (
     <span className="flex flex-wrap gap-1">
       {items.map((t) => (
-        <span key={t} className="rounded bg-slate-100 px-1.5 py-0.5">
+        <span key={t} className="rounded-cell bg-surface-2 px-1.5 py-0.5">
           {t}
         </span>
       ))}
@@ -86,17 +86,17 @@ export function PolicyDecisionModal({ caseId, caseLabel, stateVersion, onClose }
   }, [onClose]);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/40 p-0 sm:items-center sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
+    <div className="fixed inset-0 z-50 flex items-end justify-center bg-scrim p-0 sm:items-center sm:p-4" onMouseDown={(e) => e.target === e.currentTarget && onClose()}>
       <div
         ref={dialogRef}
         role="dialog"
         aria-modal="true"
         aria-labelledby="policy-modal-title"
-        className="max-h-[90dvh] w-full overflow-y-auto rounded-t-2xl bg-white shadow-xl sm:max-w-lg sm:rounded-2xl"
+        className="max-h-[90dvh] w-full overflow-y-auto rounded-t-overlay bg-surface shadow-overlay sm:max-w-lg sm:rounded-overlay"
       >
-        <header className="sticky top-0 flex items-center justify-between gap-2 border-b border-slate-100 bg-white px-5 py-3.5">
-          <h2 id="policy-modal-title" className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-            <Scale className="h-4 w-4 text-blue-600" aria-hidden />
+        <header className="sticky top-0 flex items-center justify-between gap-2 border-b border-line bg-surface px-5 py-4">
+          <h2 id="policy-modal-title" className="flex items-center gap-2 text-[17px] font-bold tracking-[-0.02em] text-ink">
+            <Scale className="h-4 w-4 text-ink-3" aria-hidden />
             {caseLabel} 판정 근거
             {load.status === 'success' && <MockBadge source={load.data.source} />}
           </h2>
@@ -105,46 +105,46 @@ export function PolicyDecisionModal({ caseId, caseLabel, stateVersion, onClose }
             type="button"
             onClick={onClose}
             aria-label="닫기"
-            className="rounded-md p-1 text-slate-500 hover:bg-slate-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-blue-500"
+            className="btn-ghost h-8 w-8 px-0"
           >
             <X className="h-4 w-4" aria-hidden />
           </button>
         </header>
 
         <div className="px-5 py-3">
-          {load.status === 'loading' && <LoadingState label="판정 근거를 불러오는 중…" />}
+          {load.status === 'loading' && <LoadingState label="판정 근거를 불러오는 중" />}
           {load.status === 'error' && <ErrorState message={load.message} onRetry={() => setAttempt((n) => n + 1)} />}
           {load.status === 'success' && (
             <>
               {load.data.source === 'mock' && (
-                <p className="mb-2 rounded-md border border-dashed border-amber-300 bg-amber-50 px-3 py-2 text-[11px] text-amber-800">
+                <p className="mb-2 rounded-control border border-dashed border-caution bg-caution-tint px-3 py-2 text-xs text-caution-text">
                   백엔드 판정 근거가 아직 없어 Mock Service가 만든 예시입니다. 실제 Defender 판정 결과가 아닙니다.
                 </p>
               )}
-              <dl className="divide-y divide-slate-100">
-                <Row label="현재 k">
-                  <span className="font-semibold tabular-nums">{load.data.currentK}</span>
-                  <span className="ml-1 text-slate-500">(상태 버전 {load.data.stateVersion})</span>
+              <dl className="divide-y divide-line">
+                <Row label="지금 후보 수">
+                  <span className="num font-bold">{load.data.currentK.toLocaleString()}명</span>
+                  <span className="ml-1 text-ink-3">(상태 버전 {load.data.stateVersion})</span>
                 </Row>
-                <Row label="최소 허용 k">
-                  그대로 공개는 k &gt; {load.data.minK} · 원래 값 k ≤ {load.data.suppressK}이면 비공개 · 판정 방식 {load.data.arm}
+                <Row label="기준">
+                  후보가 {load.data.minK}명보다 많으면 그대로 답합니다. 원래 값으로 {load.data.suppressK}명 이하가 되면 가리고, 그 사이는 넓혀서 답합니다.
                 </Row>
-                <Row label="공개된 QI">
+                <Row label="지금까지 나간 단서">
                   <Chips items={load.data.disclosedQis.map((q) => `${q.attributeLabel} (${q.levelDescription})`)} empty="없음" />
                 </Row>
-                <Row label="일반화 조치">
+                <Row label="넓혀서 답한 것">
                   <Chips items={load.data.generalized.map((q) => `${q.attributeLabel}: ${q.levelDescription}`)} empty="없음" />
                 </Row>
-                <Row label="비공개 항목">
+                <Row label="가린 것">
                   <Chips items={load.data.suppressed.map((q) => q.attributeLabel)} empty="없음" />
                 </Row>
-                <Row label="Defender 최종 판정">
-                  <span className="font-semibold">{load.data.finalDecisionLabel}</span>
-                  <span className="ml-1 text-slate-500">({DECISION_LABEL[load.data.finalDecision]})</span>
+                <Row label="지금 상태">
+                  <span className="font-bold">{load.data.finalDecisionLabel}</span>
+                  <span className="ml-1 text-ink-3">({DECISION_LABEL[load.data.finalDecision]})</span>
                 </Row>
               </dl>
               {load.data.notes.length > 0 && (
-                <ul className="mt-2 list-disc space-y-1 pl-4 text-[11px] text-slate-500">
+                <ul className="mt-3 list-disc space-y-1 pl-4 text-xs leading-5 text-ink-3">
                   {load.data.notes.map((n) => (
                     <li key={n}>{n}</li>
                   ))}

@@ -11,6 +11,8 @@ export interface WorkspaceActions {
   sendQuestion(caseId: CaseId, question: string): Promise<boolean>;
   retryMessage(caseId: CaseId, message: ChatMessage): void;
   discardMessage(caseId: CaseId, messageId: string): void;
+  /** 새 대화로 다시 시작 (trialId를 주면 그 질의 환자로). 백엔드가 지원할 때만. */
+  restart(trialId?: string): Promise<void>;
 }
 
 interface WorkspaceContextValue {
@@ -151,6 +153,16 @@ export function WorkspaceProvider({ children, api = defaultApi }: { children: Re
 
   const selectCase = useCallback((caseId: CaseId) => dispatch({ type: 'case/select', caseId }), []);
 
+  const restart = useCallback(
+    async (trialId?: string) => {
+      if (!api.resetSession) return;
+      await api.resetSession(trialId);
+      dispatch({ type: 'workspace/reset' });
+      reloadAll();
+    },
+    [api, reloadAll],
+  );
+
   useEffect(() => {
     reloadAll();
   }, [reloadAll]);
@@ -162,8 +174,8 @@ export function WorkspaceProvider({ children, api = defaultApi }: { children: Re
   }, [state.selectedCaseId, loadSession, loadDisclosures]);
 
   const actions = useMemo<WorkspaceActions>(
-    () => ({ reloadAll, selectCase, loadSession, loadDisclosures, sendQuestion, retryMessage, discardMessage }),
-    [reloadAll, selectCase, loadSession, loadDisclosures, sendQuestion, retryMessage, discardMessage],
+    () => ({ reloadAll, selectCase, loadSession, loadDisclosures, sendQuestion, retryMessage, discardMessage, restart }),
+    [reloadAll, selectCase, loadSession, loadDisclosures, sendQuestion, retryMessage, discardMessage, restart],
   );
 
   const value = useMemo(() => ({ state, actions, api }), [state, actions, api]);

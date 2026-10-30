@@ -1,4 +1,4 @@
-import { Loader2, SendHorizontal } from 'lucide-react';
+import { ArrowUp, Loader2 } from 'lucide-react';
 import { useEffect, useRef, type KeyboardEvent } from 'react';
 
 interface Props {
@@ -24,7 +24,7 @@ export function ChatInput({ value, onChange, onSubmit, disabled, sending, placeh
   }, [value]);
 
   function handleKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
-    // 한글 조합 중 Enter는 글자 확정용이므로 전송하지 않는다.
+    // 한글 조합 중 Enter는 글자 확정용이므로 보내지 않는다.
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       if (canSend) onSubmit();
@@ -37,7 +37,7 @@ export function ChatInput({ value, onChange, onSubmit, disabled, sending, placeh
         e.preventDefault();
         if (canSend) onSubmit();
       }}
-      className="flex items-end gap-2 rounded-xl border border-slate-300 bg-white p-1.5 pl-3 shadow-sm focus-within:border-blue-500 focus-within:ring-2 focus-within:ring-blue-100"
+      className="flex items-end gap-2 rounded-[14px] border border-line-input bg-surface p-1.5 pl-3.5 focus-within:border-focus focus-within:shadow-[0_0_0_2px_var(--zp-iris-tint)]"
     >
       <label htmlFor="chat-input" className="sr-only">
         질문 입력 (Enter로 보내기, Shift+Enter로 줄바꿈)
@@ -51,15 +51,10 @@ export function ChatInput({ value, onChange, onSubmit, disabled, sending, placeh
         onKeyDown={handleKeyDown}
         placeholder={placeholder}
         disabled={disabled}
-        className="max-h-[140px] min-h-[36px] flex-1 resize-none bg-transparent py-2 text-[13px] leading-5 text-slate-800 outline-none placeholder:text-slate-400 disabled:cursor-not-allowed"
+        className="max-h-[140px] min-h-[38px] flex-1 resize-none bg-transparent py-2 text-sm leading-[22px] text-ink outline-none placeholder:text-ink-3 focus-visible:outline-none disabled:cursor-not-allowed"
       />
-      <button
-        type="submit"
-        disabled={!canSend}
-        aria-label="질문 보내기"
-        className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-blue-600 text-white transition-colors hover:bg-blue-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-blue-500 disabled:bg-slate-300"
-      >
-        {sending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <SendHorizontal className="h-4 w-4" aria-hidden />}
+      <button type="submit" disabled={!canSend} aria-label="질문 보내기" className="btn-primary h-9 w-9 shrink-0 px-0">
+        {sending ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <ArrowUp className="h-4 w-4" aria-hidden />}
       </button>
     </form>
   );

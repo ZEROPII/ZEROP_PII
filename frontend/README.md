@@ -2,6 +2,11 @@
 
 의료진이 유사 사례를 AI에게 묻고, 답변에 적용된 개인정보 보호 조치(그대로 · 일반화 · 비공개)와 사례별 누적 재식별 위험(k)을 확인하는 화면이다.
 
+> **통합 데모 (feat/integrated-demo):** 같은 앱에 보안 담당자 관제 화면(관제 · 리포트 · 감사 기록)과 Zero PII 디자인 토큰을 더했다.
+> 데모 서버와 함께 쓰려면 저장소 루트에서 `python -m webdemo --build` 후 http://127.0.0.1:8000 (자세한 것은 `../webdemo/README.md`).
+> 화면을 고치면서 보려면 `python -m webdemo`를 켜 둔 채 여기서 `npm run dev:demo`. 관제 화면은 데모 서버에만 있는 API를 쓰므로
+> Mock 모드나 `api_server`에 붙였을 때는 '데모 서버에서만 볼 수 있다'는 안내가 나온다. 의료진 화면은 세 모드 모두 그대로 동작한다.
+
 React 18 · TypeScript · Vite 5 · Tailwind CSS 3 · lucide-react · React Router 6
 
 ## 실행
@@ -9,7 +14,9 @@ React 18 · TypeScript · Vite 5 · Tailwind CSS 3 · lucide-react · React Rout
 ```bash
 cd frontend
 npm install
-npm run dev        # http://localhost:5173
+npm run dev        # http://localhost:5173 (Mock)
+npm run dev:demo   # 데모 서버(python -m webdemo, 8000번)에 붙어서
+npm run build:demo # 데모 서버가 내보낼 dist/ 만들기
 npm run build      # 타입 검사(tsc -b) + 빌드
 npm test           # vitest (Mock 엔진·상태 reducer)
 ```

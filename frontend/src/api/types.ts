@@ -9,10 +9,12 @@ import type {
   DisclosureHistory,
   PatientContext,
   PolicyDecisionRationale,
+  PatientOption,
   PreflightRiskAssessment,
   ProtectionPolicy,
   SendQuestionRequest,
   SendQuestionResponse,
+  SuggestedQuestion,
   WorkspaceEnvironment,
 } from '../types/domain';
 
@@ -29,6 +31,12 @@ export interface ClinicalCaseApi {
   listRiskStates(signal?: AbortSignal): Promise<CaseRiskState[]>;
   getDisclosureHistory(caseId: CaseId, signal?: AbortSignal): Promise<DisclosureHistory>;
   getPolicyDecision(caseId: CaseId, signal?: AbortSignal): Promise<PolicyDecisionRationale>;
+  /** 이 사례에 지금 물어볼 수 있는 예시 질문. 지원하지 않는 백엔드는 빈 목록. */
+  listSuggestions?(caseId: CaseId, signal?: AbortSignal): Promise<SuggestedQuestion[]>;
+  /** 데모 백엔드만: 다른 질의 환자로 새 대화를 시작할 때 고를 목록 */
+  listPatients?(signal?: AbortSignal): Promise<PatientOption[]>;
+  /** 새 대화(빈 State)로 다시 시작. trialId를 주면 그 질의 환자로. */
+  resetSession?(trialId?: string): Promise<void>;
 }
 
 export class ApiError extends Error {

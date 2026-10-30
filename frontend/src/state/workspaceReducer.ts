@@ -70,7 +70,8 @@ export type WorkspaceAction =
   | { type: 'send/start'; caseId: CaseId; pending: ChatMessage }
   | { type: 'send/success'; caseId: CaseId; clientMessageId: string; response: SendQuestionResponse }
   | { type: 'send/failure'; caseId: CaseId; clientMessageId: string; error: string }
-  | { type: 'message/discard'; caseId: CaseId; messageId: string };
+  | { type: 'message/discard'; caseId: CaseId; messageId: string }
+  | { type: 'workspace/reset' };
 
 function updateSession(state: WorkspaceState, caseId: CaseId, fn: (slot: SessionSlot) => SessionSlot): WorkspaceState {
   const slot = state.sessions[caseId] ?? { status: 'idle', sending: false };
@@ -167,6 +168,9 @@ export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction)
         sending: false,
         sendError: action.error,
       }));
+
+    case 'workspace/reset':
+      return initialWorkspaceState;
 
     case 'message/discard':
       return updateSession(state, action.caseId, (s) => ({

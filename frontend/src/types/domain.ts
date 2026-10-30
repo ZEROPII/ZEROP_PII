@@ -23,6 +23,8 @@ export interface PatientContext {
   plannedProcedure: string;
   queryPurpose: string;
   source: DataSource;
+  /** 데모 백엔드만: 질의 환자 trial 번호 (POC와 같은 번호) */
+  trialId?: string;
 }
 
 // ── 검색된 사례 ────────────────────────────────────────────────────────────────
@@ -34,6 +36,8 @@ export interface CaseSummary {
   diagnosis: string;
   description: string;
   similarityRank: number;
+  /** 검색 유사도 (있을 때만) */
+  similarity?: number;
 }
 
 // ── 보호 조치 ──────────────────────────────────────────────────────────────────
@@ -52,6 +56,8 @@ export interface PrivacyTransformation {
   disclosedValue: string | null;
   /** 안전한 수준 설명. 예: "정확한 연령 → 5세 구간". 원본 값은 담지 않는다. */
   levelDescription?: string;
+  /** 데모 백엔드만: 이 조치가 걸린 사례 표기 (사례1 …) */
+  caseRef?: string;
 }
 
 /** 응답 본문 조각. 보호 조치가 걸린 조각은 transformationId로 메타데이터를 가리킨다. */
@@ -175,6 +181,18 @@ export interface PreflightRiskAssessment {
   source: DataSource;
   /** false면 백엔드에 사전 평가 기능이 없다 (실제 연구 모듈에는 질문만으로 k를 계산하는 기능이 없음). */
   supported?: boolean;
+  /** 데모 백엔드만: 질문에서 묻는 항목을 찾았는지 */
+  understood?: boolean;
+}
+
+/** 데모 백엔드의 질의 환자 목록 (다른 환자로 대화를 새로 시작할 때) */
+export interface PatientOption {
+  trialId: string;
+  qtypeLabel: string;
+  featured: boolean;
+  ageSex?: string;
+  mainDx?: string;
+  item?: string;
 }
 
 export interface PolicyDecisionRationale {
