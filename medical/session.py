@@ -33,6 +33,7 @@ from medical.defense import MedicalDefender, format_changes
 from medical.llm import RoleLLM
 from medical.prompts import PROMPTS, REFUSAL_TEXT
 from medical.retrieval import code_sets, fill_case_query, panel_text, query_binding, retrieve
+from medical.rule_extract import rule_observations
 from medical.tracking import Case, CaseView, commit_view, known_cases_json, parse_json, view_of
 
 ARMS = ("C0", "C1", "C1S")
@@ -89,7 +90,10 @@ def extract(ctx: Context, query: str, response: str, known: str, docs: list[dict
                                           docs=docs, response=response), "array")
         if obs is not None:
             break
-    return [o for o in (obs or []) if isinstance(o, dict)], obs is not None, n
+    found = [o for o in (obs or []) if isinstance(o, dict)]
+    if getattr(ctx.cfg, "rule_extract", False):
+        found += rule_observations(response, query, found)     # LLM이 놓친 나이 · 날짜만 보탠다 (source='RULE')
+    return found, obs is not None, n
 
 
 def make_prefix(ctx: Context, tid: str, qpid: str, qtype: str, role: str) -> Prefix:

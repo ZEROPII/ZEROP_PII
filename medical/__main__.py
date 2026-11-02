@@ -4,6 +4,7 @@
 #   python -m medical run --dry-run [--out …] [--limit 6]             가짜 LLM으로 배선 확인 (토큰 0, 숫자는 의미 없음)
 #   python -m medical run [--arms C0,C1,C1S] [--limit N] [--trials-per-cell 2] [--docs template|llm] [--docs-from 경로/RAG문서.jsonl]
 #                         [--model 모델] [--model-ROLE 모델] [--mode efficiency|exploration] [--budget 10] [--timeout 180]
+#                         [--rule-extract]   LLM 추출에 나이 · 날짜 규칙 추출을 더함
 #   python -m medical report <실행 폴더>                              집계표 (LLM 0)
 #   python -m medical reextract <실행 폴더> [--limit 4]               기록된 원 응답에 지금 추출기 프롬프트만 다시 적용 (대상 AI 호출 0)
 #
@@ -24,7 +25,7 @@ def _cfg(a: argparse.Namespace) -> MedicalConfig:
     return MedicalConfig(arms=tuple(x.strip() for x in a.arms.split(",") if x.strip()), trials_per_cell=a.trials_per_cell,
                          documents=a.docs, mode=a.mode, budget_B=a.budget, models=models, k_req=a.k_req,
                          generalize_threshold=a.generalize_threshold, suppress_threshold=a.suppress_threshold,
-                         main_experiment=a.main_experiment)
+                         main_experiment=a.main_experiment, rule_extract=a.rule_extract)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -48,6 +49,7 @@ def main(argv: list[str] | None = None) -> int:
     rn.add_argument("--generalize-threshold", type=int, default=5)
     rn.add_argument("--suppress-threshold", type=int, default=3)
     rn.add_argument("--main-experiment", action="store_true")
+    rn.add_argument("--rule-extract", action="store_true", help="LLM 추출에 나이 · 날짜 규칙 추출을 더함 (medical/rule_extract.py)")
     rn.add_argument("--model", default=None)
     rn.add_argument("--timeout", type=float, default=180.0, help="LLM 요청 timeout 초 (.env 값보다 작으면 이 값을 씀)")
     for r in ROLES:

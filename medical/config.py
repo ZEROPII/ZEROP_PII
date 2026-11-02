@@ -48,6 +48,8 @@ class MedicalConfig:
     exclude_provisional_atc: bool = False
     trials_per_cell: int = 2
     main_experiment: bool = False
+    # 규칙 추출(medical/rule_extract.py): LLM 추출 결과에 나이 · 날짜를 정규식으로 보탠다 [2026-11-02, 파일럿 2 놓침 분석]
+    rule_extract: bool = False
     # Defender (risk_defender 이유진 정책과 같은 기준)
     generalize_threshold: int = 5
     suppress_threshold: int = 3
