@@ -1,0 +1,20 @@
+{
+ "설명": "holdout_1 이전에 쓴 질의 환자 (r3_rule). 채점 --exclude · 실행 --exclude-patients 둘 다에 쓴다",
+ "trials": [
+  {
+   "query_patient": "58dd46b8-a58e-eda1-3af6-f03edfab05dc",
+   "run": "r3_rule",
+   "trial_id": "T0001"
+  },
+  {
+   "query_patient": "ca5eef8b-fade-b918-3725-be97b49fdeae",
+   "run": "r3_rule",
+   "trial_id": "T0002"
+  },
+  {
+   "query_patient": "46c25edf-2b1f-caf7-f7be-57df1b59a35b",
+   "run": "r3_rule",
+   "trial_id": "T0003"
+  }
+ ]
+}

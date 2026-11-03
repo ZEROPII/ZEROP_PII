@@ -1,0 +1,60 @@
+{
+ "설명": "holdout_2 이전에 쓴 질의 환자 (r3_rule · holdout_1)",
+ "trials": [
+  {
+   "query_patient": "58dd46b8-a58e-eda1-3af6-f03edfab05dc",
+   "run": "r3_rule",
+   "trial_id": "T0001"
+  },
+  {
+   "query_patient": "ca5eef8b-fade-b918-3725-be97b49fdeae",
+   "run": "r3_rule",
+   "trial_id": "T0002"
+  },
+  {
+   "query_patient": "46c25edf-2b1f-caf7-f7be-57df1b59a35b",
+   "run": "r3_rule",
+   "trial_id": "T0003"
+  },
+  {
+   "query_patient": "970795ea-f7b8-7095-4d38-050b9bd273fd",
+   "run": "holdout_1",
+   "trial_id": "T0004"
+  },
+  {
+   "query_patient": "12a67e9b-2ca7-2be4-1e6d-028d6c206f5c",
+   "run": "holdout_1",
+   "trial_id": "T0005"
+  },
+  {
+   "query_patient": "397132d9-4c1d-87e0-7fa5-68e1f17bf831",
+   "run": "holdout_1",
+   "trial_id": "T0006"
+  },
+  {
+   "query_patient": "c6d322fd-4016-27c1-aa81-b79ef999b2dd",
+   "run": "holdout_1",
+   "trial_id": "T0007"
+  },
+  {
+   "query_patient": "c6029891-b3bf-2172-2630-c50d3dd2df7d",
+   "run": "holdout_1",
+   "trial_id": "T0008"
+  },
+  {
+   "query_patient": "7ca6bd26-f439-60ea-4180-75ebd8bf2f97",
+   "run": "holdout_1",
+   "trial_id": "T0010"
+  },
+  {
+   "query_patient": "eee9ff59-2793-dcd4-2ad3-f79282bbfb6b",
+   "run": "holdout_1",
+   "trial_id": "T0011"
+  },
+  {
+   "query_patient": "f9ead621-0370-7e97-d585-d1f223fd57d7",
+   "run": "holdout_1",
+   "trial_id": "T0012"
+  }
+ ]
+}
