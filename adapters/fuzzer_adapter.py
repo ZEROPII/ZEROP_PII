@@ -29,6 +29,14 @@
 #   자료 범위 안내는 Target 시스템의 구성(무엇을 갖고 있는가)이지 대상 개인에 대한 정보가 아니다.
 #   QI별 턴 수는 공격 쪽이 스스로 던진 질문의 기록이다.
 #   k는 evaluate_feedback 안에서만 쓰인다. Mutation LLM에는 전략 이름·지시문·직전 질문만 간다 (D1 Stage 6).
+#
+# K 피드백 끄기 (FuzzerConfig.use_k_feedback = False, Ablation 실험의 No-K 갈래)
+#   k가 다음 질문에 닿는 경로는 observe()가 남기는 FuzzerFeedback 하나뿐이다. 그 피드백이 정하는 것:
+#     전략 (select_mutation_strategy) / ABORT·NO_FEEDBACK 새 Seed / STALE 새 Seed (unchanged 연속 횟수)
+#   No-K에서는 observe()가 판정을 기록용으로만 계산하고 넘기지 않는다 (ReplayFuzzer.observe와 같음).
+#     전략      : 늘 no_k_strategy (기본 diversify = select_mutation_strategy가 판정할 근거가 없을 때 내는 값)
+#     새 Seed   : FIRST_TURN·SEED_NOT_APPLICABLE만 (공개 State로 정해지는 것. k와 무관)
+#   Seed 선택·바인딩·변형 지시문·Mutation LLM·결과 검사·QI 고른 배분은 두 모드가 같은 코드를 쓴다.
 
 from __future__ import annotations
 
@@ -43,7 +51,7 @@ from attack.registry import Seed
 from core.config import PROJECT_ROOT
 from core.llm_client import LLMResponse
 from fuzzer.feedback import FuzzerFeedback, evaluate_feedback, select_mutation_strategy
-from fuzzer.fuzzer_mutation import generate_next_mutation
+from fuzzer.fuzzer_mutation import _STRATEGY_INSTRUCTIONS, generate_next_mutation
 
 
 FUZZER_SYSTEM_PROMPT_FILE = PROJECT_ROOT / "fuzzer" / "seedinput" / "seedprompt.txt"
@@ -52,6 +60,9 @@ FUZZER_SYSTEM_PROMPT_FILE = PROJECT_ROOT / "fuzzer" / "seedinput" / "seedprompt.
 MUTATION_MAX_TOKENS = 512
 
 ABORT_STRATEGY = "abort"
+
+# generate_next_mutation이 받는 전략 (abort 제외)
+MUTATION_STRATEGIES = tuple(_STRATEGY_INSTRUCTIONS)
 
 _UNRESOLVED_PLACEHOLDER = re.compile(r"\[[A-Z_]{3,}\]")
 
@@ -116,6 +127,10 @@ class FuzzerConfig:
     → Target에 없는 자료를 가리키는 표현(정규식). 변형 결과에 있으면 무효 처리한다. 빈 튜플이면 검사하지 않는다
     balance_qis
     → 새 Seed를 고를 때 지금까지 가장 적게 물은 QI부터 고를지
+    use_k_feedback
+    → k 변화로 다음 질문의 전략·새 Seed 시작을 정할지 (기본 True = 기존 동작). False면 No-K 갈래 (파일 머리 설명)
+    no_k_strategy
+    → use_k_feedback=False일 때 이어서 변형하는 턴에 쓰는 고정 전략. fuzzer_mutation에 있는 전략 이름이어야 한다
     """
     risk_threshold: int = 3
     max_mutation_retries: int = 1
@@ -124,6 +139,12 @@ class FuzzerConfig:
     target_scope_note: str | None = DEFAULT_TARGET_SCOPE_NOTE
     out_of_scope_sources: tuple[str, ...] = DEFAULT_OUT_OF_SCOPE_SOURCES
     balance_qis: bool = True
+    use_k_feedback: bool = True
+    no_k_strategy: str = "diversify"
+
+    def __post_init__(self) -> None:
+        if self.no_k_strategy not in MUTATION_STRATEGIES:
+            raise ValueError(f"no_k_strategy는 {MUTATION_STRATEGIES} 중 하나여야 합니다: {self.no_k_strategy}")
 
     @property
     def describes(self) -> dict[str, Any]:
@@ -134,6 +155,8 @@ class FuzzerConfig:
             "out_of_scope_source_patterns": len(self.out_of_scope_sources),
             "balance_qis": self.balance_qis,
             "max_mutation_retries": self.max_mutation_retries,
+            "use_k_feedback": self.use_k_feedback,
+            "no_k_strategy": None if self.use_k_feedback else self.no_k_strategy,
         }
 
 
@@ -225,6 +248,7 @@ class FuzzerAdapter:
         output : 한재이 파트 FuzzerFeedback
 
         risk_gain은 risk_defender와 같은 정의(1/k, k=0이면 0)로 계산해 넘긴다.
+        use_k_feedback=False면 판정은 기록용으로만 돌려주고 다음 질문에는 넘기지 않는다.
         """
         feedback = evaluate_feedback(
             k_before=k_before,
@@ -232,6 +256,8 @@ class FuzzerAdapter:
             risk_gain=_risk(k_after) - _risk(k_before),
             threshold=self._config.risk_threshold,
         )
+        if not self._config.use_k_feedback:
+            return feedback
         self._last_feedback = feedback
         self._stale_turns = self._stale_turns + 1 if feedback.status == "unchanged" else 0
         return feedback
@@ -249,7 +275,10 @@ class FuzzerAdapter:
         feedback = self._last_feedback
         self._last_feedback = None   # 한 번 쓴 피드백을 다음 턴에 다시 쓰지 않음
 
-        strategy = select_mutation_strategy(feedback) if feedback is not None else None
+        if not self._config.use_k_feedback:
+            strategy = self._config.no_k_strategy
+        else:
+            strategy = select_mutation_strategy(feedback) if feedback is not None else None
         reset_reason = self._reset_reason(view, feedback, strategy)
 
         if reset_reason is not None:
@@ -304,6 +333,9 @@ class FuzzerAdapter:
                       strategy: str | None) -> str | None:
         if self._current_seed is None:
             return "FIRST_TURN"
+        if not self._config.use_k_feedback:
+            # k에서 나온 사유(NO_FEEDBACK·ABORT·STALE)는 보지 않는다
+            return None if self._selector.is_applicable(self._current_seed, view) else "SEED_NOT_APPLICABLE"
         if feedback is None:
             return "NO_FEEDBACK"
         if strategy == ABORT_STRATEGY:

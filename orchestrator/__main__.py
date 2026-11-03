@@ -1,6 +1,7 @@
 # 종단 간 실행: python -m orchestrator --target pers1 --arms C0 C1 --turns 5
 #   --arms C0 C1 C1S        C1S = 무상태 Defender 대조군
 #   --backend ontology      D1 온톨로지 계층 + D1 방식 Defender (기본은 risk_defender)
+#   --feedback-mode no-k    k 변화를 다음 질문 생성에 쓰지 않는다 (K 피드백 Ablation. 기본 k = 기존 동작)
 #
 # 준비물 (없으면 안내 메시지와 함께 멈춘다)
 #   .env                                   : LLM_API_KEY, LLM_API_BASE, LLM_MODEL
@@ -14,11 +15,12 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import replace
 from pathlib import Path
 import time
 from typing import Any
 
-from adapters.fuzzer_adapter import FuzzerConfig
+from adapters.fuzzer_adapter import MUTATION_STRATEGIES, FuzzerConfig
 from adapters.risk_adapter import PopulationMode, RiskConfig, load_reference_population
 from attack.registry import SeedRegistry
 from core.config import get_settings
@@ -67,10 +69,16 @@ def main() -> None:
         paired_questions=args.paired,
         resume=args.resume,
         stop_on_violation=args.stop_on_violation,
-        fuzzer=(FuzzerConfig(target_scope_note=None, out_of_scope_sources=(), balance_qis=False)
-                if args.plain_mutation else None),
+        fuzzer=fuzzer_config_from_args(args),
         fixed_questions=load_fixed_questions(args.questions_file) if args.questions_file else None,
+        **({"output_root": Path(args.output_root)} if args.output_root else {}),
     )
+    if args.feedback_mode == NO_K_MODE and (config.fixed_questions or config.paired_questions):
+        print("주의: --questions-file이면 Fuzzer를 쓰지 않고, --paired면 첫 갈래만 Fuzzer로 질문을 만듭니다. "
+              "--feedback-mode는 그 Fuzzer에만 적용됩니다.")
+    print(f"------ 질문 생성 피드백: {args.feedback_mode}"
+          + (f" (k 미사용, 고정 전략 {args.no_k_strategy})" if args.feedback_mode == NO_K_MODE else " (k 변화 사용)")
+          + " ------")
 
     if args.resume:
         done = completed_targets(config.run_dir / "trace.jsonl", [arm.label for arm in config.arms])
@@ -127,6 +135,18 @@ def main() -> None:
     print(f"           python -m orchestrator.report {config.experiment_id}    # 집계 표")
     if archived:
         print(f"           python -m orchestrator.replay --source {config.experiment_id}    # 보관된 질문 재실행 (LLM 호출)")
+
+
+K_MODE, NO_K_MODE = "k", "no-k"
+
+
+def fuzzer_config_from_args(args: argparse.Namespace) -> FuzzerConfig | None:
+    """--plain-mutation·--feedback-mode로 질문 생성 설정을 만든다. 둘 다 기본값이면 None (기존과 같은 기본 설정)."""
+    config = (FuzzerConfig(target_scope_note=None, out_of_scope_sources=(), balance_qis=False)
+              if args.plain_mutation else None)
+    if args.feedback_mode == NO_K_MODE:
+        config = replace(config or FuzzerConfig(), use_k_feedback=False, no_k_strategy=args.no_k_strategy)
+    return config
 
 
 def load_fixed_questions(path: str) -> tuple[dict[str, Any], ...]:
@@ -202,6 +222,13 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--plain-mutation", action="store_true",
                         help="질문 생성의 보정을 끈다: Target 자료 범위 안내, 변형 결과의 자료 출처 검사, QI 고른 배분 "
                              "(Part 8까지의 동작과 비교할 때 쓴다)")
+    parser.add_argument("--feedback-mode", choices=[K_MODE, NO_K_MODE], default=K_MODE,
+                        help="k: k 변화로 다음 질문 전략·새 Seed 시작을 정한다 (기존 동작) / "
+                             "no-k: k를 다음 질문 생성에 쓰지 않는다 (K 피드백 Ablation 비교 갈래)")
+    parser.add_argument("--no-k-strategy", choices=MUTATION_STRATEGIES, default=FuzzerConfig().no_k_strategy,
+                        help="no-k에서 이어서 변형하는 턴의 고정 전략 (기본 diversify)")
+    parser.add_argument("--output-root", default=None,
+                        help="결과를 둘 상위 폴더 (기본 runs). 예: runs/ablation/k_feedback")
     parser.add_argument("--min-confidence", type=int, default=None, choices=[1, 2, 3, 4, 5],
                         help="추출기 확신도가 이 값보다 낮은 관찰은 State에 넣지 않는다 (기본: 제한 없음). "
                              "추측성 값이 State를 오염시키는지 비교할 때 쓴다")
