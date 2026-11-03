@@ -350,8 +350,18 @@ python -m adapters.check_fuzzer                 # Seed 선택과 두 턴 변형
 | 추출기 출력 해석 | 전체 JSON이 깨져도 읽히는 항목은 건짐 | 근거 문구 안의 따옴표 등으로 한 항목이 깨진 경우. 읽히지 않는 항목의 관찰은 잃는다 |
 | 검증의 범위 | State에 들어간 QI만 | 정규화하지 못한 공개분은 `k_val`에도 반영되지 않음 |
 
+## 의사결정 기록 (ADR)
+
+기준 · 구조 · 실험 방식을 바꾼 결정은 [`docs/adr/`](docs/adr/README.md)에 한 건씩 남깁니다 (현재 19건). 색인과 AI용 요약(`docs/adr/ADR_CONTEXT.md`, `index.json`)은 `scripts/adr.py`가 ADR 파일에서 만들고, 병합되면 GitHub Actions가 갱신합니다.
+
+```bash
+python scripts/adr.py new "제목" --slug short-name --deciders 이름 --area risk --sprint S5 --jira ZP-00
+python scripts/adr.py lint
+```
+
 ## 브랜치와 커밋 규칙
 
+- 결정이 바뀌는 PR에는 ADR을 함께 올리고 PR 설명에 번호를 적습니다.
 - 작업은 `feat/<이름>` 브랜치에서 하고 `system_integration`으로 PR을 올립니다.
 - 커밋 메시지: `FEAT#이슈번호: 제목`, `FIX#이슈번호: 제목`, `REFACTOR#이슈번호: 제목`
 - 병합은 "Create a merge commit"을 씁니다.
