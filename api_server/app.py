@@ -13,6 +13,7 @@ from pydantic import BaseModel
 
 from api_server.engine import ApiSettings, Conflict, NotFound, ResearchWorkspace, usage_summary, write_usage
 from core.llm_client import LLMError
+from medical.terminology import get_db
 
 log = logging.getLogger("api_server")
 
@@ -103,6 +104,41 @@ def create_app(settings: ApiSettings | None = None, *, workspace_factory: Callab
     @r.get("/cases/{case_id}/policy-decision")
     def policy_decision(case_id: str) -> dict[str, Any]:
         return guard(lambda: ws().policy_decision(case_id))
+
+    # ── 의료 용어 RAG (관리자용) ────────────────────────────
+
+    @r.get("/terminology/search")
+    def terminology_search(q: str, attribute: str | None = None, limit: int = 20) -> list[dict[str, Any]]:
+        """키워드로 용어 검색. attribute 필터: DX·MED·PROC"""
+        if not q.strip():
+            raise HTTPException(422, "검색어가 비어 있습니다.")
+        return get_db().search(q.strip(), limit=min(limit, 100), attribute=attribute or None)
+
+    @r.get("/terminology/{node_id:path}")
+    def terminology_get(node_id: str) -> dict[str, Any]:
+        """node_id로 단건 조회 + 일반화 체인 포함."""
+        term = get_db().get(node_id)
+        if term is None:
+            raise HTTPException(404, "해당 node_id가 terminology DB에 없습니다.")
+        term["generalization_chain"] = get_db().generalization_chain(node_id)
+        return term
+
+    @r.get("/terminology")
+    def terminology_list(
+        attribute: str | None = None,
+        review_status: str | None = None,
+        is_sensitive: bool | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """전체 목록 (페이지네이션). 관리자 검토 화면용."""
+        return get_db().list_terms(
+            attribute=attribute or None,
+            review_status=review_status or None,
+            is_sensitive=is_sensitive,
+            limit=min(limit, 200),
+            offset=offset,
+        )
 
     @r.post("/session/reset")
     def reset() -> dict[str, Any]:
