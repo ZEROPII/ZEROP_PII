@@ -10,7 +10,7 @@ jira: [ZP-41]
 tags: [holdout, extraction, frozen-scorer]
 supersedes: []
 superseded_by: []
-sources: [medical/scoring/README.md, medical/scoring/결과_기록.md, medical/scoring/frozen/]
+sources: [medical/scoring/README.md, medical/scoring/결과_기록.md, medical/scoring/보정_내역.md, medical/scoring/frozen/]
 ---
 # ADR-0018. 단서 추출 정확도는 규칙을 고정한 뒤 처음 보는 환자로 검증한다
 

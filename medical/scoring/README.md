@@ -25,6 +25,7 @@
 | `frozen/normalize_bridge_v0.11.2.patch` | 참고용. 같은 규칙이 채점 스크립트와 `medical/normalize_ext.py`에 들어 있다 |
 | `frozen/고정본_해시.txt` | 위 세 파일의 sha256. `tests/medical/test_scoring.py`가 확인한다 |
 | `frozen/보류검증_요청.md` | 보류 검증 요청서 (규칙 고정 · 새 기록 · 결과 그대로 보고) |
+| `보정_내역.md` | holdout_2 전에 넣은 보정(규칙 추출 · 정규화 v2 · 추출 바로잡기 · 나열 귀속)과 효과 |
 | `check_committed_recall.py` | 고정본과 같은 단계에 확정 재현율을 더해 출력 |
 | `check_same_extractor.py` | 두 실행의 코드 · 프롬프트 해시와 모델 비교 (추출기 고정 확인) |
 | `reprocess.py` | 기록을 지금 코드(`--code v2`) 또는 이전 코드(`--code v1`)로 다시 처리. 같은 답으로 코드 차이만 비교 |

@@ -706,6 +706,7 @@
       "sources": [
         "medical/scoring/README.md",
         "medical/scoring/결과_기록.md",
+        "medical/scoring/보정_내역.md",
         "medical/scoring/frozen/"
       ],
       "file": "docs/adr/0018-holdout-validation-for-extraction.md",

@@ -296,7 +296,7 @@
 ### ADR-0018. 단서 추출 정확도는 규칙을 고정한 뒤 처음 보는 환자로 검증한다
 
 - 승인 · 2026-10-30 · 결정 양승준, 이정민 · S5 · Jira ZP-41 · 실험·검증
-- 근거: `medical/scoring/README.md`, `medical/scoring/결과_기록.md`, `medical/scoring/frozen/`
+- 근거: `medical/scoring/README.md`, `medical/scoring/결과_기록.md`, `medical/scoring/보정_내역.md`, `medical/scoring/frozen/`
 
 **결정**
 
