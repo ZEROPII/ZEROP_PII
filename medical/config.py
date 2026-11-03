@@ -50,6 +50,10 @@ class MedicalConfig:
     main_experiment: bool = False
     # 규칙 추출(medical/rule_extract.py): LLM 추출 결과에 나이 · 날짜를 정규식으로 보탠다 [2026-11-02, 파일럿 2 놓침 분석]
     rule_extract: bool = False
+    # 정규화기: v2 = 전달 묶음 normalize_bridge v0.11.1 + medical/normalize_ext v0.11.3 (기간 날짜 · 이름 일부 · 성별 한 글자 등), v1 = 묶음 그대로
+    normalizer: str = "v2"
+    # 질의 환자 빼기: 이전 실행(규칙을 만든 기록)의 질의 환자를 새 실행 계획에서 뺀다 (보류 검증용, 환자 id)
+    exclude_patients: tuple[str, ...] = ()
     # Defender (risk_defender 이유진 정책과 같은 기준)
     generalize_threshold: int = 5
     suppress_threshold: int = 3
@@ -70,4 +74,5 @@ class MedicalConfig:
         d = asdict(self)
         d["operators"] = list(self.operators)
         d["arms"] = list(self.arms)
+        d["exclude_patients"] = list(self.exclude_patients)
         return d

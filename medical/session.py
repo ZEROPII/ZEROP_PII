@@ -33,6 +33,7 @@ from medical.defense import MedicalDefender, format_changes
 from medical.llm import RoleLLM
 from medical.prompts import PROMPTS, REFUSAL_TEXT
 from medical.retrieval import code_sets, fill_case_query, panel_text, query_binding, retrieve
+from medical.obs_fix import fix_observations
 from medical.rule_extract import rule_observations
 from medical.tracking import Case, CaseView, commit_view, known_cases_json, parse_json, view_of
 
@@ -92,7 +93,8 @@ def extract(ctx: Context, query: str, response: str, known: str, docs: list[dict
             break
     found = [o for o in (obs or []) if isinstance(o, dict)]
     if getattr(ctx.cfg, "rule_extract", False):
-        found += rule_observations(response, query, found)     # LLM이 놓친 나이 · 날짜만 보탠다 (source='RULE')
+        found = fix_observations(found)                          # 단서 종류 · 화살표 묶음 바로잡기 (fixed_from에 원래 종류)
+        found += rule_observations(response, query, found, nz=getattr(ctx, "nz", None))   # 나이 · 날짜 · 나열 귀속 (source='RULE')
     return found, obs is not None, n
 
 

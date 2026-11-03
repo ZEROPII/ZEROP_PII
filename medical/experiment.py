@@ -25,6 +25,7 @@ from medical.defense import MedicalDefender
 from medical.grouping import GroupRepairKC
 from medical.documents import load_documents, make_document, save_documents, facts_prompt_block
 from medical.llm import RoleLLM
+from medical.normalize_ext import VERSION as NORM_EXT_VERSION, make_normalizer
 from medical.prompts import PROMPT_VERSION, PROMPTS, REWRITER_VERSION, prompt_hashes
 from medical.retrieval import QTYPES, code_sets, query_binding
 from medical.session import Context, dumps, run_trial_group
@@ -46,6 +47,8 @@ def plan_trials(data: MedicalData, split: dict[str, str], cfg: MedicalConfig, li
             for p in rng.sample(elig, min(cfg.trials_per_cell, len(elig))):
                 plan.append((p, qt, role))
     out = [(f"T{i:04d}", p, qt, role) for i, (p, qt, role) in enumerate(plan, 1)]
+    if cfg.exclude_patients:                     # 보류 검증: 이전 실행에서 쓴 질의 환자는 빼고 trial 번호는 그대로 둔다
+        out = [t for t in out if t[1] not in set(cfg.exclude_patients)]
     return out[:limit] if limit else out
 
 
@@ -68,8 +71,8 @@ def build_context(cfg: MedicalConfig, llm: RoleLLM, out: Path, *, paths: Medical
     save_documents(docs, out)
     # 대상 AI가 여러 사건을 한 줄로 합쳐 말해 생기는 '아무도 맞지 않는 묶음'을 k 계산 전에 나눈다 (medical/grouping.py)
     kc = GroupRepairKC(KCalc(paths.nodes, paths.events, exclude_provisional_atc=cfg.exclude_provisional_atc, patients=set(store)))
-    nz = Normalizer(paths.nodes, paths.alias, min_confidence=cfg.min_confidence)
-    versions = dict(ontology_version="v0.10", matching_rule_version="kcalc v0.9.1 / normalize_bridge v0.11.1",
+    nz = make_normalizer(paths, cfg.normalizer, min_confidence=cfg.min_confidence)
+    versions = dict(ontology_version="v0.10", matching_rule_version="kcalc v0.9.1 / normalize_bridge v0.11.1" + (f" + {NORM_EXT_VERSION}" if cfg.normalizer == "v2" else ""),
                     reference_version=f"events:{_sha(paths.events)[:12]}|split_seed:{cfg.seed}|ratio:{cfg.query_pool_ratio}|P_ref:{len(store)}",
                     seed_registry="v0.13-med", case_query_registry="v0.2-med", harness="medical v0.2 (bundle harness_reference v0.2 + C1/C1S)",
                     defender=f"risk_defender policy g={cfg.generalize_threshold} s={cfg.suppress_threshold} on kcalc", rewriter=REWRITER_VERSION, prompts=PROMPT_VERSION,

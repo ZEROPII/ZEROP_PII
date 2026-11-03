@@ -4,7 +4,8 @@
 #   python -m medical run --dry-run [--out …] [--limit 6]             가짜 LLM으로 배선 확인 (토큰 0, 숫자는 의미 없음)
 #   python -m medical run [--arms C0,C1,C1S] [--limit N] [--trials-per-cell 2] [--docs template|llm] [--docs-from 경로/RAG문서.jsonl]
 #                         [--model 모델] [--model-ROLE 모델] [--mode efficiency|exploration] [--budget 10] [--timeout 180]
-#                         [--rule-extract]   LLM 추출에 나이 · 날짜 규칙 추출을 더함
+#                         [--rule-extract]   LLM 추출 바로잡기 + 나이 · 날짜 · 나열 귀속 규칙 추출
+#                         [--normalizer v1|v2] [--exclude-patients 이전실행/trial요약.json,…]
 #   python -m medical report <실행 폴더>                              집계표 (LLM 0)
 #   python -m medical reextract <실행 폴더> [--limit 4]               기록된 원 응답에 지금 추출기 프롬프트만 다시 적용 (대상 AI 호출 0)
 #
@@ -13,6 +14,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 import time
 from pathlib import Path
@@ -25,7 +27,17 @@ def _cfg(a: argparse.Namespace) -> MedicalConfig:
     return MedicalConfig(arms=tuple(x.strip() for x in a.arms.split(",") if x.strip()), trials_per_cell=a.trials_per_cell,
                          documents=a.docs, mode=a.mode, budget_B=a.budget, models=models, k_req=a.k_req,
                          generalize_threshold=a.generalize_threshold, suppress_threshold=a.suppress_threshold,
-                         main_experiment=a.main_experiment, rule_extract=a.rule_extract)
+                         main_experiment=a.main_experiment, rule_extract=a.rule_extract, normalizer=a.normalizer,
+                         exclude_patients=_excluded(a.exclude_patients))
+
+
+def _excluded(paths: str | None) -> tuple[str, ...]:
+    """--exclude-patients a/trial요약.json,b/trial요약.json → 그 실행들의 질의 환자 id."""
+    out: set[str] = set()
+    for p in (paths or "").split(","):
+        if p.strip():
+            out |= {t["query_patient"] for t in json.loads(Path(p.strip()).read_text(encoding="utf-8"))["trials"]}
+    return tuple(sorted(out))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -49,7 +61,9 @@ def main(argv: list[str] | None = None) -> int:
     rn.add_argument("--generalize-threshold", type=int, default=5)
     rn.add_argument("--suppress-threshold", type=int, default=3)
     rn.add_argument("--main-experiment", action="store_true")
-    rn.add_argument("--rule-extract", action="store_true", help="LLM 추출에 나이 · 날짜 규칙 추출을 더함 (medical/rule_extract.py)")
+    rn.add_argument("--rule-extract", action="store_true", help="LLM 추출 바로잡기 + 나이 · 날짜 · 나열 귀속 규칙 추출 (medical/obs_fix.py, rule_extract.py)")
+    rn.add_argument("--normalizer", choices=["v1", "v2"], default="v2", help="v2 = 묶음 정규화 + medical/normalize_ext.py, v1 = 묶음 그대로")
+    rn.add_argument("--exclude-patients", default=None, help="이 실행들(trial요약.json, 쉼표로 여럿)의 질의 환자를 계획에서 뺌")
     rn.add_argument("--model", default=None)
     rn.add_argument("--timeout", type=float, default=180.0, help="LLM 요청 timeout 초 (.env 값보다 작으면 이 값을 씀)")
     for r in ROLES:

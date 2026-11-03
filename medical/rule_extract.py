@@ -12,6 +12,10 @@
 - '사례N' 구간 안의 값만 그 사례의 값(TARGET_PATIENT)으로 본다. 질문에 이미 있는 값은 질의 환자 정보일 수 있어 내지 않는다.
 - 나이 기준 문장("65세 이상")과 범위("17-18세", LLM이 처리)는 내지 않는다.
 사건 묶음(event_ref)은 붙이지 않는다 (같은 사건이라는 근거가 없으면 묶지 않는 쪽이 k를 부풀리지 않는다).
+
+나열 귀속 [2026-11-03, 팀 채점 단계 4와 같은 규칙]: '사례1, 2, 3, 5: 값'처럼 사례 번호를 나열하고 값을 붙인 줄은,
+값을 단서 종류와 상관없이 정규화해 보고 한 종류로만 확정되면 나열된 각 사례의 관찰로 더한다 (정규화기 nz가 있을 때만).
+사례 기록을 보고 귀속을 정하지는 않는다(채점 기준과 같은 정보를 쓰게 되므로).
 """
 
 from __future__ import annotations
@@ -77,8 +81,8 @@ def _known(llm_obs: list[dict[str, Any]], ref: str, attribute: str, value: str) 
     return False
 
 
-def rule_observations(response: str, query: str, llm_obs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """LLM이 놓친 나이 · 날짜를 Observation 형식으로 돌려준다 (source='RULE')."""
+def rule_observations(response: str, query: str, llm_obs: list[dict[str, Any]], nz: Any = None) -> list[dict[str, Any]]:
+    """LLM이 놓친 나이 · 날짜(와 nz가 있으면 나열 귀속)를 Observation 형식으로 돌려준다 (source='RULE')."""
     out: list[dict[str, Any]] = []
     seen: set[tuple[str, str, str]] = set()
     for ref, s, e in _segments(response):
@@ -99,6 +103,34 @@ def rule_observations(response: str, query: str, llm_obs: list[dict[str, Any]]) 
                     continue
                 seen.add((ref, tr, val))
                 out.append(_ob(ref, "PERIOD", val, time_role=tr))
+    if nz is not None:
+        out += list_observations(response, llm_obs + out, nz)
+    return out
+
+
+_LIST = re.compile(r"사례\s*(\d+(?:\s*,\s*\d+)*)\s*\**\s*[:：]\s*\**\s*([^\n|]+)")
+_TYPED = ("SEX", "AGE", "REGION", "DX", "PROC", "MED", "PLAN")
+
+
+def list_observations(response: str, known: list[dict[str, Any]], nz: Any) -> list[dict[str, Any]]:
+    """'사례1, 2, 3, 5: 값' 줄의 값을 나열된 사례마다 귀속 (한 단서 종류로만 확정될 때)."""
+    have = {(str(o.get("case_ref")), o.get("attribute"), str(o.get("raw_value"))) for o in known}
+    out: list[dict[str, Any]] = []
+    for m in _LIST.finditer(response):
+        cases = [int(x) for x in re.findall(r"\d+", m.group(1))]
+        for val in re.split(r"\s*[,，]\s*", re.sub(r"[*_`]", "", m.group(2)).strip()):
+            val = val.strip(" .")
+            if not val:
+                continue
+            hits = [att for att in _TYPED
+                    if nz.normalize(dict(attribute=att, raw_value=val, evidence_spans=[val], subject="TARGET_PATIENT", case_ref="사례0"), val).get("commit")]
+            if len(hits) != 1:
+                continue
+            for n in cases:
+                key = (f"사례{n}", hits[0], val)
+                if key not in have:
+                    have.add(key)
+                    out.append(dict(_ob(f"사례{n}", hits[0], val), evidence_spans=[m.group(0)], rule="LIST_ATTRIBUTION"))
     return out
 
 
