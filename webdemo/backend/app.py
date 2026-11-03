@@ -9,6 +9,7 @@
 #     POST /api/monitor/sessions/{sid}/reveal {reason} · /review {action, note}
 #   레드팀·결과
 #     POST /api/redteam · GET /api/redteam/{id} · GET /api/poc (webdemo/data/poc_summary.json, 2026-10-23 POC 집계)
+#   평가 지표 대시보드: GET /eval/ (eval_demo/ 정적 페이지)
 #   세션 직접 조작 (POC 재현·테스트용)
 #     /api/meta · /api/patients · /api/sessions …
 
@@ -21,7 +22,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from fastapi import APIRouter, FastAPI, HTTPException, Query
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
@@ -33,6 +34,7 @@ from webdemo.backend.monitor import REVIEW_KO, Monitor
 HERE = Path(__file__).resolve().parent
 DIST = Path(os.environ.get("WEBDEMO_DIST") or ROOT / "frontend" / "dist")
 POC_FILE = HERE.parent / "data" / "poc_summary.json"
+EVAL_DIR = ROOT / "eval_demo"
 FEATURED = ("T0014", "T0010", "T0024", "T0036", "T0005", "T0016", "T0037", "T0001")
 
 
@@ -309,6 +311,14 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
         raise HTTPException(404, f"없는 API 경로입니다: /api/{rest}")
 
     app.include_router(r)
+
+    # ── 평가 지표 대시보드 (eval_demo/, 빌드 없는 정적 페이지) ──
+    if (EVAL_DIR / "index.html").exists():
+        @app.get("/eval", include_in_schema=False)
+        def eval_root() -> RedirectResponse:
+            return RedirectResponse("/eval/")          # 상대 경로(style.css 등)가 맞게 열리도록
+
+        app.mount("/eval", StaticFiles(directory=EVAL_DIR, html=True), name="eval")
 
     # ── 화면 (frontend/dist) ─────────────────────────────
     if (DIST / "index.html").exists():

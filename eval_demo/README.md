@@ -6,14 +6,16 @@ Privacy Fuzzer · 누적 가드레일의 평가 지표를 보여주는 정적 �
 ## 폴더 구조
 
 ```
-eval-dashboard/
+eval_demo/
 ├─ index.html            # 화면 뼈대
 ├─ style.css             # 스타일
 ├─ app.js                # 표·그래프·필터 렌더링
 ├─ data.js               # 화면에 쓰는 데이터 (build_data.py가 생성)
-├─ data/poc_summary.json # 원본 실험 결과
-└─ scripts/build_data.py # poc_summary.json → data.js 변환
+├─ poc_summary.json      # 원본 실험 결과 (webdemo/data/poc_summary.json과 같은 파일)
+└─ build_data.py         # poc_summary.json → data.js 변환 (python eval_demo/build_data.py)
 ```
+
+데모 서버(`python -m webdemo`)를 켜면 `http://127.0.0.1:8000/eval/`에서도 열리고, 앱의 리포트 화면에서 이 페이지로 가는 링크가 있습니다.
 
 ## VS Code에서 보기
 
@@ -39,8 +41,8 @@ Branch를 `main` / `(root)`로 선택하면 `https://<아이디>.github.io/<저�
 
 | 바꾸고 싶은 것 | 어디를 고치나 |
 |---|---|
-| 의료 실험 결과(위반율, 과잉 수정률, 먼저 찾은 환자 수 등) | 새 `poc_summary.json`을 `data/`에 넣고 `python scripts/build_data.py` |
-| SynthPAI 정보 유지율, 정상 질문 통과율, 처리 시간 | `scripts/build_data.py` 위쪽 `STATIC` 값 수정 후 같은 명령 재실행 |
+| 의료 실험 결과(위반율, 과잉 수정률, 먼저 찾은 환자 수 등) | 새 `poc_summary.json`을 `eval_demo/`에 넣고 `python eval_demo/build_data.py` |
+| SynthPAI 정보 유지율, 정상 질문 통과율, 처리 시간 | `eval_demo/build_data.py` 위쪽 `STATIC` 값 수정 후 같은 명령 재실행 |
 | 단서 추출 Precision / Recall / F1 | `STATIC["extraction"]`의 `None`을 측정값으로 교체 (예: `"f1": 0.91`) → 화면의 "측정 전"이 숫자로 바뀝니다 |
 | `staged` / `full` 시나리오 이름 | `build_data.py`의 `scenarioLabels` (의미에 맞는 한글 이름으로) |
 | 22개 지표의 측정 상태 | `app.js`의 `allMetrics()` |
@@ -49,4 +51,4 @@ Branch를 `main` / `(root)`로 선택하면 `https://<아이디>.github.io/<저�
 
 - 위반율 · 과잉 수정률 · 조건별 비교 · 턴별 그래프 · 먼저 찾은 환자 수: `poc_summary.json` (의료 실험, 환자 296명)
 - 정보 유지율 · 정상 질문 통과율 · 처리 시간: 발표자료 37·39·42p 값 (JSON에 없음)
-- 단서 추출 정확도: 아직 측정 전이라 목표값(Recall 95%↑ · Precision 90%↑ · F1 0.92↑)만 표시
+- 단서 추출 정확도: holdout_2(처음 보는 질의 환자 13명) 팀 고정본 채점값. 측정 방법은 `medical/scoring/README.md`

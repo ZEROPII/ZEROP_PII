@@ -180,3 +180,11 @@ def test_intent_parse_rules():
     assert parse("이 사례들은 환자 성별이 어떻게 되나요?").group
     assert parse("진단을 더 자세히 알려 주세요").refine
     assert not parse("안녕하세요").understood
+
+
+def test_eval_dashboard_is_served(client):
+    r = client.get("/eval", follow_redirects=False)
+    assert r.status_code == 307 and r.headers["location"] == "/eval/"
+    assert "평가" in client.get("/eval/").text
+    js = client.get("/eval/data.js").text
+    assert js.startswith("window.DASH") and '"f1": 0.929' in js
