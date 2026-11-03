@@ -1,8 +1,12 @@
 import { AlertCircle, Loader2, RotateCw, Trash2 } from 'lucide-react';
 import { formatTime } from '../../lib/format';
+import { useTermDetect } from '../../state/TermContext';
 import type { ChatMessage as ChatMessageModel } from '../../types/domain';
+import type { TermMention } from '../../types/terminology';
 import { LogoMark } from '../brand/Logo';
 import { PrivacyExplanation } from './PrivacyExplanation';
+import { AnswerTerms } from '../terminology/AnswerTerms';
+import { TermText } from '../terminology/TermText';
 import { PrivacyHighlight } from './PrivacyHighlight';
 
 interface Props {
@@ -11,17 +15,34 @@ interface Props {
   onDiscard?: (message: ChatMessageModel) => void;
 }
 
-function MessageBody({ message }: { message: ChatMessageModel }) {
+function MessageBody({ message, mentions }: { message: ChatMessageModel; mentions?: (TermMention[] | undefined)[] }) {
   const byId = new Map(message.protection?.transformations.map((t) => [t.id, t]));
   return (
     <>
-      {message.segments.map((segment, i) =>
-        segment.kind === 'text' ? (
-          <span key={i}>{segment.text}</span>
+      {message.segments.map((segment, i) => {
+        const terms = <TermText text={segment.text} mentions={mentions?.[i]} />;
+        return segment.kind === 'text' ? (
+          <span key={i}>{terms}</span>
         ) : (
-          <PrivacyHighlight key={i} text={segment.text} transformation={byId.get(segment.transformationId)} />
-        ),
-      )}
+          <PrivacyHighlight key={i} text={segment.text} transformation={byId.get(segment.transformationId)}>
+            {terms}
+          </PrivacyHighlight>
+        );
+      })}
+    </>
+  );
+}
+
+/** AI 답변: 답변 속 의료 용어에 밑줄을 긋고 아래에 용어 칩을 띄운다 (자동 표시를 끄면 글 그대로). */
+function AssistantBody({ message }: { message: ChatMessageModel }) {
+  const { mentions } = useTermDetect(message.segments.map((s) => s.text));
+  return (
+    <>
+      <div className="whitespace-pre-wrap break-words rounded-[18px] rounded-tl-[6px] border border-line bg-surface px-4 py-3 text-sm leading-relaxed text-ink">
+        <span className="sr-only">AI 답변: </span>
+        <MessageBody message={message} mentions={mentions} />
+      </div>
+      <AnswerTerms mentions={mentions} />
     </>
   );
 }
@@ -70,10 +91,7 @@ export function ChatMessage({ message, onRetry, onDiscard }: Props) {
         <LogoMark size={20} />
       </span>
       <div className="min-w-0 max-w-[88%]">
-        <div className="whitespace-pre-wrap break-words rounded-[18px] rounded-tl-[6px] border border-line bg-surface px-4 py-3 text-sm leading-relaxed text-ink">
-          <span className="sr-only">AI 답변: </span>
-          <MessageBody message={message} />
-        </div>
+        <AssistantBody message={message} />
         {message.protection && <PrivacyExplanation protection={message.protection} />}
         <time dateTime={message.createdAt} className="mt-1 block text-[11px] text-ink-3">
           {formatTime(message.createdAt)}

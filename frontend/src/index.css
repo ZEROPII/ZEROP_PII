@@ -164,6 +164,19 @@
   .term {
     @apply cursor-help border-b border-dashed border-ink-3;
   }
+  /* 답변 속 의료 용어 (누르면 용어 카드). 보호 표시(점선 밑줄 · 주의색 바탕)와 겹쳐도 구분되게 아래 테두리로 긋는다 */
+  .medterm {
+    @apply cursor-pointer rounded-[3px] text-left transition-colors duration-150;
+    font: inherit;
+    color: inherit;
+    border-bottom: 2px solid color-mix(in srgb, var(--zp-iris) 45%, transparent);
+  }
+  .medterm:hover,
+  .medterm:focus-visible {
+    @apply bg-iris-tint;
+    border-bottom-color: var(--zp-iris);
+    outline: none;
+  }
   .num {
     font-variant-numeric: tabular-nums;
   }

@@ -1,4 +1,4 @@
-import { BarChart3, History, ListChecks, Radar, ShieldCheck, Stethoscope, type LucideIcon } from 'lucide-react';
+import { BarChart3, BookOpen, History, ListChecks, Radar, ShieldCheck, Stethoscope, type LucideIcon } from 'lucide-react';
 
 export type Role = 'clinician' | 'security';
 
@@ -20,6 +20,7 @@ export const NAV: Record<Role, NavItem[]> = {
     { to: '/monitor', label: '관제', title: '실시간 관제', icon: Radar },
     { to: '/report', label: '리포트', title: '레드팀 점검 리포트', icon: BarChart3 },
     { to: '/audit', label: '감사 기록', title: '감사 기록', icon: ListChecks },
+    { to: '/terms', label: '용어', title: '의료 용어 사전', icon: BookOpen },
     { to: '/policy', label: '보호 정책', title: '보호 정책', icon: ShieldCheck },
   ],
 };
@@ -29,6 +30,6 @@ export const ROLE_LABEL: Record<Role, string> = { clinician: '의료진', securi
 
 export function roleOfPath(path: string): Role | null {
   if (path === '/' || path.startsWith('/history')) return 'clinician';
-  if (path.startsWith('/monitor') || path.startsWith('/report') || path.startsWith('/audit')) return 'security';
+  if (path.startsWith('/monitor') || path.startsWith('/report') || path.startsWith('/audit') || path.startsWith('/terms')) return 'security';
   return null;
 }

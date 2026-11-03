@@ -1,8 +1,11 @@
-import { ChevronDown, ChevronUp, Eye } from 'lucide-react';
+import { ChevronDown, ChevronUp, Eye, MessageSquareText } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { caseLabel, relativeTime } from '../../lib/time';
+import { useTermDetect } from '../../state/TermContext';
 import type { MonitorDetail, ReviewAction, TurnView } from '../../types/monitor';
 import { StatusChip } from '../common/StatusChip';
+import { AnswerTerms } from '../terminology/AnswerTerms';
+import { TermText } from '../terminology/TermText';
 import { CrowdLens } from '../viz/CrowdLens';
 
 const TONE = { danger: 'danger', caution: 'caution', safe: 'safe' } as const;
@@ -38,8 +41,11 @@ interface Props {
 
 export function SessionDetail({ detail: d, onReveal, onReview, busy }: Props) {
   const [open, setOpen] = useState<Set<number>>(new Set());
+  const [answers, setAnswers] = useState<Set<number>>(new Set());
   const r = d.row;
   const c1 = d.arms[d.live_arm];
+  // 내보낸 답(가드레일을 거친 답) 속 의료 용어: 밑줄과 칩으로 자동 표시
+  const { mentions } = useTermDetect(c1.turns.map((t) => t.released ?? ''));
   const focus = r.focus_case;
 
   const groups = useMemo<Group[]>(() => {
@@ -67,6 +73,8 @@ export function SessionDetail({ detail: d, onReveal, onReview, busy }: Props) {
           return l.change && raw?.case ? [`${caseLabel(raw.case)} ${raw.field}: ${raw.value ?? ''}`] : [];
         })
       : [];
+    const m = mentions[c1.turns.indexOf(t)];
+    const shown = answers.has(t.turn);
     return (
       <div key={t.turn} className="relative grid grid-cols-[28px_1fr] gap-2.5 pb-3.5">
         <span className={`relative z-[1] grid h-[26px] w-[26px] place-items-center rounded-full border bg-surface text-[11px] font-bold ${hit ? 'border-danger text-danger-text' : 'border-line-input text-ink-2'}`}>
@@ -97,6 +105,25 @@ export function SessionDetail({ detail: d, onReveal, onReview, busy }: Props) {
               )
             )}
           </div>
+          {t.released && (
+            <div className="mt-1.5">
+              <button
+                type="button"
+                className="btn-ghost btn-sm h-6 px-1.5"
+                aria-expanded={shown}
+                onClick={() => setAnswers((s) => (s.has(t.turn) ? new Set([...s].filter((x) => x !== t.turn)) : new Set(s).add(t.turn)))}
+              >
+                <MessageSquareText className="h-3.5 w-3.5" aria-hidden />
+                {shown ? '답 접기' : '내보낸 답 보기'}
+              </button>
+              {shown && (
+                <p className="mt-1 whitespace-pre-wrap rounded-cell border border-line bg-surface px-3 py-2 text-[13px] leading-relaxed text-ink">
+                  <TermText text={t.released} mentions={m} />
+                </p>
+              )}
+              <AnswerTerms mentions={[m]} max={5} label="답에 나온 의료 용어" />
+            </div>
+          )}
           {rawChanged.length > 0 && (
             <div className="mt-1.5 rounded-cell bg-surface-2 px-2.5 py-1.5 text-xs leading-5 text-ink-2">
               {rawChanged.map((ln) => (

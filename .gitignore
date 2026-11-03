@@ -18,3 +18,6 @@ CLAUDE.md
 risk_defender/data/user_bot_profiles_300000.json
 
 runs/
+
+# 의료 용어 DB (scripts/build_terminology_db.py로 다시 만듦)
+data/medical/terminology.db

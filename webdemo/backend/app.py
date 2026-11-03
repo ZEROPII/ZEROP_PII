@@ -10,6 +10,7 @@
 #   레드팀·결과
 #     POST /api/redteam · GET /api/redteam/{id} · GET /api/poc (webdemo/data/poc_summary.json, 2026-10-23 POC 집계)
 #   평가 지표 대시보드: GET /eval/ (eval_demo/ 정적 페이지)
+#   의료 용어 RAG: GET /api/terminology/status · /search · /{node_id} · 목록, POST /api/terminology/detect (medical/terminology_api.py)
 #   세션 직접 조작 (POC 재현·테스트용)
 #     /api/meta · /api/patients · /api/sessions …
 
@@ -27,6 +28,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from medical.config import ROOT
+from medical.terminology_api import terminology_router
 from webdemo.backend.clinic import ClinicDesk, Conflict, NotFound
 from webdemo.backend.engine import ARMS, DemoError, Engine, summarize
 from webdemo.backend.monitor import REVIEW_KO, Monitor
@@ -310,6 +312,7 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
     def unknown(rest: str):
         raise HTTPException(404, f"없는 API 경로입니다: /api/{rest}")
 
+    app.include_router(terminology_router())       # 의료 용어 RAG (/api/terminology/…). 아래 r의 '없는 경로' 처리보다 먼저
     app.include_router(r)
 
     # ── 평가 지표 대시보드 (eval_demo/, 빌드 없는 정적 페이지) ──

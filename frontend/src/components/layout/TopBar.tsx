@@ -1,7 +1,8 @@
-import { Monitor, Moon, Search, Sun } from 'lucide-react';
+import { BookOpen, Monitor, Moon, Search, Sun } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useBackendInfo } from '../../hooks/useBackendInfo';
 import { useTheme } from '../../hooks/useTheme';
+import { useTerms } from '../../state/TermContext';
 import { LogoMark } from '../brand/Logo';
 import { ROLE_HOME, ROLE_LABEL, type Role } from './nav';
 
@@ -13,6 +14,7 @@ export function TopBar({ role, title, onOpenPalette }: { role: Role; title: stri
   const { theme, cycle } = useTheme();
   const ThemeIcon = theme === 'dark' ? Moon : theme === 'light' ? Sun : Monitor;
   const live = backend && backend.kind !== 'offline';
+  const terms = useTerms();
 
   return (
     <header className="flex h-16 shrink-0 items-center gap-3 border-b border-line bg-page px-4 md:px-6">
@@ -54,6 +56,16 @@ export function TopBar({ role, title, onOpenPalette }: { role: Role; title: stri
       </button>
       <button type="button" onClick={onOpenPalette} className="btn-ghost h-9 w-9 px-0 xl:hidden" aria-label="명령 찾기 열기">
         <Search className="h-4 w-4" aria-hidden />
+      </button>
+      <button
+        type="button"
+        onClick={terms.toggleDrawer}
+        aria-pressed={terms.drawerOpen}
+        className={`btn-ghost h-9 px-2.5 ${terms.drawerOpen ? 'bg-iris-tint text-iris-text' : ''}`}
+        title="의료 용어 찾기 (답변 옆에 패널로 열림)"
+      >
+        <BookOpen className="h-4 w-4" aria-hidden />
+        <span className="hidden text-[13px] sm:inline">용어</span>
       </button>
       <button type="button" onClick={cycle} className="btn-ghost h-9 w-9 px-0" aria-label={`테마: ${THEME_LABEL[theme]} (눌러서 바꾸기)`} title={`테마: ${THEME_LABEL[theme]}`}>
         <ThemeIcon className="h-4 w-4" aria-hidden />

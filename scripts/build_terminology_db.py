@@ -37,7 +37,8 @@ SEMTAG = re.compile(r" \((disorder|procedure|regime/therapy|record artifact|find
 
 # node_id 접두사 → 코드 체계 이름 (출처 표시용)
 def source_of(node_id: str) -> str:
-    if "_RXN_" in node_id:
+    # 노드 표 v0.10의 RxNorm 노드는 MED_IN_(성분) · MED_DF_(성분+제형) · MED_RX_(제품)으로 시작한다 (_RXN_ 없음)
+    if "_RXN_" in node_id or node_id.startswith(("MED_IN_", "MED_DF_", "MED_RX_")):
         return "RxNorm"
     if "_SCT_" in node_id:
         return "SNOMED CT"
@@ -45,6 +46,8 @@ def source_of(node_id: str) -> str:
         return "ICD-10"
     if "_ATC_" in node_id:
         return "ATC"
+    if node_id.startswith(("PROC_SECTION_", "PROC_GROUP_")):
+        return "ICD-10-PCS"
     return "기타"
 
 

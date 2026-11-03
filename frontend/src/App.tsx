@@ -7,6 +7,7 @@ import { HistoryPage } from './pages/HistoryPage';
 import { MonitorPage } from './pages/MonitorPage';
 import { PolicyPage } from './pages/PolicyPage';
 import { ReportPage } from './pages/ReportPage';
+import { TerminologyPage } from './pages/TerminologyPage';
 import { WorkspaceProvider } from './state/WorkspaceContext';
 
 export default function App() {
@@ -22,6 +23,7 @@ export default function App() {
               <Route path="monitor" element={<MonitorPage />} />
               <Route path="report" element={<ReportPage />} />
               <Route path="audit" element={<AuditPage />} />
+              <Route path="terms" element={<TerminologyPage />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Route>
           </Routes>

@@ -1,7 +1,10 @@
-import { CornerDownLeft, MessagesSquare, Search } from 'lucide-react';
+import { BookOpen, CornerDownLeft, MessagesSquare, Search } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { monitorApi } from '../../api/monitorApi';
+import { terminologyApi } from '../../api/terminologyApi';
+import { useTerms } from '../../state/TermContext';
+import type { TermSummary } from '../../types/terminology';
 import type { MonitorRow } from '../../types/monitor';
 import { NAV } from './nav';
 
@@ -13,13 +16,29 @@ interface Item {
   icon?: typeof Search;
 }
 
-/** ⌘K 명령 찾기: 화면 이동과 대화 번호로 관제 상세 열기. 위아래 화살표로 고르고 Enter로 엽니다. */
+/** ⌘K 명령 찾기: 화면 이동, 대화 번호로 관제 상세 열기, 의료 용어 찾기. 위아래 화살표로 고르고 Enter로 엽니다. */
 export function CommandPalette({ onClose }: { onClose(): void }) {
   const navigate = useNavigate();
   const [q, setQ] = useState('');
   const [active, setActive] = useState(0);
   const [rows, setRows] = useState<MonitorRow[]>([]);
+  const [terms, setTerms] = useState<TermSummary[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
+  const { view, openTerm, openSearch } = useTerms();
+
+  useEffect(() => {
+    const t = q.trim();
+    if (t.length < 2) {
+      setTerms([]);
+      return;
+    }
+    const ctl = new AbortController();
+    const timer = window.setTimeout(() => terminologyApi.search(t, { limit: 5, view }, ctl.signal).then(setTerms, () => setTerms([])), 180);
+    return () => {
+      window.clearTimeout(timer);
+      ctl.abort();
+    };
+  }, [q, view]);
 
   useEffect(() => {
     inputRef.current?.focus();
@@ -42,8 +61,17 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
     }));
     const all = [...pages, ...convs];
     const t = q.trim().toLowerCase();
-    return t ? all.filter((i) => `${i.label} ${i.hint}`.toLowerCase().includes(t)) : all;
-  }, [q, rows, navigate]);
+    if (!t) return all;
+    const termItems: Item[] = terms.map((x) => ({
+      id: `term:${x.node_id}`,
+      label: x.canonical_label,
+      hint: `의료 용어 · ${x.attribute_label}`,
+      icon: BookOpen,
+      run: () => openTerm(x.node_id),
+    }));
+    const lookup: Item = { id: 'term-search', label: `'${q.trim()}' 의료 용어 패널에서 찾기`, hint: '의료 용어', icon: BookOpen, run: () => openSearch(q.trim()) };
+    return [...all.filter((i) => `${i.label} ${i.hint}`.toLowerCase().includes(t)), ...termItems, lookup];
+  }, [q, rows, terms, navigate, openTerm, openSearch]);
 
   useEffect(() => setActive(0), [q]);
 
@@ -71,7 +99,7 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
             ref={inputRef}
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="화면 이름이나 대화 번호(T0014)를 입력하세요"
+            placeholder="화면 이름, 대화 번호(T0014), 의료 용어를 입력하세요"
             className="flex-1 bg-transparent text-[15px] text-ink outline-none placeholder:text-ink-3"
             aria-label="찾을 내용"
           />

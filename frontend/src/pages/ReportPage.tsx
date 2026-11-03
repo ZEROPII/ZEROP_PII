@@ -1,4 +1,4 @@
-import { Play } from 'lucide-react';
+import { ExternalLink, Play } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { MONITOR_UNAVAILABLE, monitorApi, type PocSummary } from '../api/monitorApi';
 import { ErrorState, LoadingState } from '../components/common/StatusViews';
@@ -191,6 +191,10 @@ export function ReportPage() {
             </option>
           ))}
         </select>
+        <a href="/eval/" target="_blank" rel="noreferrer" className="btn-ghost btn-sm" title="평가 지표 대시보드 (eval_demo/, 데모 서버의 /eval/)">
+          <ExternalLink className="h-3.5 w-3.5" aria-hidden />
+          평가 지표 22개
+        </a>
         <span className="flex-1" />
         <div className="flex flex-wrap items-center gap-2 rounded-control bg-surface-2 p-1.5 pl-3 text-[13px]">
           <span className="text-ink-2">새로 점검</span>
