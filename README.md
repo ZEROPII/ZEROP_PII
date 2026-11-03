@@ -4,13 +4,39 @@
 
 공격 질문 생성(Fuzzer), 대상 시스템(Target LLM), QI 추출, 위험 판정·방어(Risk/Defender), 평가 로그를 한 번의 실행으로 연결합니다.
 
+## 통합 브랜치 `feat/integrated-v2-scoring-terminology` (2026-11-03)
+
+`feat/integrated-demo`(9c5c148) 위에 아래를 합친 브랜치입니다.
+
+| 가져온 것 | 출처 | 들어간 곳 |
+| --- | --- | --- |
+| 단서 추출 규칙 추출 · 정규화 v2 · 추출 바로잡기 | 양승준 (holdout 검증용으로 따로 보낸 패치 2개) | `medical/rule_extract.py` · `normalize_ext.py` · `obs_fix.py`, `python -m medical run --rule-extract` |
+| 단서 추출 · 위험 판정 채점, 보류 검증 도구와 결과 | 팀 고정본 채점 + 양승준 | `medical/scoring/` ([README](medical/scoring/README.md), [결과 기록](medical/scoring/결과_기록.md)) |
+| 평가 지표 22개 대시보드, 평가 문서 | 이정민 `eval-metrics` | `eval_demo/`, `evaluation/README.md` · `Evaluation.md`. 데모 서버 `/eval/` |
+| K 피드백 끄기(No-K) Ablation | 한재이 `K_FUZZER_ON_OFF` (39a3863) | `adapters/fuzzer_adapter.py`, `orchestrator --feedback-mode no-k`, `validation/ablation.py` |
+| Mutation 시스템 프롬프트 갱신, 공격 시드 Target QI | 한재이 `fuzzer_proto` | `fuzzer/seedinput/seedprompt.txt`, `fuzzer/fuzzer_mutation.py` |
+| 의료 용어 RAG | 이유진 `feat/terminology-rag` | `medical/terminology.py`, `scripts/build_terminology_db.py`, 화면 연동 ([README](medical/README_terminology.md)) |
+
+화면과 서버:
+
+```bash
+python -m webdemo --build          # 데모 서버 + 화면 (LLM 0, API 키 불필요). http://127.0.0.1:8000
+python -m api_server               # 실제 LLM 연구 서버 (.env 필요). 화면은 cd frontend && VITE_API_MODE=http VITE_API_BASE_URL=/api npm run dev
+python scripts/build_terminology_db.py --no-llm   # 용어 DB 메타데이터 (LLM 0). 쉬운 설명은 --resume으로 채움 (LLM)
+```
+
+의료 용어는 위쪽 막대 `용어` 버튼, 답변 속 밑줄 · 용어 칩, 보안 담당자 `용어` 메뉴에서 봅니다. 화면에서는 LLM을 부르지 않습니다.
+
 ## 현재 상태
 
 | 항목 | 상태 |
 | --- | --- |
 | 모듈 구현 및 연결 (질문 생성 → 응답 → 추출 → 판정 → 공개 → State 반영) | 완료 |
-| 단위·통합 테스트 | 805개 통과 (LLM 호출은 가짜 client 사용, 의료 37개 포함) |
-| 의료 시나리오 (Synthea 576명) | `python -m medical` — RAG 문서·유사 환자 검색·사례별 추적·사건 단위 k(kcalc)·Defender(이유진 정책)·C0/C1/C1S·Validated k. 가짜 LLM 배선 확인 완료, 실제 LLM 파일럿 전. 상세: [docs/medical.md](docs/medical.md) |
+| 단위·통합 테스트 | pytest 882개 통과 · frontend vitest 15개 (LLM 호출은 가짜 client 사용) |
+| 의료 시나리오 (Synthea 576명) | `python -m medical` — RAG 문서·유사 환자 검색·사례별 추적·사건 단위 k(kcalc)·Defender(이유진 정책)·C0/C1/C1S·Validated k. 상세: [docs/medical.md](docs/medical.md) |
+| 단서 추출 정확도 (보류 검증) | holdout_2(처음 보는 질의 환자 13명) 팀 고정본 채점 정밀도 97.0% · 재현율 89.2% · F1 0.929, 확정 값 기준 F1 0.896. [medical/scoring/](medical/scoring/README.md) |
+| 화면 | `frontend/` 의료진 화면 + 보안 관제 · 리포트 · 감사 기록 · 의료 용어 사전. 데모 서버(`python -m webdemo`) 또는 연구 서버(`python -m api_server`) |
+| 의료 용어 RAG | 검색 · 용어 카드 · 답변 속 용어 자동 표시 (`medical/terminology.py` + `term_service.py`) |
 | 실행 갈래 | C0(Defender 없음), C1(공개 전 Defender), C1S(무상태 Defender 대조군) |
 | 위험 계산 백엔드 | `risk_defender`(이유진 파트, 기본) / `ontology`(D1 Stage 3 계층 + D1 Stage 11 Defender) |
 | Privacy Coverage 기록 (D1 Stage 9) | 턴별 판정과 세션 요약을 trace에 기록 |
@@ -40,6 +66,11 @@
 | `adapters/` | 양승준 | `risk_defender`·`fuzzer` 연결 어댑터, 온톨로지 백엔드(`ontology_risk.py`) |
 | `orchestrator/` | 양승준 | 턴 루프, 공개 게이트, 응답 재작성, Coverage 기록, 실행 기록, 위험 경로 보관, 재실행, 집계 |
 | `medical/` | 양승준 (전달 묶음 `medical/bundle/`은 원본 그대로) | 의료 시나리오 실행: 문서·검색·대상 AI·추출·사례 추적·Defender·질문 생성·평가·집계 |
+| `medical/scoring/` | 양승준 (`frozen/`은 팀 고정본, 수정 금지) | 단서 추출 · 위험 판정 채점, 보류 검증 |
+| `medical/terminology.py`, `scripts/build_terminology_db.py` | 이유진 | 의료 용어 DB와 검색 |
+| `api_server/`, `frontend/` | 한재이 (화면 통합 · 관제 화면: 양승준) | 연구 서버 API, React 화면 |
+| `webdemo/` | 양승준 | 데모 서버 (결정적 응답기, LLM 0), 관제 · 레드팀 · `/eval/` |
+| `eval_demo/`, `evaluation/` | 이정민 | 평가 지표 대시보드, 평가 지표 정의 |
 | `validation/` | 양승준 | 실행이 끝난 뒤 State를 정답과 대조해 `k_val` 계산 (실행 중 코드에서 import 금지) |
 | `fuzzer/` | 한재이 | k 피드백 → 변형 전략 → Mutation 지시문 |
 | `risk_defender/` | 이유진 | Privacy State, k 계산, 일반화·억제 판정 |
