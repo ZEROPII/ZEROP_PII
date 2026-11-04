@@ -86,6 +86,37 @@ describe('mock api', () => {
     expect(pre.requiresWarning).toBe(false);
   });
 
+  it('사전 경고는 의료진 화면용 plannedAction을 함께 준다', async () => {
+    const api = fast();
+    const pre = await api.assessPreflight('case-a', 'session-case-a', '사례 A 환자는 어느 도시에 살았나요?');
+    expect(pre.plannedAction).toBe('suppress');
+    const calm = await api.assessPreflight('case-a', 'session-case-a', '시술 후 처방 기간은?');
+    expect(calm.plannedAction).toBeNull();
+  });
+
+  it('공개 이력에는 답에 나간 값이 있고, 가린 값은 null이다', async () => {
+    const api = fast();
+    await ask(api, 'case-b', '사례 B 환자 나이와 시술 시점은?');
+    const entries = (await api.getDisclosureHistory('case-b')).entries;
+    expect(entries.find((e) => e.attribute === 'AGE')!.value).toBe('60~64세');
+    expect(entries.find((e) => e.turn === 0)!.value).toBe('Coronary arteriosclerosis');
+    const hidden = (await api.getDisclosureHistory('case-a')).entries.find((e) => e.action === 'suppress')!;
+    expect(hidden.value).toBeNull();
+  });
+
+  it('세부 정보 요청에는 예시 답장이 붙고, 잘못된 메시지는 거절한다', async () => {
+    const api = createMockApi({ latency: [0, 0], autoReplyMs: 0 });
+    expect(await api.listClinicMessages!()).toEqual([]);
+    const list = await api.postClinicMessage!({ kind: 'access_request', text: '사례 A 시술 시점이 필요합니다', caseId: 'case-a' });
+    expect(list.map((m) => [m.sender, m.kind, m.caseLabel])).toEqual([
+      ['clinician', 'access_request', '사례 A'],
+      ['security', 'reply', '사례 A'],
+    ]);
+    expect(list[1].text).toContain('예시');
+    await expect(api.postClinicMessage!({ kind: 'reply', text: 'x' })).rejects.toThrow('2자 이상');
+    await expect(api.postClinicMessage!({ kind: 'reply', text: '없는 사례', caseId: 'case-z' })).rejects.toThrow('존재하지 않는 사례');
+  });
+
   it('오류 트리거 문구는 ApiError를 낸다', async () => {
     await expect(ask(fast(), 'case-a', '테스트 #오류')).rejects.toThrow('Mock 서버 오류');
   });

@@ -105,6 +105,107 @@
   }
 }
 
+
+/*
+ * 의료진 화면: 병원 EMR에 들어간 진료 지원 AI. 보안 관제 화면(위 남색 토큰)과 다른 제품처럼 보이도록
+ * 같은 토큰 이름을 청록 계열 값으로 바꿔 쓴다. 대비는 모두 WCAG AA 이상 (본문 4.5:1, 테두리 3:1).
+ * 가린 값은 위험색(빨강)이 아니라 차분한 잠금 회색으로 보인다: 의료진에게는 경고가 아니라 안내다.
+ */
+:root {
+  --emr-chrome: #10262e;
+  --emr-chrome-text: #e6eef0;
+  --emr-chrome-muted: #9fb3b8;
+  --emr-chrome-line: #22414a;
+  --emr-chrome-hover: #183740;
+  --emr-banner: #eaf3f2;
+  --emr-lock: #4f616b;
+  --emr-lock-tint: #e7edf0;
+}
+
+[data-app='emr'] {
+  --drawer-top: 48px; /* 용어 패널은 EMR 머리줄 바로 아래에서 시작 */
+  --zp-page: #f3f6f6;
+  --zp-surface: #ffffff;
+  --zp-surface-2: #eaf0f0;
+  --zp-line: #d8e1e2;
+  --zp-line-input: #7a8c91;
+  --zp-text: #13232a;
+  --zp-text-2: #44565d;
+  --zp-text-3: #5b6d74;
+  --zp-iris: #0b7a75;
+  --zp-iris-text: #08625e;
+  --zp-iris-tint: #e1f1ef;
+  --zp-on-iris: #ffffff;
+  --zp-focus: #0b7a75;
+  --zp-hatch-ink: #c3cfd2;
+  --zp-scrim: rgba(16, 38, 46, 0.42);
+  --zp-shadow-overlay: 0 1px 2px rgba(16, 38, 46, 0.06), 0 12px 32px rgba(16, 38, 46, 0.16);
+  --emr-chrome: #10262e;
+  --emr-chrome-text: #e6eef0;
+  --emr-chrome-muted: #9fb3b8;
+  --emr-chrome-line: #22414a;
+  --emr-chrome-hover: #183740;
+  --emr-banner: #eaf3f2;
+  --emr-lock: #4f616b;
+  --emr-lock-tint: #e7edf0;
+}
+
+:root[data-theme='dark'] [data-app='emr'] {
+  --zp-page: #0e1719;
+  --zp-surface: #142125;
+  --zp-surface-2: #1a2a2f;
+  --zp-line: #27393e;
+  --zp-line-input: #5e7479;
+  --zp-text: #e3ecee;
+  --zp-text-2: #a7b8bc;
+  --zp-text-3: #8a9da2;
+  --zp-iris: #0d7f78;
+  --zp-iris-text: #5fd3c7;
+  --zp-iris-tint: #16332f;
+  --zp-on-iris: #ffffff;
+  --zp-focus: #5fd3c7;
+  --zp-hatch-ink: #34484e;
+  --zp-scrim: rgba(0, 0, 0, 0.55);
+  --zp-shadow-overlay: 0 0 0 1px #27393e, 0 16px 40px rgba(0, 0, 0, 0.5);
+  --emr-chrome: #091214;
+  --emr-chrome-text: #dce7e9;
+  --emr-chrome-muted: #8ea3a8;
+  --emr-chrome-line: #1e3238;
+  --emr-chrome-hover: #12232a;
+  --emr-banner: #12262a;
+  --emr-lock: #a9bac0;
+  --emr-lock-tint: #1d2b30;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) [data-app='emr'] {
+    --zp-page: #0e1719;
+    --zp-surface: #142125;
+    --zp-surface-2: #1a2a2f;
+    --zp-line: #27393e;
+    --zp-line-input: #5e7479;
+    --zp-text: #e3ecee;
+    --zp-text-2: #a7b8bc;
+    --zp-text-3: #8a9da2;
+    --zp-iris: #0d7f78;
+    --zp-iris-text: #5fd3c7;
+    --zp-iris-tint: #16332f;
+    --zp-on-iris: #ffffff;
+    --zp-focus: #5fd3c7;
+    --zp-hatch-ink: #34484e;
+    --zp-scrim: rgba(0, 0, 0, 0.55);
+    --zp-shadow-overlay: 0 0 0 1px #27393e, 0 16px 40px rgba(0, 0, 0, 0.5);
+    --emr-chrome: #091214;
+    --emr-chrome-text: #dce7e9;
+    --emr-chrome-muted: #8ea3a8;
+    --emr-chrome-line: #1e3238;
+    --emr-chrome-hover: #12232a;
+    --emr-banner: #12262a;
+    --emr-lock: #a9bac0;
+    --emr-lock-tint: #1d2b30;
+  }
+}
+
 @layer base {
   html,
   body,
@@ -176,6 +277,61 @@
     @apply bg-iris-tint;
     border-bottom-color: var(--zp-iris);
     outline: none;
+  }
+  /* 의료진 화면: 가린 값 (잠금 표시). 위험색을 쓰지 않는다. */
+  .lock-token {
+    @apply inline-flex items-center gap-1 whitespace-nowrap rounded-[6px] px-1.5 align-baseline font-semibold;
+    font-size: 0.86em;
+    line-height: 1.6;
+    color: var(--emr-lock);
+    background: var(--emr-lock-tint);
+  }
+  /* 의료진 화면: 넓은 범위로 바꾼 값 */
+  .range-value {
+    text-decoration: underline dotted var(--zp-iris);
+    text-underline-offset: 4px;
+    text-decoration-thickness: 1.5px;
+  }
+  .range-tag {
+    @apply ml-1 inline-flex items-center rounded-[5px] border px-1 align-[1px] text-[10.5px] font-semibold leading-[15px];
+    color: var(--zp-iris-text);
+    border-color: color-mix(in srgb, var(--zp-iris) 40%, transparent);
+  }
+  /* 사례 노트의 내부 링크 (옵시디언 [[링크]]) */
+  .wikilink {
+    @apply cursor-pointer rounded-[3px] text-left font-medium text-iris-text;
+    font: inherit;
+    font-weight: 550;
+  }
+  .wikilink::before,
+  .wikilink::after {
+    color: var(--zp-text-3);
+    opacity: 0.55;
+    font-weight: 400;
+  }
+  .wikilink::before {
+    content: '[[';
+  }
+  .wikilink::after {
+    content: ']]';
+  }
+  .wikilink:hover,
+  .wikilink:focus-visible {
+    @apply bg-iris-tint;
+    outline: none;
+  }
+  /* 연결된 질문을 눌러 대화의 그 자리로 갔을 때 잠깐 표시 */
+  .jump-flash {
+    animation: jump-flash 1.6s cubic-bezier(0.2, 0.8, 0.2, 1);
+  }
+  @keyframes jump-flash {
+    0%,
+    30% {
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--zp-iris) 45%, transparent);
+    }
+    100% {
+      box-shadow: 0 0 0 3px transparent;
+    }
   }
   .num {
     font-variant-numeric: tabular-nums;

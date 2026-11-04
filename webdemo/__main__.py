@@ -24,7 +24,7 @@ def build_frontend() -> None:
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(prog="python -m webdemo", description="Zero PII 의료 AI 데모 (의료진 화면 + 보안 관제, LLM 호출 없음, API 키 불필요)")
+    ap = argparse.ArgumentParser(prog="python -m webdemo", description="MediCloak 의료 AI 데모 (의료진 화면 + 보안 관제, LLM 호출 없음, API 키 불필요)")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--port", type=int, default=8000)
     ap.add_argument("--build", action="store_true", help="시작 전에 frontend/를 빌드한다 (npm 필요)")

@@ -12,6 +12,7 @@ import type {
   CaseId,
   CaseRiskState,
   ChatMessage,
+  ClinicMessage,
   ConversationSession,
   DisclosureHistoryEntry,
   MessageSegment,
@@ -73,16 +74,24 @@ export interface MockApiOptions {
   /** 응답 지연(ms). 테스트에서는 0. */
   latency?: [number, number];
   now?: () => Date;
+  /** 세부 정보 요청에 예시 답장을 붙이는 시간(ms). 0이면 바로 붙인다. */
+  autoReplyMs?: number;
 }
+
+/** Mock에는 관제 화면이 없으므로 세부 정보 요청에 예시 답장을 붙인다 (실제 서버에서는 보안 담당자가 답한다). */
+export const MOCK_AUTO_REPLY =
+  '요청을 받았습니다. 이 답장은 예시입니다. 데모 서버(python -m webdemo)에서는 보안 담당자가 관제 화면에서 직접 답합니다.';
 
 export function createMockApi(options: MockApiOptions = {}): ClinicalCaseApi {
   const [minLatency, maxLatency] = options.latency ?? [450, 900];
   const now = options.now ?? (() => new Date());
+  const autoReplyMs = options.autoReplyMs ?? 1500;
   const policy = MOCK_POLICY;
   let idSeq = 0;
   const nextId = (prefix: string) => `${prefix}-${++idSeq}`;
 
   const stores = new Map<CaseId, CaseStore>();
+  const messages: ClinicMessage[] = [];
 
   function caseLabel(caseId: CaseId): string {
     return MOCK_CASES.find((c) => c.caseId === caseId)?.label ?? caseId;
@@ -135,6 +144,7 @@ export function createMockApi(options: MockApiOptions = {}): ClinicalCaseApi {
           attributeLabel: caseId === 'case-a' ? '진단 · 시술명' : '진단명',
           action: 'allow',
           description: `검색 결과 노출 · ${caseId === 'case-a' ? `${summary.diagnosis}, PCI` : summary.diagnosis}`,
+          value: summary.diagnosis,
         },
       ],
       disclosed: {},
@@ -286,6 +296,7 @@ export function createMockApi(options: MockApiOptions = {}): ClinicalCaseApi {
       attributeLabel: QI_LABEL[o.attribute],
       action: o.action,
       description: o.action === 'allow' ? `${o.value} (그대로 공개)` : levelDescription(o),
+      value: o.action === 'suppress' ? null : o.value,
     }));
     for (const o of fresh) store.disclosed[o.attribute] = { action: o.action, value: o.value, level: o.level };
 
@@ -334,7 +345,7 @@ export function createMockApi(options: MockApiOptions = {}): ClinicalCaseApi {
       suggestions: SUGGESTED_QUESTIONS[caseId] ?? [],
     };
     if (!risky.length) {
-      return { ...base, requiresWarning: false, projectedK: null, message: null, affectedAttributes: [], suggestions: [] };
+      return { ...base, requiresWarning: false, projectedK: null, message: null, affectedAttributes: [], suggestions: [], plannedAction: null };
     }
     const projectedK = Math.min(store.risk.k, ...risky.map((r) => r.projection!.rawK));
     const labels = risky.map((r) => `‘${QI_LABEL[r.attribute]}’`).join(', ');
@@ -346,6 +357,7 @@ export function createMockApi(options: MockApiOptions = {}): ClinicalCaseApi {
       projectedK,
       message: `이 질문은 ${L}의 후보를 ${store.risk.k}명에서 ${projectedK}명으로 줄일 수 있습니다. ${labels} 항목은 답변에서 ${outcomeText} 수 있습니다.`,
       affectedAttributes: risky.map((r) => QI_LABEL[r.attribute]),
+      plannedAction: actions.includes('suppress') ? 'suppress' : actions.includes('generalize') ? 'generalize' : null,
     };
   }
 
@@ -376,6 +388,40 @@ export function createMockApi(options: MockApiOptions = {}): ClinicalCaseApi {
       stateVersion: store.risk.version,
       source: 'mock',
     };
+  }
+
+  function postMessage(kind: string, text: string, caseId: CaseId | null | undefined): ClinicMessage[] {
+    const body = text.trim();
+    if (kind !== 'access_request' && kind !== 'reply') throw new ApiError('보낼 수 없는 메시지 종류입니다.', 422);
+    if (body.length < 2 || body.length > 500) throw new ApiError('메시지는 2자 이상 500자 이하로 써 주세요.', 422);
+    if (caseId && !(caseId in INITIAL_K)) throw new ApiError('존재하지 않는 사례입니다.', 404);
+    const label = caseId ? caseLabel(caseId) : null;
+    messages.push({
+      messageId: nextId('m'),
+      createdAt: now().toISOString(),
+      sender: 'clinician',
+      kind,
+      kindLabel: kind === 'access_request' ? '세부 정보 요청' : '답장',
+      caseId: caseId ?? null,
+      caseLabel: label,
+      text: body,
+    });
+    if (kind === 'access_request') {
+      const reply = () =>
+        messages.push({
+          messageId: nextId('m'),
+          createdAt: now().toISOString(),
+          sender: 'security',
+          kind: 'reply',
+          kindLabel: '답장',
+          caseId: caseId ?? null,
+          caseLabel: label,
+          text: MOCK_AUTO_REPLY,
+        });
+      if (autoReplyMs <= 0) reply();
+      else setTimeout(reply, autoReplyMs);
+    }
+    return messages;
   }
 
   async function delay<T>(fn: () => T, signal?: AbortSignal): Promise<T> {
@@ -414,5 +460,7 @@ export function createMockApi(options: MockApiOptions = {}): ClinicalCaseApi {
     listRiskStates: (signal) => delay(() => MOCK_CASES.map((c) => ensureStore(c.caseId).risk), signal),
     getDisclosureHistory: (caseId, signal) => delay(() => ({ caseId, entries: ensureStore(caseId).history }), signal),
     getPolicyDecision: (caseId, signal) => delay(() => rationale(ensureStore(caseId)), signal),
+    listClinicMessages: (signal) => delay(() => messages, signal),
+    postClinicMessage: (req) => delay(() => postMessage(req.kind, req.text, req.caseId)),
   };
 }

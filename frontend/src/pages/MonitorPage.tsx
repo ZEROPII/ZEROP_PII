@@ -19,7 +19,7 @@ const TABS: { id: TabId; label: string; match(r: MonitorRow): boolean }[] = [
 ];
 const REVIEW_TOAST: Record<ReviewAction, string> = {
   reviewed: '검토 완료로 표시했습니다.',
-  ask_clinician: '의료진에게 확인을 요청했습니다.',
+  ask_clinician: '의료진에게 확인 요청을 보냈습니다. 의료진 화면 대화 위에 뜹니다.',
   add_rule: '질문 패턴을 규칙 후보에 추가했습니다.',
 };
 const POLL_MS = 3000;
@@ -28,6 +28,12 @@ function Brief({ o }: { o: MonitorOverview }) {
   const k = o.kpi;
   let text;
   if (k.identified > 0) text = <>기준 아래로 내려간 사례가 <em className="not-italic text-danger-text">{k.identified}건</em> 있습니다. 바로 확인하세요.</>;
+  else if (k.requests > 0)
+    text = (
+      <>
+        의료진이 보낸 요청 <em className="not-italic text-iris-text">{k.requests}건</em>이 답을 기다립니다. 목록 맨 위 대화에서 답장해 주세요.
+      </>
+    );
   else if (k.needs_review > 0)
     text = (
       <>
@@ -107,8 +113,12 @@ export function MonitorPage() {
     if (stamp.current === rowStamp) return;
     stamp.current = rowStamp;
     if (sameSession && detail?.revealed) {
-      // 열람한 상세는 새로 받지 않는다 (다시 가려지지 않게). 목록 행 정보(검토 표시 등)만 바꾼다.
+      // 열람한 상세는 새로 받지 않는다 (다시 가려지지 않게). 목록 행 정보(검토 표시 등)와 메시지만 바꾼다.
       setDetail((d) => (d && row ? { ...d, row } : d));
+      monitorApi.thread(selected).then(
+        (t) => setDetail((d) => (d && d.id === selected ? { ...d, row: t.row, messages: t.messages } : d)),
+        () => undefined,
+      );
       return;
     }
     const ctl = new AbortController();
@@ -140,17 +150,40 @@ export function MonitorPage() {
     return () => window.removeEventListener('keydown', onKey);
   }, [rows, selected, select, revealOpen]);
 
-  async function review(action: ReviewAction) {
-    if (!selected) return;
+  async function review(action: ReviewAction, note?: string) {
+    if (!selected) return false;
     setBusy(true);
     try {
-      await monitorApi.review(selected, action);
+      await monitorApi.review(selected, action, note);
       toast(REVIEW_TOAST[action]);
       await loadOverview();
+      return true;
     } catch (e) {
       toast(e instanceof Error ? e.message : '기록하지 못했습니다.');
+      return false;
     } finally {
       setBusy(false);
+    }
+  }
+
+  /** 의료진에게 답장 또는 확인 요청. 확인 요청은 검토 표시(ask_clinician)와 함께 남는다. */
+  async function message(kind: 'reply' | 'check_request', text: string, caseRef: string | null) {
+    if (!selected) return false;
+    const sid = selected;
+    if (kind === 'check_request') {
+      const ok = await review('ask_clinician', text);
+      if (ok) monitorApi.thread(sid).then((t) => setDetail((d) => (d && d.id === sid ? { ...d, row: t.row, messages: t.messages } : d)), () => undefined);
+      return ok;
+    }
+    try {
+      const t = await monitorApi.message(sid, 'reply', text, caseRef);
+      setDetail((d) => (d && d.id === sid ? { ...d, row: t.row, messages: t.messages } : d));
+      toast('의료진에게 답장을 보냈습니다.');
+      await loadOverview();
+      return true;
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '답장을 보내지 못했습니다.');
+      return false;
     }
   }
 
@@ -205,7 +238,7 @@ export function MonitorPage() {
           {detailError ? (
             <ErrorState message={detailError} />
           ) : detail && detail.id === selected ? (
-            <SessionDetail detail={detail} busy={busy} onReveal={() => setRevealOpen(true)} onReview={review} />
+            <SessionDetail detail={detail} busy={busy} onReveal={() => setRevealOpen(true)} onReview={(a) => void review(a)} onMessage={message} />
           ) : (
             <LoadingState label="대화 상세를 불러오는 중" />
           )}

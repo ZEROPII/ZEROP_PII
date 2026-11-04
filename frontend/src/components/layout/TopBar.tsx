@@ -21,6 +21,10 @@ export function TopBar({ role, title, onOpenPalette }: { role: Role; title: stri
       <span className="md:hidden">
         <LogoMark size={28} />
       </span>
+      <span className="hidden shrink-0 items-center gap-3 text-[15px] font-extrabold tracking-[-0.02em] text-iris-text md:inline-flex" aria-label="MediCloak 관제">
+        MediCloak
+        <i className="block h-4 w-px bg-line" aria-hidden />
+      </span>
       <h1 className="truncate text-lg font-bold tracking-[-0.02em]">{title}</h1>
       {backend && (
         <span className="hidden items-center gap-1.5 text-xs text-ink-2 lg:inline-flex" title={backend.detail}>

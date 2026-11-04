@@ -97,7 +97,7 @@ export function TermDrawer() {
   return (
     <aside
       aria-label="의료 용어"
-      className="fixed inset-x-0 bottom-0 top-16 z-40 flex flex-col border-l border-line bg-surface shadow-overlay sm:left-auto sm:w-[400px]"
+      className="fixed inset-x-0 bottom-0 top-[var(--drawer-top,4rem)] z-40 flex flex-col border-l border-line bg-surface shadow-overlay sm:left-auto sm:w-[400px]"
     >
       <header className="flex items-center gap-2 border-b border-line px-4 py-3">
         {selected ? (

@@ -37,10 +37,43 @@ export interface MonitorRow {
   created: number;
   review: ReviewMark | null;
   needs_review: boolean;
+  /** 의료진과 주고받은 메시지 수 */
+  messages: number;
+  /** 마지막 메시지를 의료진이 보냈다 (보안 담당자가 답할 차례) */
+  pending_request: boolean;
+  /** 보안 담당자가 확인 요청을 보내고 의료진 답을 기다리는 중 */
+  awaiting_clinician: boolean;
+  /** 답할 차례인 요청이 가리키는 사례 ('사례1') */
+  request_case: string | null;
+}
+
+export interface ThreadMessage {
+  id: string;
+  at: number;
+  sender: 'clinician' | 'security';
+  kind: 'access_request' | 'check_request' | 'reply';
+  kind_label: string;
+  case: string | null;
+  text: string;
+  actor: string;
+}
+
+export interface ThreadResult {
+  messages: ThreadMessage[];
+  row: MonitorRow;
 }
 
 export interface MonitorOverview {
-  kpi: { sessions: number; suppressed: number; generalized: number; identified: number; needs_review: number; blocked_sessions: number };
+  kpi: {
+    sessions: number;
+    suppressed: number;
+    generalized: number;
+    identified: number;
+    needs_review: number;
+    blocked_sessions: number;
+    /** 보안 담당자가 답할 차례인 의료진 요청 수 */
+    requests: number;
+  };
   sessions: MonitorRow[];
   simulations: string;
   live_arm: ArmKey;
@@ -114,6 +147,7 @@ export interface MonitorDetail {
   row: MonitorRow;
   revealed: boolean;
   live_arm: ArmKey;
+  messages: ThreadMessage[];
 }
 
 export interface AuditEntry {
@@ -126,6 +160,8 @@ export interface AuditEntry {
   reason?: string;
   note?: string | null;
   job?: string;
+  /** 메시지 기록만: 가리킨 사례 ('사례1') */
+  case?: string | null;
 }
 
 export interface Proportion {

@@ -1,3 +1,4 @@
+import { MailQuestion } from 'lucide-react';
 import { relativeTime, caseLabel } from '../../lib/time';
 import type { MonitorRow } from '../../types/monitor';
 import { StatusChip, StatusIcon } from '../common/StatusChip';
@@ -45,13 +46,25 @@ export function QueueTable({ rows, selected, onSelect, kReq }: Props) {
                 <div className="text-xs text-ink-3">
                   {r.qtype_label} {r.turns}턴
                 </div>
-                {r.flag && (
-                  <div className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold text-caution-text">
-                    <StatusIcon tone="caution" className="h-2.5 w-2.5" />
-                    {r.flag}
+                {r.flag &&
+                  (r.pending_request ? (
+                    <div className="mt-1 inline-flex items-center gap-1 rounded-[5px] bg-iris-tint px-1.5 py-px text-[11px] font-semibold text-iris-text">
+                      <MailQuestion className="h-3 w-3" aria-hidden />
+                      {r.flag}
+                      {r.request_case && <span className="font-normal">{caseLabel(r.request_case)}</span>}
+                    </div>
+                  ) : (
+                    <div className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold text-caution-text">
+                      <StatusIcon tone="caution" className="h-2.5 w-2.5" />
+                      {r.flag}
+                    </div>
+                  ))}
+                {r.review && (
+                  <div className="mt-1 text-[11px] font-semibold text-ink-3">
+                    {r.review.label}
+                    {r.awaiting_clinician && <span className="ml-1 font-normal">(의료진 답 기다림)</span>}
                   </div>
                 )}
-                {r.review && <div className="mt-1 text-[11px] font-semibold text-ink-3">{r.review.label}</div>}
               </td>
               <td className="hidden border-b border-line px-3 py-3 align-middle text-ink-2 xl:table-cell">
                 {[r.suppressed ? `가림 ${r.suppressed}` : '', r.generalized ? `일반화 ${r.generalized}` : ''].filter(Boolean).join(' ') || '없음'}

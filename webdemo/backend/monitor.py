@@ -6,12 +6,19 @@
 #   이상 없음(safe)        : 모두 그대로 답했다
 # '같은 환자 반복 질문'은 한 사례에서 가림이 두 번 이상 나온 대화다.
 # 원 응답·가린 원래 값·환자 번호는 기본으로 지워서 보내고, 사유를 남긴 열람(reveal)에서만 보낸다. 열람·검토는 감사 기록에 남는다.
+#
+# 의료진 ↔ 보안 담당자 메시지 (Session.messages)
+#   의료진: 세부 정보 요청(access_request) · 답장(reply)     보안 담당자: 확인 요청(check_request) · 답장(reply)
+#   마지막 메시지를 의료진이 보냈으면 보안 담당자가 답할 차례다 → 검토 필요 목록 맨 위로 올린다.
+#   '의료진에게 확인 요청' 검토 표시는 확인 요청 메시지를 함께 보낸다 (의료진 화면에 도착하고, 의료진이 답할 수 있다).
+#   메시지는 원래 값을 담지 않는다. 의료진이 무엇이 필요한지 쓰고, 보안 담당자가 처리 결과를 답한다.
 
 from __future__ import annotations
 
 import collections
 import copy
 import itertools
+import re
 import threading
 import time
 from typing import Any
@@ -23,7 +30,17 @@ SOURCE_KO = dict(clinic="의료진 화면", simulation="레드팀 시뮬레이�
 STATUS_KO = dict(danger="특정 시도 막음", caution="넓혀서 답함", safe="이상 없음")
 REVIEW_KO = dict(reviewed="검토 완료", ask_clinician="의료진에게 확인 요청", add_rule="질문 패턴을 규칙에 추가")
 ACTOR = "보안 담당자 (데모)"
+CLINICIAN = "의료진 (데모)"
 SIM_TRIALS = ("T0010", "T0015", "T0036", "T0024", "T0016", "T0005")
+
+MSG_KINDS = dict(clinician=("access_request", "reply"), security=("check_request", "reply"))
+MSG_KIND_KO = dict(access_request="세부 정보 요청", check_request="확인 요청", reply="답장")
+# 메시지마다 감사 기록 action. 보안 담당자의 확인 요청은 검토 표시(ask_clinician)와 같은 이름을 쓴다.
+MSG_AUDIT = {("clinician", "access_request"): "access_request", ("clinician", "reply"): "clinician_reply",
+             ("security", "check_request"): "ask_clinician", ("security", "reply"): "security_reply"}
+CHECK_DEFAULT = "이 대화에서 같은 사례의 세부 정보를 여러 번 물으셨습니다. 진료에 필요한 내용이었는지 알려 주세요."
+FLAG_KO = dict(access_request="의료진 세부 정보 요청", reply="의료진 답장 도착")
+_CASE_REF = re.compile(r"사례\d+")
 
 
 class Monitor:
@@ -31,6 +48,7 @@ class Monitor:
         self.eng = eng
         self.audit: list[dict[str, Any]] = []
         self._ids = itertools.count(1)
+        self._mids = itertools.count(1)
         self.sim_status = "idle"
 
     # ── 감사 기록 ──
@@ -90,22 +108,28 @@ class Monitor:
         violated = sorted(ref for ref, k in k_now.items() if 1 <= k < k_req)
         repeated = [ref for ref, n in sup_by_case.items() if n >= 2]
         last_q = next((r["query_text"] for r in reversed(recs) if r["turn"] > 0), None)
+        last_msg = s.messages[-1] if s.messages else None
+        pending = bool(last_msg and last_msg["sender"] == "clinician")          # 보안 담당자가 답할 차례
+        awaiting = bool(last_msg and last_msg["sender"] == "security" and last_msg["kind"] == "check_request")
+        flag = FLAG_KO[last_msg["kind"]] if pending else "같은 환자 반복 질문" if repeated else None
         return dict(id=s.id, trial_id=s.trial_id, source=s.source, source_label=SOURCE_KO.get(s.source, s.source),
                     qtype_label=s._summary()["qtype_label"], turns=s.turn, suppressed=sup, generalized=gen,
                     status=status, status_label=STATUS_KO[status], focus_case=focus,
                     k_if_raw=min_raw.get(focus) if focus else None, k_now=k_now.get(focus) if focus else None,
-                    repeated=repeated, flag="같은 환자 반복 질문" if repeated else None, violated=violated,
+                    repeated=repeated, flag=flag, violated=violated,
                     last_question=last_q, last_active=s.last_active, created=s.created,
-                    review=s.review, needs_review=bool(repeated) and not s.review)
+                    review=s.review, needs_review=(bool(repeated) and not s.review) or pending,
+                    messages=len(s.messages), pending_request=pending, awaiting_clinician=awaiting,
+                    request_case=last_msg.get("case") if pending else None)
 
     def overview(self) -> dict[str, Any]:
         with self.eng.lock:
             rows = [self.row(s) for s in self.eng.sessions.values()]
         rank = dict(danger=0, caution=1, safe=2)
-        rows.sort(key=lambda r: (not r["needs_review"], rank[r["status"]], -r["last_active"]))
+        rows.sort(key=lambda r: (not r["pending_request"], not r["needs_review"], rank[r["status"]], -r["last_active"]))
         kpi = dict(sessions=len(rows), suppressed=sum(r["suppressed"] for r in rows), generalized=sum(r["generalized"] for r in rows),
                    identified=sum(len(r["violated"]) for r in rows), needs_review=sum(r["needs_review"] for r in rows),
-                   blocked_sessions=sum(r["status"] == "danger" for r in rows))
+                   blocked_sessions=sum(r["status"] == "danger" for r in rows), requests=sum(r["pending_request"] for r in rows))
         return dict(kpi=kpi, sessions=rows, simulations=self.sim_status, live_arm=LIVE_ARM, live_arm_label=ARM_KO[LIVE_ARM],
                     k_req=self.eng.cfg.k_req, suppress_threshold=self.eng.cfg.suppress_threshold,
                     generalize_threshold=self.eng.cfg.generalize_threshold)
@@ -115,9 +139,10 @@ class Monitor:
         with self.eng.lock:
             v = s.security_view()
             row = self.row(s)
+            msgs = copy.deepcopy(s.messages)
         if not reveal:
             v = mask(v)
-        return dict(v, row=row, revealed=reveal, source_label=SOURCE_KO.get(s.source, s.source), live_arm=LIVE_ARM)
+        return dict(v, row=row, revealed=reveal, source_label=SOURCE_KO.get(s.source, s.source), live_arm=LIVE_ARM, messages=msgs)
 
     def reveal(self, s: Session, reason: str) -> dict[str, Any]:
         self.log("reveal", s, reason=reason)
@@ -126,7 +151,36 @@ class Monitor:
     def review(self, s: Session, action: str, note: str | None) -> dict[str, Any]:
         s.review = dict(action=action, label=REVIEW_KO[action], at=time.time(), actor=ACTOR, note=note)
         self.log(action, s, note=note)
-        return self.row(s)
+        if action == "ask_clinician":                    # 표시만 하지 않고 의료진 화면에 확인 요청을 보낸다
+            with self.eng.lock:
+                case = self.row(s)["focus_case"]
+            self.post_message(s, "security", "check_request", (note or "").strip() or CHECK_DEFAULT, case, audit=False)
+        with self.eng.lock:
+            return self.row(s)
+
+    # ── 의료진 ↔ 보안 담당자 메시지 ──
+    def post_message(self, s: Session, sender: str, kind: str, text: str, case: str | None = None, *,
+                     audit: bool = True) -> dict[str, Any]:
+        text = (text or "").strip()
+        if kind not in MSG_KINDS.get(sender, ()):
+            raise ValueError(f"{sender} 메시지 종류는 {', '.join(MSG_KINDS.get(sender, ()))} 중 하나입니다.")
+        if not 2 <= len(text) <= 500:
+            raise ValueError("메시지는 2자 이상 500자 이하로 써 주세요.")
+        if case is not None and not _CASE_REF.fullmatch(case):
+            raise ValueError(f"사례 표시가 올바르지 않습니다: {case}")
+        actor = ACTOR if sender == "security" else CLINICIAN
+        m = dict(id=f"M{next(self._mids):04d}", at=time.time(), sender=sender, kind=kind, kind_label=MSG_KIND_KO[kind],
+                 case=case, text=text, actor=actor)
+        with self.eng.lock:
+            s.messages.append(m)
+            s.last_active = m["at"]
+        if audit:
+            self.log(MSG_AUDIT[(sender, kind)], s, actor=actor, note=text, case=case)
+        return m
+
+    def thread(self, s: Session) -> dict[str, Any]:
+        with self.eng.lock:
+            return dict(messages=copy.deepcopy(s.messages), row=self.row(s))
 
 
 def mask(view: dict[str, Any]) -> dict[str, Any]:

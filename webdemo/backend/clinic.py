@@ -123,7 +123,7 @@ class ClinicDesk:
 
     # ── 화면 계약 ──
     def environment(self) -> dict[str, Any]:
-        return dict(roleLabel="의료진", locationLabel="Zero PII 데모 · Synthea 합성 환자")
+        return dict(roleLabel="의료진", locationLabel="MediCloak 데모 (Synthea 합성 환자)")
 
     def policy(self) -> dict[str, Any]:
         d = self.session.ctx.defender
@@ -158,6 +158,19 @@ class ClinicDesk:
     def disclosures(self, case_id: str) -> dict[str, Any]:
         return dict(caseId=case_id, entries=self.slot(case_id).history)
 
+    # ── 보안 담당자와 주고받은 메시지 (지금 대화 하나) ──
+    def messages(self) -> list[dict[str, Any]]:
+        with self.eng.lock:
+            out = []
+            for m in self.session.messages:
+                cid = self.case_of_ref(m["case"]) if m.get("case") else None
+                out.append(dict(messageId=m["id"], createdAt=_iso(m["at"]), sender=m["sender"], kind=m["kind"], kindLabel=m["kind_label"],
+                                caseId=cid, caseLabel=self.slots[cid].label if cid else None, text=m["text"]))
+            return out
+
+    def ref_of(self, case_id: str) -> str:
+        return self.slot(case_id).ref
+
     def policy_decision(self, case_id: str) -> dict[str, Any]:
         s, d, data = self.slot(case_id), self.session.ctx.defender, self.session.ctx.data
         risk = self.risk_state(case_id)
@@ -188,7 +201,7 @@ class ClinicDesk:
             it = I.parse(question)
             focus = it.case or s.ref
             base = dict(caseId=case_id, question=question, requiresWarning=False, currentK=k_now, projectedK=None, message=None,
-                        affectedAttributes=[], suggestions=[], source="backend", supported=True)
+                        affectedAttributes=[], suggestions=[], source="backend", supported=True, plannedAction=None)
             if not it.understood:
                 return dict(base, understood=False)
             for seed in self._seed_for(it, focus):
@@ -208,8 +221,10 @@ class ClinicDesk:
                     msg = f"그대로 답하면 {label} 후보가 {mine['k_now']}명에서 {mine['k_if_raw']}명으로 줄어듭니다. 보내면 {attrs} 값을 넓은 범주로 바꿔 답합니다."
                 else:
                     msg = None
+                # plannedAction: 보내면 어떻게 답할지 (의료진 화면은 후보 수 대신 이것만 보고 안내 문구를 만든다)
+                planned = SUPPRESS if acts.get(SUPPRESS) else GENERALIZE if acts.get(GENERALIZE) else None
                 return dict(base, requiresWarning=warn, understood=True, currentK=mine["k_now"], projectedK=mine["k_if_raw"], message=msg,
-                            affectedAttributes=mine["attributes"],
+                            affectedAttributes=mine["attributes"], plannedAction=planned,
                             suggestions=[dict(label=f"{x['label']} 묻기", question=x["question"])
                                          for x in self._ranked(focus, skip=(seed["target_qi"], "PERIOD", "AGE", "SEX", "REGION"))][:2] if warn else [])
             return dict(base, understood=True)
@@ -276,7 +291,7 @@ class ClinicDesk:
                     turn = rec["turn"] if turn_for_entries is None else turn_for_entries
                     self.slots[cid].decisions.append(dict(x, action=action, turn=turn))
                     entries[cid].append(dict(entryId=self._id("dh"), turn=turn, attribute=x["attribute"], attributeLabel=label, action=action,
-                                             description=f"{value}" if action == ALLOW else desc))
+                                             description=f"{value}" if action == ALLOW else desc, value=value))
         for cid, es in entries.items():
             sl = self.slots[cid]
             sl.history += es
@@ -303,10 +318,12 @@ class ClinicDesk:
         k_after = self.k(s.case_id)
         protection = dict(decision=decision, transformations=tf, kBefore=k_before[s.case_id], kAfter=k_after, explanation=explanation,
                           releaseMode=mode, extractionOk=bool(rec["extraction_ok"]) if rec else True)
+        # engineTurn: 대화 전체의 턴 번호. 공개 이력(entries.turn)과 관제 화면이 이 번호를 쓰므로 의료진 화면이 질문과 이력을 잇는 데 쓴다.
+        et = rec["turn"] if rec else None
         user = dict(messageId=cmid, caseId=s.case_id, role="user", turn=turn_no, createdAt=created, segments=[dict(kind="text", text=question)],
-                    status="sent")
+                    status="sent", engineTurn=et)
         asst = dict(messageId=self._id("msg"), caseId=s.case_id, role="assistant", turn=turn_no, createdAt=_iso(), segments=segments,
-                    protection=protection, status="sent")
+                    protection=protection, status="sent", engineTurn=et)
         s.messages += [user, asst]
         s.questions = turn_no
         related = [self.risk_state(cid) for cid in self.slots if cid != s.case_id and (entries[cid] or self.k(cid) != k_before[cid])]

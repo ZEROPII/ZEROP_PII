@@ -71,6 +71,9 @@ export type WorkspaceAction =
   | { type: 'send/success'; caseId: CaseId; clientMessageId: string; response: SendQuestionResponse }
   | { type: 'send/failure'; caseId: CaseId; clientMessageId: string; error: string }
   | { type: 'message/discard'; caseId: CaseId; messageId: string }
+  /** 다른 화면(다른 탭)에서 바뀐 대화를 조용히 받아 온다. 보내는 중인 사례는 건드리지 않는다. */
+  | { type: 'session/refresh'; caseId: CaseId; session: ConversationSession }
+  | { type: 'risk/apply'; risk: CaseRiskState }
   | { type: 'workspace/reset' };
 
 function updateSession(state: WorkspaceState, caseId: CaseId, fn: (slot: SessionSlot) => SessionSlot): WorkspaceState {
@@ -168,6 +171,17 @@ export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction)
         sending: false,
         sendError: action.error,
       }));
+
+    case 'session/refresh': {
+      const slot = state.sessions[action.caseId];
+      if (!slot || slot.sending || slot.status !== 'success') return state;
+      const known = slot.data;
+      if (known && known.sessionId === action.session.sessionId && known.messages.length === action.session.messages.length) return state;
+      return updateSession(state, action.caseId, (s) => ({ ...s, data: action.session }));
+    }
+
+    case 'risk/apply':
+      return applyRiskState(state, action.risk);
 
     case 'workspace/reset':
       return initialWorkspaceState;

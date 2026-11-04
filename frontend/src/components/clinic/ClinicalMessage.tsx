@@ -1,0 +1,258 @@
+import { AlertCircle, Check, CircleHelp, Copy, Loader2, Lock, MailQuestion, RotateCw, Trash2 } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { toAnswerRows, type AnswerRow } from '../../lib/answerLines';
+import { answerPlainText, attrName, protectionNote, refLabel, requestDraft, whyText } from '../../lib/clinicianCopy';
+import { formatTime } from '../../lib/format';
+import { useClinicMessages } from '../../state/ClinicMessages';
+import { useTermDetect } from '../../state/TermContext';
+import type { CaseSummary, ChatMessage, MessageSegment, PrivacyTransformation } from '../../types/domain';
+import type { TermMention } from '../../types/terminology';
+import { LogoMark } from '../brand/Logo';
+import { useToast } from '../layout/Toast';
+import { AnswerTerms } from '../terminology/AnswerTerms';
+import { TermText } from '../terminology/TermText';
+import { ClinicValue } from './ClinicValue';
+
+interface Props {
+  message: ChatMessage;
+  /** 지금 고른 사례 이름 ('사례 1') */
+  caseLabel: string;
+  cases: CaseSummary[];
+  /** 백링크로 이 자리에 왔을 때 잠깐 강조 */
+  flash?: boolean;
+  onRetry?: (message: ChatMessage) => void;
+  onDiscard?: (message: ChatMessage) => void;
+}
+
+function caseIdOfRef(ref: string | undefined, cases: CaseSummary[]): string | null {
+  if (!ref) return null;
+  return cases.find((c) => c.label.replace(/\s+/g, '') === ref.replace(/\s+/g, ''))?.caseId ?? null;
+}
+
+/** 조각 하나: 글이면 의료 용어 밑줄, 보호 조치가 걸린 값이면 범위 · 비공개 표시 */
+function Piece({ seg, tf, mentions }: { seg: MessageSegment; tf: Map<string, PrivacyTransformation>; mentions: TermMention[] | undefined }) {
+  const terms = <TermText text={seg.text} mentions={mentions} />;
+  if (seg.kind === 'text') return terms;
+  return (
+    <ClinicValue text={seg.text} transformation={tf.get(seg.transformationId)}>
+      {terms}
+    </ClinicValue>
+  );
+}
+
+function AnswerBody({ message, caseLabel }: { message: ChatMessage; caseLabel: string }) {
+  const rows = useMemo<AnswerRow[]>(() => toAnswerRows(message.segments), [message.segments]);
+  const tf = useMemo(() => new Map((message.protection?.transformations ?? []).map((t) => [t.id, t])), [message.protection]);
+  // 줄마다 나눈 조각을 한 줄로 펴서 의료 용어를 한 번에 찾는다
+  const flat = useMemo(() => rows.flatMap((r) => (r.kind === 'fact' ? r.value : r.segments)), [rows]);
+  const { mentions } = useTermDetect(flat.map((s) => s.text));
+  const ownRef = caseLabel.replace(/\s+/g, '');
+  const refs = new Set(rows.flatMap((r) => (r.kind === 'fact' ? [r.caseRef] : [])));
+  const showCase = refs.size > 1 || (refs.size === 1 && !refs.has(ownRef));
+
+  let i = 0;
+  const pieces = (segs: MessageSegment[]) =>
+    segs.map((s) => {
+      const k = i++;
+      return <Piece key={k} seg={s} tf={tf} mentions={mentions[k]} />;
+    });
+
+  return (
+    <>
+      <div className="px-4 py-3 text-sm leading-relaxed text-ink">
+        <span className="sr-only">AI 답변: </span>
+        {rows.map((r, ri) =>
+          r.kind === 'text' ? (
+            <p key={ri} className="whitespace-pre-wrap break-words py-1">
+              {pieces(r.segments)}
+            </p>
+          ) : (
+            <div key={ri} className="grid grid-cols-1 gap-x-4 gap-y-0.5 border-b border-line py-2 last:border-b-0 sm:grid-cols-[minmax(150px,38%)_minmax(0,1fr)]">
+              <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[13px] text-ink-2">
+                {showCase && <span className="rounded-[5px] bg-surface-2 px-1.5 text-xs font-semibold text-ink">{refLabel(r.caseRef)}</span>}
+                <span>{r.field}</span>
+                {r.source && (
+                  <span className="text-[11px] text-ink-3" title="사례 기록 안에서 이 값이 나온 곳">
+                    {r.source.replace(/^기록\s*(\d+)$/, '기록 $1')}
+                  </span>
+                )}
+              </div>
+              <div className="min-w-0 break-words font-medium">{pieces(r.value)}</div>
+            </div>
+          ),
+        )}
+      </div>
+      <div className="px-4 pb-1 empty:hidden">
+        <AnswerTerms mentions={mentions} label="이 답의 의료 용어" />
+      </div>
+    </>
+  );
+}
+
+function ProtectionFooter({ message, caseLabel, cases }: { message: ChatMessage; caseLabel: string; cases: CaseSummary[] }) {
+  const p = message.protection!;
+  const note = protectionNote(p);
+  const msgs = useClinicMessages();
+  const toast = useToast();
+  const [why, setWhy] = useState(false);
+  const [draft, setDraft] = useState<string | null>(null);
+  const [sent, setSent] = useState(false);
+  if (!note) return null;
+
+  const changed = p.transformations.filter((t) => t.action !== 'allow');
+  const refs = [...new Set(changed.map((t) => t.caseRef).filter((r): r is string => !!r))];
+  const who = refs.length === 1 ? refLabel(refs[0]) : refs.length > 1 ? '해당 사례' : caseLabel;
+  const requestCase = caseIdOfRef(refs[0], cases) ?? message.caseId;
+  const requestLabel = refs.length ? refLabel(refs[0]) : caseLabel;
+  const canRequest = msgs.supported === true && changed.length > 0;
+
+  async function send() {
+    if (!draft?.trim()) return;
+    const ok = await msgs.send({ kind: 'access_request', text: draft.trim(), caseId: requestCase });
+    if (ok) {
+      setDraft(null);
+      setSent(true);
+      toast('세부 정보 요청을 보냈습니다.');
+    }
+  }
+
+  return (
+    <div className="border-t border-line bg-page px-4 py-2.5 text-[13px] text-ink-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+        <span className="inline-flex min-w-0 items-start gap-1.5">
+          <Lock className="mt-[3px] h-3.5 w-3.5 shrink-0 text-emr-lock" aria-hidden />
+          <span>{note.text}</span>
+        </span>
+        <span className="ml-auto flex items-center gap-1">
+          <button type="button" className="btn-ghost btn-sm h-7" aria-expanded={why} onClick={() => setWhy((w) => !w)}>
+            <CircleHelp className="h-3.5 w-3.5" aria-hidden />
+            왜 그런가요?
+          </button>
+          {canRequest && !sent && (
+            <button
+              type="button"
+              className="btn-ghost btn-sm h-7 text-iris-text"
+              aria-expanded={draft !== null}
+              onClick={() => setDraft((d) => (d === null ? requestDraft(requestLabel, changed.map(attrName)) : null))}
+            >
+              <MailQuestion className="h-3.5 w-3.5" aria-hidden />
+              세부 정보 요청
+            </button>
+          )}
+          {sent && (
+            <span className="inline-flex items-center gap-1 px-2 text-xs font-semibold text-iris-text">
+              <Check className="h-3.5 w-3.5" aria-hidden /> 요청함
+            </span>
+          )}
+        </span>
+      </div>
+      {why && (
+        <div className="mt-2 space-y-1.5 rounded-control bg-surface px-3 py-2.5 leading-6 text-ink-2">
+          {whyText(p, who).map((t) => (
+            <p key={t}>{t}</p>
+          ))}
+          {canRequest && <p>진료에 꼭 필요하면 세부 정보 요청을 보내 주세요. 개인정보 보호 담당자가 확인하고 답합니다.</p>}
+        </div>
+      )}
+      {draft !== null && (
+        <form
+          className="mt-2 rounded-control border border-line-input bg-surface p-2 focus-within:border-focus"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void send();
+          }}
+        >
+          <label htmlFor={`req-${message.messageId}`} className="mb-1 block px-1 text-xs font-semibold text-ink-2">
+            개인정보 보호 담당자에게 보낼 요청 (사유를 적어 주세요)
+          </label>
+          <textarea
+            id={`req-${message.messageId}`}
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            rows={2}
+            autoFocus
+            maxLength={500}
+            className="w-full resize-none bg-transparent px-1 text-[13px] leading-5 text-ink outline-none"
+          />
+          {msgs.error && <p className="px-1 text-xs text-danger-text">{msgs.error}</p>}
+          <div className="mt-1 flex justify-end gap-1.5">
+            <button type="button" className="btn-ghost btn-sm" onClick={() => setDraft(null)}>
+              취소
+            </button>
+            <button type="submit" className="btn-primary btn-sm" disabled={msgs.sending || draft.trim().length < 2}>
+              {msgs.sending && <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />}
+              요청 보내기
+            </button>
+          </div>
+        </form>
+      )}
+    </div>
+  );
+}
+
+export function ClinicalMessage({ message, caseLabel, cases, flash = false, onRetry, onDiscard }: Props) {
+  const toast = useToast();
+  if (message.role === 'user') {
+    return (
+      <div id={`m-${message.messageId}`} className={`rounded-control ${flash ? 'jump-flash' : ''}`}>
+        <div className="flex items-baseline gap-2.5">
+          <span className="num shrink-0 text-xs font-semibold text-iris-text">질문 {message.turn}</span>
+          <p className={`min-w-0 flex-1 whitespace-pre-wrap break-words text-[15px] font-semibold leading-snug text-ink ${message.status !== 'sent' ? 'opacity-70' : ''}`}>
+            {message.segments.map((s) => s.text).join('')}
+          </p>
+          {message.status === 'sent' && (
+            <time dateTime={message.createdAt} className="num shrink-0 text-[11px] text-ink-3">
+              {formatTime(message.createdAt)}
+            </time>
+          )}
+        </div>
+        {message.status === 'pending' && (
+          <p className="ml-[52px] mt-1 inline-flex items-center gap-1 text-[11px] text-ink-3">
+            <Loader2 className="h-3 w-3 animate-spin" aria-hidden /> 보내는 중
+          </p>
+        )}
+        {message.status === 'failed' && (
+          <p className="ml-[52px] mt-1 inline-flex flex-wrap items-center gap-2 text-xs text-danger-text">
+            <AlertCircle className="h-3.5 w-3.5" aria-hidden /> 보내지 못했습니다
+            {onRetry && (
+              <button type="button" onClick={() => onRetry(message)} className="inline-flex items-center gap-0.5 font-semibold hover:underline">
+                <RotateCw className="h-3 w-3" aria-hidden /> 다시 보내기
+              </button>
+            )}
+            {onDiscard && (
+              <button type="button" onClick={() => onDiscard(message)} className="inline-flex items-center gap-0.5 font-semibold hover:underline">
+                <Trash2 className="h-3 w-3" aria-hidden /> 지우기
+              </button>
+            )}
+          </p>
+        )}
+      </div>
+    );
+  }
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(answerPlainText(message.segments, message.protection?.transformations ?? []));
+      toast('답을 복사했습니다. 가린 값은 (비공개)로 들어갑니다.');
+    } catch {
+      toast('복사하지 못했습니다. 글을 직접 선택해 복사하세요.');
+    }
+  }
+
+  return (
+    <article id={`m-${message.messageId}`} className={`overflow-hidden rounded-panel border border-line bg-surface ${flash ? 'jump-flash' : ''}`}>
+      <header className="flex items-center gap-2 px-4 pt-2.5 text-xs text-ink-3">
+        <LogoMark size={16} className="text-iris-text" />
+        <span className="font-semibold text-ink-2">진료 지원 AI</span>
+        <time dateTime={message.createdAt} className="num ml-auto">
+          {formatTime(message.createdAt)}
+        </time>
+        <button type="button" onClick={() => void copy()} className="btn-ghost h-7 w-7 px-0" aria-label="답 복사 (진료 기록에 붙이기)" title="답 복사">
+          <Copy className="h-3.5 w-3.5" aria-hidden />
+        </button>
+      </header>
+      <AnswerBody message={message} caseLabel={caseLabel} />
+      {message.protection && <ProtectionFooter message={message} caseLabel={caseLabel} cases={cases} />}
+    </article>
+  );
+}

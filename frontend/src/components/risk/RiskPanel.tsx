@@ -57,7 +57,10 @@ export function RiskPanel() {
                       className={`w-full rounded-control px-2 py-2 text-left transition-colors ${isSel ? 'bg-iris-tint' : 'hover:bg-surface-2'}`}
                     >
                       <span className="mb-1.5 flex items-center justify-between gap-2">
-                        <span className={`text-[13px] font-bold ${isSel ? 'text-iris-text' : 'text-ink'}`}>{c.label}</span>
+                        <span className="min-w-0">
+                          <span className={`text-[13px] font-bold ${isSel ? 'text-iris-text' : 'text-ink'}`}>{c.label}</span>
+                          {c.similarity != null && <span className="num ml-1.5 text-[11px] text-ink-3">유사도 {c.similarity.toFixed(2)}</span>}
+                        </span>
                         <KValueBadge risk={risk} />
                       </span>
                       {risk ? <RiskBar risk={risk} threshold={threshold} max={max} /> : <span className="block h-2 rounded-full bg-surface-2" />}

@@ -94,6 +94,8 @@ export interface ChatMessage {
   /** assistant 메시지에만. 보호 조치가 없었다면 생략될 수 있다. */
   protection?: ProtectionResult;
   status: MessageDeliveryStatus;
+  /** 데모 백엔드만: 대화 전체의 턴 번호 (공개 이력 turn과 같은 번호). 답할 기록이 없었으면 null. */
+  engineTurn?: number | null;
 }
 
 export interface ConversationSession {
@@ -113,6 +115,8 @@ export interface DisclosureHistoryEntry {
   action: PrivacyAction;
   /** 안전한 설명만. 예: "정확한 연령 → 5세 구간" */
   description: string;
+  /** 데모 백엔드만: 답에 실제로 나간 값 (그대로면 원래 값, 넓혔으면 넓힌 값, 가렸으면 null) */
+  value?: string | null;
 }
 
 export interface DisclosureHistory {
@@ -183,6 +187,31 @@ export interface PreflightRiskAssessment {
   supported?: boolean;
   /** 데모 백엔드만: 질문에서 묻는 항목을 찾았는지 */
   understood?: boolean;
+  /** 데모 백엔드만: 보내면 어떻게 답할지. 의료진 화면은 후보 수 대신 이것으로 안내한다. */
+  plannedAction?: 'suppress' | 'generalize' | null;
+}
+
+// ── 의료진 ↔ 개인정보 보호 담당자 메시지 ────────────────────────────────────────
+
+export type ClinicMessageSender = 'clinician' | 'security';
+/** access_request: 의료진의 세부 정보 요청 · check_request: 보호 담당자의 확인 요청 · reply: 답장 */
+export type ClinicMessageKind = 'access_request' | 'check_request' | 'reply';
+
+export interface ClinicMessage {
+  messageId: string;
+  createdAt: IsoDateTime;
+  sender: ClinicMessageSender;
+  kind: ClinicMessageKind;
+  kindLabel: string;
+  caseId: CaseId | null;
+  caseLabel: string | null;
+  text: string;
+}
+
+export interface PostClinicMessageRequest {
+  kind: 'access_request' | 'reply';
+  text: string;
+  caseId?: CaseId | null;
 }
 
 /** 데모 백엔드의 질의 환자 목록 (다른 환자로 대화를 새로 시작할 때) */

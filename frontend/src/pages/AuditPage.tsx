@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { MONITOR_UNAVAILABLE, monitorApi } from '../api/monitorApi';
 import { Card, CardHeader } from '../components/common/Card';
 import { EmptyState, ErrorState, LoadingState } from '../components/common/StatusViews';
-import { clockTime } from '../lib/time';
+import { caseLabel, clockTime } from '../lib/time';
 import type { AuditEntry } from '../types/monitor';
 
 const ACTION_KO: Record<string, string> = {
@@ -13,6 +13,9 @@ const ACTION_KO: Record<string, string> = {
   add_rule: '질문 패턴을 규칙에 추가',
   clinic_start: '의료진 새 대화 시작',
   redteam_start: '레드팀 점검 시작',
+  access_request: '의료진 세부 정보 요청',
+  clinician_reply: '의료진 답장',
+  security_reply: '보안 담당자 답장',
 };
 
 /** 감사 기록: 누가 언제 무엇을 했는지. 원문 열람은 사유와 함께 남는다. */
@@ -44,7 +47,7 @@ export function AuditPage() {
         ) : !items ? (
           <LoadingState />
         ) : items.length === 0 ? (
-          <EmptyState message="아직 남은 기록이 없습니다. 관제 화면에서 원문을 열람하거나 검토를 표시하면 여기에 남습니다." />
+          <EmptyState message="아직 남은 기록이 없습니다. 원문 열람, 검토 표시, 의료진과 주고받은 메시지가 여기에 남습니다." />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full min-w-[560px] text-[13px]">
@@ -72,7 +75,10 @@ export function AuditPage() {
                         <span className="text-ink-3">{e.job ?? '–'}</span>
                       )}
                     </td>
-                    <td className="border-b border-line px-4 py-3 text-ink-2">{e.reason ?? e.note ?? ''}</td>
+                    <td className="border-b border-line px-4 py-3 text-ink-2">
+                      {e.case && <span className="mr-1.5 font-semibold text-ink">{caseLabel(e.case)}</span>}
+                      {e.reason ?? e.note ?? ''}
+                    </td>
                   </tr>
                 ))}
               </tbody>

@@ -101,4 +101,21 @@ describe('workspaceReducer', () => {
     expect(s.sessions.a.data!.messages).toHaveLength(0);
     expect(s.sessions.a.sendError).toBeUndefined();
   });
+  it('조용한 새로 고침은 보내는 중인 사례를 건드리지 않고, 바뀐 대화만 바꾼다', () => {
+    let s = seeded();
+    const fresh = { sessionId: 's-a', caseId: 'a', messages: [msg('u1', 'a', 'user'), msg('a1', 'a', 'assistant')], questionCount: 1 };
+    s = workspaceReducer(s, { type: 'session/refresh', caseId: 'a', session: fresh });
+    expect(s.sessions.a.data!.messages).toHaveLength(2);
+    const same = workspaceReducer(s, { type: 'session/refresh', caseId: 'a', session: { ...fresh } });
+    expect(same).toBe(s);
+    const busy = workspaceReducer(s, { type: 'send/start', caseId: 'b', pending: msg('p', 'b', 'user', 'pending') });
+    const after = workspaceReducer(busy, { type: 'session/refresh', caseId: 'b', session: { sessionId: 's-b', caseId: 'b', messages: [], questionCount: 0 } });
+    expect(after.sessions.b.data!.messages.map((m) => m.messageId)).toEqual(['p']);
+  });
+
+  it('새로 받은 후보 수도 버전이 더 클 때만 반영한다', () => {
+    const s = seeded();
+    expect(workspaceReducer(s, { type: 'risk/apply', risk: risk('a', 1, 2) }).riskStates.data!.a.k).toBe(7);
+    expect(workspaceReducer(s, { type: 'risk/apply', risk: risk('a', 6, 4) }).riskStates.data!.a.k).toBe(6);
+  });
 });

@@ -1,12 +1,13 @@
-import { BookOpen, CornerDownLeft, MessagesSquare, Search } from 'lucide-react';
+import { BookOpen, CornerDownLeft, FileText, MessagesSquare, Search } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { monitorApi } from '../../api/monitorApi';
 import { terminologyApi } from '../../api/terminologyApi';
 import { useTerms } from '../../state/TermContext';
+import { useWorkspace } from '../../state/WorkspaceContext';
 import type { TermSummary } from '../../types/terminology';
 import type { MonitorRow } from '../../types/monitor';
-import { NAV } from './nav';
+import { NAV, type Role } from './nav';
 
 interface Item {
   id: string;
@@ -16,9 +17,15 @@ interface Item {
   icon?: typeof Search;
 }
 
-/** ⌘K 명령 찾기: 화면 이동, 대화 번호로 관제 상세 열기, 의료 용어 찾기. 위아래 화살표로 고르고 Enter로 엽니다. */
-export function CommandPalette({ onClose }: { onClose(): void }) {
+/**
+ * ⌘K 명령 찾기. 위아래 화살표로 고르고 Enter로 엽니다.
+ *   의료진: 진료 화면 이동, 사례 열기, 의료 용어 찾기 (관제 목록은 불러오지 않는다)
+ *   보안 담당자: 관제 화면 이동, 대화 번호로 관제 상세 열기, 의료 용어 찾기
+ */
+export function CommandPalette({ role, onClose }: { role: Role; onClose(): void }) {
   const navigate = useNavigate();
+  const { state, actions } = useWorkspace();
+  const cases = state.cases.data;
   const [q, setQ] = useState('');
   const [active, setActive] = useState(0);
   const [rows, setRows] = useState<MonitorRow[]>([]);
@@ -42,23 +49,33 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
 
   useEffect(() => {
     inputRef.current?.focus();
+    if (role !== 'security') return;
     const ctl = new AbortController();
     monitorApi.overview(ctl.signal).then((o) => setRows(o.sessions), () => undefined);
     return () => ctl.abort();
-  }, []);
+  }, [role]);
 
   const items = useMemo<Item[]>(() => {
-    const seen = new Set<string>();
-    const pages: Item[] = [...NAV.clinician, ...NAV.security]
-      .filter((n) => (seen.has(n.to) ? false : (seen.add(n.to), true)))
-      .map((n) => ({ id: `page:${n.to}`, label: n.title, hint: '화면', icon: n.icon, run: () => navigate(n.to) }));
-    const convs: Item[] = rows.map((r) => ({
-      id: `conv:${r.id}`,
-      label: `${r.trial_id} ${r.status_label}`,
-      hint: `${r.source_label} ${r.turns}턴`,
-      icon: MessagesSquare,
-      run: () => navigate(`/monitor?s=${encodeURIComponent(r.id)}`),
-    }));
+    const pages: Item[] = NAV[role].map((n) => ({ id: `page:${n.to}`, label: n.title, hint: '화면', icon: n.icon, run: () => navigate(n.to) }));
+    const convs: Item[] =
+      role === 'security'
+        ? rows.map((r) => ({
+            id: `conv:${r.id}`,
+            label: `${r.trial_id} ${r.status_label}`,
+            hint: `${r.source_label} ${r.turns}턴`,
+            icon: MessagesSquare,
+            run: () => navigate(`/monitor?s=${encodeURIComponent(r.id)}`),
+          }))
+        : (cases ?? []).map((c) => ({
+            id: `case:${c.caseId}`,
+            label: `${c.label} ${c.diagnosis}`,
+            hint: '사례 열기',
+            icon: FileText,
+            run: () => {
+              actions.selectCase(c.caseId);
+              navigate('/');
+            },
+          }));
     const all = [...pages, ...convs];
     const t = q.trim().toLowerCase();
     if (!t) return all;
@@ -71,7 +88,7 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
     }));
     const lookup: Item = { id: 'term-search', label: `'${q.trim()}' 의료 용어 패널에서 찾기`, hint: '의료 용어', icon: BookOpen, run: () => openSearch(q.trim()) };
     return [...all.filter((i) => `${i.label} ${i.hint}`.toLowerCase().includes(t)), ...termItems, lookup];
-  }, [q, rows, terms, navigate, openTerm, openSearch]);
+  }, [q, rows, terms, navigate, openTerm, openSearch, role, cases, actions]);
 
   useEffect(() => setActive(0), [q]);
 
@@ -99,7 +116,7 @@ export function CommandPalette({ onClose }: { onClose(): void }) {
             ref={inputRef}
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="화면 이름, 대화 번호(T0014), 의료 용어를 입력하세요"
+            placeholder={role === 'security' ? '화면 이름, 대화 번호(T0014), 의료 용어를 입력하세요' : '화면 이름, 사례, 의료 용어를 입력하세요'}
             className="flex-1 bg-transparent text-[15px] text-ink outline-none placeholder:text-ink-3"
             aria-label="찾을 내용"
           />

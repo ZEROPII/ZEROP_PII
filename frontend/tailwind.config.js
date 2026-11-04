@@ -25,6 +25,17 @@ export default {
         series: { 1: v('series-1'), 2: v('series-2'), 3: v('series-3') },
         toast: { DEFAULT: v('toast'), text: v('toast-text') },
         scrim: v('scrim'),
+        // 의료진 화면(EMR) 전용: 앱 머리줄, 환자 띠, 잠금 표시
+        emr: {
+          chrome: 'var(--emr-chrome)',
+          'chrome-text': 'var(--emr-chrome-text)',
+          'chrome-muted': 'var(--emr-chrome-muted)',
+          'chrome-line': 'var(--emr-chrome-line)',
+          'chrome-hover': 'var(--emr-chrome-hover)',
+          banner: 'var(--emr-banner)',
+          lock: 'var(--emr-lock)',
+          'lock-tint': 'var(--emr-lock-tint)',
+        },
       },
       borderRadius: { cell: '6px', control: '10px', panel: '16px', overlay: '20px' },
       boxShadow: { overlay: v('shadow-overlay') },

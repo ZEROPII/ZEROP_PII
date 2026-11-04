@@ -13,6 +13,11 @@ export interface WorkspaceActions {
   discardMessage(caseId: CaseId, messageId: string): void;
   /** 새 대화로 다시 시작 (trialId를 주면 그 질의 환자로). 백엔드가 지원할 때만. */
   restart(trialId?: string): Promise<void>;
+  /**
+   * 열어 둔 대화·공개 이력·후보 수를 로딩 표시 없이 새로 받는다 (보안 담당자 '의료진 대화' 화면이 주기적으로 부른다).
+   * 그 사이 의료진이 새 대화를 시작했으면 처음부터 다시 불러온다.
+   */
+  refreshLive(): Promise<void>;
 }
 
 interface WorkspaceContextValue {
@@ -163,6 +168,36 @@ export function WorkspaceProvider({ children, api = defaultApi }: { children: Re
     [api, reloadAll],
   );
 
+  const refreshLive = useCallback(async () => {
+    const before = stateRef.current;
+    try {
+      const patient = await api.getPatientContext();
+      if (before.patient.data && patient.contextId !== before.patient.data.contextId) {
+        dispatch({ type: 'workspace/reset' });
+        reloadAll();
+        return;
+      }
+      const risks = await api.listRiskStates();
+      for (const risk of risks) dispatch({ type: 'risk/apply', risk });
+      const now = stateRef.current;
+      await Promise.all([
+        ...Object.entries(now.sessions)
+          .filter(([, slot]) => slot.status === 'success' && !slot.sending)
+          .map(([caseId]) => api.getConversation(caseId).then((session) => dispatch({ type: 'session/refresh', caseId, session }))),
+        ...Object.entries(now.disclosures)
+          .filter(([, slot]) => slot.status === 'success')
+          .map(([caseId]) =>
+            api.getDisclosureHistory(caseId).then((h) => {
+              const known = stateRef.current.disclosures[caseId]?.data;
+              if (!known || known.length !== h.entries.length) dispatch({ type: 'disclosures/success', caseId, entries: h.entries });
+            }),
+          ),
+      ]);
+    } catch {
+      /* 다음 주기에 다시 받는다 */
+    }
+  }, [api, reloadAll]);
+
   useEffect(() => {
     reloadAll();
   }, [reloadAll]);
@@ -174,8 +209,8 @@ export function WorkspaceProvider({ children, api = defaultApi }: { children: Re
   }, [state.selectedCaseId, loadSession, loadDisclosures]);
 
   const actions = useMemo<WorkspaceActions>(
-    () => ({ reloadAll, selectCase, loadSession, loadDisclosures, sendQuestion, retryMessage, discardMessage, restart }),
-    [reloadAll, selectCase, loadSession, loadDisclosures, sendQuestion, retryMessage, discardMessage, restart],
+    () => ({ reloadAll, selectCase, loadSession, loadDisclosures, sendQuestion, retryMessage, discardMessage, restart, refreshLive }),
+    [reloadAll, selectCase, loadSession, loadDisclosures, sendQuestion, retryMessage, discardMessage, restart, refreshLive],
   );
 
   const value = useMemo(() => ({ state, actions, api }), [state, actions, api]);

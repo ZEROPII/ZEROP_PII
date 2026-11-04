@@ -4,7 +4,7 @@
 // UI 코드는 ClinicalCaseApi만 사용한다.
 // 인증은 쿠키 세션(credentials: 'include')을 전제로 해 토큰을 브라우저 저장소·로그에 두지 않는다.
 
-import type { CaseId, PatientOption, SendQuestionRequest, SuggestedQuestion } from '../types/domain';
+import type { CaseId, ClinicMessage, PatientOption, SendQuestionRequest, SuggestedQuestion } from '../types/domain';
 import { ApiError, type ClinicalCaseApi } from './types';
 
 const STATUS_MESSAGE: Record<number, string> = {
@@ -70,5 +70,16 @@ export function createHttpApi(baseUrl: string): ClinicalCaseApi {
     resetSession: async (trialId) => {
       await request('/session/reset', { method: 'POST', body: JSON.stringify(trialId ? { trialId } : {}) });
     },
+    // 보호 담당자 메시지도 데모 백엔드에만 있다. 404면 null → 화면이 요청 기능을 숨긴다.
+    listClinicMessages: (signal) =>
+      request<ClinicMessage[]>('/clinic/messages', { signal }).catch((error) => {
+        if (error instanceof ApiError && error.status === 404) return null;
+        throw error;
+      }),
+    postClinicMessage: (req) =>
+      request<ClinicMessage[]>('/clinic/messages', {
+        method: 'POST',
+        body: JSON.stringify({ kind: req.kind, text: req.text, caseId: req.caseId ?? null }),
+      }),
   };
 }

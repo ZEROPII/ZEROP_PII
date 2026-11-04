@@ -178,6 +178,7 @@ class Session:
         self.patient_id, self.qtype = pid, qt
         self.created = self.last_active = time.time()
         self.review: dict[str, Any] | None = None           # 보안 담당자 검토 표시 (관제 화면)
+        self.messages: list[dict[str, Any]] = []            # 의료진 ↔ 보안 담당자 메시지 (세부 정보 요청 · 확인 요청 · 답장)
         p = self.prefix = make_prefix(self.ctx, trial_id, pid, qt, "DOCTOR")
         self.logs: dict[str, list[dict[str, Any]]] = {a: [] for a in ARMS}
         self.runs = {a: ArmRun(self.ctx, p, a, self.logs[a].append) for a in ARMS}

@@ -159,6 +159,65 @@ def test_clinic_question_is_defended_and_monitored(client):
     assert [a["action"] for a in audit[:2]] == ["reviewed", "reveal"] and audit[1]["reason"] == "오탐 확인"
 
 
+def test_clinic_preflight_plans_action_and_history_values(client):
+    """의료진 화면은 후보 수 대신 plannedAction과 공개 이력의 value(가린 값은 None)로 안내한다."""
+    client.post("/api/session/reset", json=dict(trialId="T0014"))
+    _, _, sid = _clinic(client)
+    q = "사례1 환자가 그 시술을 받은 시기를 월 단위로 알려 주세요."
+    pf = client.post("/api/cases/case-1/preflight", json=dict(sessionId=sid, question=q)).json()
+    assert pf["plannedAction"] == "suppress" and pf["affectedAttributes"]
+    calm = client.post("/api/cases/case-1/preflight", json=dict(sessionId=sid, question="오늘 날씨 어때요?")).json()
+    assert calm["plannedAction"] is None and not calm["requiresWarning"]
+    client.post("/api/cases/case-1/messages", json=dict(sessionId=sid, question=q, clientMessageId="v1"))
+    entries = client.get("/api/cases/case-1/disclosures").json()["entries"]
+    sup = [e for e in entries if e["action"] == "suppress"]
+    shown = [e for e in entries if e["action"] == "allow"]
+    assert sup and all(e["value"] is None for e in sup)
+    assert shown and all(isinstance(e["value"], str) and e["value"] for e in shown)
+
+
+def test_clinic_and_security_exchange_messages(client):
+    """세부 정보 요청 → 관제 목록 맨 위 → 답장 → 확인 요청 → 의료진 답장. 모두 감사 기록에 남는다."""
+    client.post("/api/session/reset", json=dict(trialId="T0014"))
+    _clinic(client)
+    assert client.get("/api/clinic/messages").json() == []
+    r = client.post("/api/clinic/messages", json=dict(kind="access_request", caseId="case-1", text="사례 1 시술 시기가 투약 간격 판단에 필요합니다."))
+    assert r.status_code == 200, r.text
+    msgs = r.json()
+    assert len(msgs) == 1 and msgs[0]["sender"] == "clinician" and (msgs[0]["caseId"], msgs[0]["caseLabel"]) == ("case-1", "사례 1")
+    ov = client.get("/api/monitor/overview").json()
+    top = ov["sessions"][0]
+    assert top["source"] == "clinic" and top["pending_request"] and top["needs_review"]
+    assert top["flag"] == "의료진 세부 정보 요청" and top["request_case"] == "사례1" and ov["kpi"]["requests"] >= 1
+    sid = top["id"]
+    d = client.get(f"/api/monitor/sessions/{sid}").json()
+    assert [m["kind"] for m in d["messages"]] == ["access_request"]
+    t = client.post(f"/api/monitor/sessions/{sid}/messages", json=dict(kind="reply", case="사례1",
+                                                                     text="그 값은 환자를 특정할 수 있어 공개하지 않습니다. 연 단위는 답에 있습니다.")).json()
+    assert not t["row"]["pending_request"] and t["row"]["messages"] == 2
+    assert [m["sender"] for m in client.get(f"/api/monitor/sessions/{sid}/messages").json()["messages"]] == ["clinician", "security"]
+    rv = client.post(f"/api/monitor/sessions/{sid}/review", json=dict(action="ask_clinician")).json()
+    assert rv["awaiting_clinician"] and rv["review"]["action"] == "ask_clinician"
+    got = client.get("/api/clinic/messages").json()
+    assert [(m["sender"], m["kind"]) for m in got] == [("clinician", "access_request"), ("security", "reply"), ("security", "check_request")]
+    client.post("/api/clinic/messages", json=dict(kind="reply", text="처방 간격 확인용이었습니다."))
+    row = next(x for x in client.get("/api/monitor/overview").json()["sessions"] if x["id"] == sid)
+    assert row["pending_request"] and row["flag"] == "의료진 답장 도착" and not row["awaiting_clinician"]
+    acts = [a["action"] for a in client.get("/api/monitor/audit").json() if a["session"] == sid]
+    assert acts[:4] == ["clinician_reply", "ask_clinician", "security_reply", "access_request"]       # 확인 요청은 한 번만 남는다
+    # 잘못된 요청
+    assert client.post("/api/clinic/messages", json=dict(kind="check_request", text="의료진은 확인 요청을 보내지 않습니다")).status_code == 422
+    assert client.post("/api/clinic/messages", json=dict(kind="reply", text="a")).status_code == 422
+    assert client.post("/api/clinic/messages", json=dict(kind="reply", caseId="case-9", text="없는 사례")).status_code == 404
+    assert client.post(f"/api/monitor/sessions/{sid}/messages", json=dict(kind="access_request", text="종류가 틀림")).status_code == 422
+    assert client.post(f"/api/monitor/sessions/{sid}/messages", json=dict(kind="reply", case="case-1", text="사례 표시가 틀림")).status_code == 422
+    assert client.post("/api/monitor/sessions/nope/messages", json=dict(kind="reply", text="없는 대화")).status_code == 404
+    # 새 대화를 시작하면 의료진 화면 메시지는 비고, 지난 대화의 메시지는 관제 화면에 남는다
+    client.post("/api/session/reset", json=dict(trialId="T0014"))
+    assert client.get("/api/clinic/messages").json() == []
+    assert len(client.get(f"/api/monitor/sessions/{sid}").json()["messages"]) == 4
+
+
 def test_clinic_unknown_question_and_session_conflict(client):
     client.post("/api/session/reset", json=dict(trialId="T0014"))
     _, _, sid = _clinic(client)

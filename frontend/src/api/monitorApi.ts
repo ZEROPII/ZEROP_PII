@@ -1,7 +1,7 @@
 // 보안 담당자 관제 API. 데모 백엔드(python -m webdemo)에만 있다.
 // Mock 모드나 api_server(실제 LLM)에서는 쓸 수 없다는 오류를 돌려주고, 화면이 그 사유를 보여 준다.
 
-import type { AuditEntry, MonitorDetail, MonitorOverview, PocResult, RedTeamJob, ReviewAction, MonitorRow } from '../types/monitor';
+import type { AuditEntry, MonitorDetail, MonitorOverview, MonitorRow, PocResult, RedTeamJob, ReviewAction, ThreadResult } from '../types/monitor';
 import { apiMode } from './index';
 import { ApiError } from './types';
 
@@ -47,6 +47,13 @@ export const monitorApi = {
     request<MonitorDetail>(`/monitor/sessions/${encodeURIComponent(sid)}/reveal`, { method: 'POST', body: JSON.stringify({ reason }) }),
   review: (sid: string, action: ReviewAction, note?: string) =>
     request<MonitorRow>(`/monitor/sessions/${encodeURIComponent(sid)}/review`, { method: 'POST', body: JSON.stringify({ action, note }) }),
+  /** 의료진에게 답장(reply) 또는 확인 요청(check_request). case는 '사례1' 같은 사례 표시. */
+  message: (sid: string, kind: 'reply' | 'check_request', text: string, caseRef?: string | null) =>
+    request<ThreadResult>(`/monitor/sessions/${encodeURIComponent(sid)}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({ kind, text, case: caseRef ?? null }),
+    }),
+  thread: (sid: string, signal?: AbortSignal) => request<ThreadResult>(`/monitor/sessions/${encodeURIComponent(sid)}/messages`, { signal }),
   audit: (signal?: AbortSignal) => request<AuditEntry[]>('/monitor/audit', { signal }),
   poc: (signal?: AbortSignal) => request<PocSummary>('/poc', { signal }),
   startRedTeam: (per_type: number | null, fuzzer: string) =>

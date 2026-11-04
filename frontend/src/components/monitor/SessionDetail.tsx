@@ -1,9 +1,11 @@
-import { ChevronDown, ChevronUp, Eye, MessageSquareText } from 'lucide-react';
-import { useMemo, useState } from 'react';
-import { caseLabel, relativeTime } from '../../lib/time';
+import { ChevronDown, ChevronUp, Eye, Loader2, MailQuestion, MessageSquareText, Network, Send, Stethoscope } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import type { ClueFact } from '../../lib/clueGraph';
+import { caseLabel, clockTime, relativeTime } from '../../lib/time';
 import { useTermDetect } from '../../state/TermContext';
-import type { MonitorDetail, ReviewAction, TurnView } from '../../types/monitor';
+import type { MonitorDetail, ReviewAction, ThreadMessage, TurnView } from '../../types/monitor';
 import { StatusChip } from '../common/StatusChip';
+import { ClueGraph } from '../graph/ClueGraph';
 import { AnswerTerms } from '../terminology/AnswerTerms';
 import { TermText } from '../terminology/TermText';
 import { CrowdLens } from '../viz/CrowdLens';
@@ -32,18 +34,95 @@ function summarize(d: MonitorDetail): string {
   return `모든 답을 그대로 보냈습니다. 후보가 기준 ${d.k_req}명보다 많게 유지되었습니다.`;
 }
 
+/** 확인 요청 기본 문구 (보안 담당자가 고쳐 보낼 수 있다) */
+export const CHECK_DEFAULT = '이 대화에서 같은 사례의 세부 정보를 여러 번 물으셨습니다. 진료에 필요한 내용이었는지 알려 주세요.';
+
+type Composer = { kind: 'reply' | 'check_request'; text: string };
+
+/** 의료진과 주고받은 메시지 (의료진 화면의 '보호 담당자 메시지'와 같은 대화) */
+function Thread({ messages }: { messages: ThreadMessage[] }) {
+  return (
+    <ol className="space-y-2.5">
+      {messages.map((m) => {
+        const clin = m.sender === 'clinician';
+        return (
+          <li key={m.id} className={clin ? 'mr-8' : 'ml-8'}>
+            <p className={`flex flex-wrap items-center gap-x-1.5 text-[11px] text-ink-3 ${clin ? '' : 'justify-end'}`}>
+              {clin && <Stethoscope className="h-3 w-3" aria-hidden />}
+              <span className="font-semibold text-ink-2">{clin ? '의료진' : '보안 담당자'}</span>
+              <span>{m.kind_label}</span>
+              {m.case && <span>{caseLabel(m.case)}</span>}
+              <span className="num">{clockTime(m.at)}</span>
+            </p>
+            <p
+              className={`mt-1 whitespace-pre-wrap break-words rounded-control px-3 py-2 text-[13px] leading-5 text-ink ${
+                clin ? (m.kind === 'access_request' ? 'border border-iris bg-surface' : 'bg-surface-2') : 'bg-iris-tint'
+              }`}
+            >
+              {m.text}
+            </p>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
 interface Props {
   detail: MonitorDetail;
   onReveal(): void;
   onReview(action: ReviewAction): void;
+  /** 의료진에게 답장(reply) 또는 확인 요청(check_request) */
+  onMessage(kind: 'reply' | 'check_request', text: string, caseRef: string | null): Promise<boolean>;
   busy: boolean;
 }
 
-export function SessionDetail({ detail: d, onReveal, onReview, busy }: Props) {
+export function SessionDetail({ detail: d, onReveal, onReview, onMessage, busy }: Props) {
   const [open, setOpen] = useState<Set<number>>(new Set());
   const [answers, setAnswers] = useState<Set<number>>(new Set());
+  const [composer, setComposer] = useState<Composer | null>(null);
+  const [graphOpen, setGraphOpen] = useState(false);
+  const [sending, setSending] = useState(false);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
   const r = d.row;
   const c1 = d.arms[d.live_arm];
+  const messages = d.messages ?? [];
+  const pending = r.pending_request ? messages[messages.length - 1] : null;
+
+  // 대화를 바꾸면 쓰던 답장은 닫는다
+  useEffect(() => {
+    setComposer(null);
+    setGraphOpen(false);
+  }, [d.id]);
+  useEffect(() => {
+    if (composer) composerRef.current?.focus();
+  }, [composer?.kind]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const facts = useMemo<ClueFact[]>(
+    () =>
+      c1.turns.flatMap((t) =>
+        t.lines
+          .filter((l) => l.case && l.attribute)
+          .map((l) => ({
+            caseRef: l.case!,
+            caseLabel: caseLabel(l.case),
+            attribute: l.attribute!,
+            attributeLabel: ATTR_KO[l.attribute!] ?? l.attribute!,
+            value: l.change === 'suppress' || l.value == null || l.value === '(비공개)' ? null : l.value,
+            action: l.change ?? 'allow',
+            turn: t.turn,
+          })),
+      ),
+    [c1.turns],
+  );
+
+  async function sendComposer() {
+    if (!composer || composer.text.trim().length < 2) return;
+    setSending(true);
+    const ok = await onMessage(composer.kind, composer.text.trim(), pending?.case ?? r.focus_case ?? null);
+    setSending(false);
+    if (ok) setComposer(null);
+  }
   // 내보낸 답(가드레일을 거친 답) 속 의료 용어: 밑줄과 칩으로 자동 표시
   const { mentions } = useTermDetect(c1.turns.map((t) => t.released ?? ''));
   const focus = r.focus_case;
@@ -152,9 +231,68 @@ export function SessionDetail({ detail: d, onReveal, onReview, busy }: Props) {
           {r.review && <StatusChip tone="plain">{r.review.label}</StatusChip>}
         </div>
         <p className="mt-3 max-w-[40em] text-[15px] leading-relaxed">{summarize(d)}</p>
+        {pending && (
+          <div className="mt-3 flex flex-wrap items-start gap-x-3 gap-y-2 rounded-control border border-iris bg-iris-tint px-3 py-2.5 text-[13px]">
+            <MailQuestion className="mt-0.5 h-4 w-4 shrink-0 text-iris-text" aria-hidden />
+            <span className="min-w-0 flex-1">
+              <strong className="font-semibold">{pending.kind === 'access_request' ? '의료진이 세부 정보를 요청했습니다' : '의료진이 답장했습니다'}</strong>
+              {pending.case && <span className="ml-1 text-ink-2">({caseLabel(pending.case)})</span>}
+              <span className="mt-0.5 block text-xs text-ink-2">아래 메시지를 읽고 답장해 주세요. 답장은 의료진 화면의 보호 담당자 메시지에 바로 뜹니다.</span>
+            </span>
+            <button type="button" className="btn-primary btn-sm" onClick={() => setComposer({ kind: 'reply', text: '' })}>
+              답장하기
+            </button>
+          </div>
+        )}
+        {r.awaiting_clinician && !pending && <p className="mt-2 text-xs text-ink-3">의료진에게 확인 요청을 보냈고 답을 기다리는 중입니다.</p>}
       </header>
 
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
+        {(messages.length > 0 || composer) && (
+          <section aria-label="의료진과 주고받은 메시지" className="border-b border-line px-5 py-4">
+            <h3 className="mb-2.5 flex items-center gap-1.5 text-[13px] font-bold text-ink-2">
+              의료진과 주고받은 메시지 <span className="num text-xs font-medium text-ink-3">{messages.length}</span>
+            </h3>
+            <Thread messages={messages} />
+            {composer ? (
+              <form
+                className="mt-3"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  void sendComposer();
+                }}
+              >
+                <label htmlFor="sec-msg" className="mb-1 block text-xs font-semibold text-ink-2">
+                  {composer.kind === 'check_request' ? '의료진에게 보낼 확인 요청 (의료진 화면 대화 위에 뜹니다)' : '의료진에게 보낼 답장'}
+                </label>
+                <textarea
+                  id="sec-msg"
+                  ref={composerRef}
+                  value={composer.text}
+                  onChange={(e) => setComposer({ ...composer, text: e.target.value })}
+                  rows={3}
+                  maxLength={500}
+                  placeholder="원래 값은 쓰지 말고 처리 결과와 대안을 적어 주세요"
+                  className="w-full resize-none rounded-control border border-line-input bg-surface px-3 py-2 text-[13px] leading-5 text-ink outline-none placeholder:text-ink-3 focus:border-focus"
+                />
+                <div className="mt-1.5 flex justify-end gap-1.5">
+                  <button type="button" className="btn-ghost btn-sm" onClick={() => setComposer(null)}>
+                    취소
+                  </button>
+                  <button type="submit" className="btn-primary btn-sm" disabled={sending || busy || composer.text.trim().length < 2}>
+                    {sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <Send className="h-3.5 w-3.5" aria-hidden />}
+                    {composer.kind === 'check_request' ? '확인 요청 보내기' : '답장 보내기'}
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <button type="button" className="btn-ghost btn-sm mt-2" onClick={() => setComposer({ kind: 'reply', text: '' })}>
+                <Send className="h-3.5 w-3.5" aria-hidden /> 답장 쓰기
+              </button>
+            )}
+          </section>
+        )}
+
         <div className="grid grid-cols-[140px_1fr] items-center gap-5 border-b border-line px-5 py-4">
           <CrowdLens k={r.k_now ?? d.p_ref} size={140} threshold={d.k_req} ghost={r.status !== 'safe' ? r.k_if_raw : null} label={`${caseLabel(focus)} 후보 ${r.k_now}명`} />
           <div className="min-w-0">
@@ -200,6 +338,21 @@ export function SessionDetail({ detail: d, onReveal, onReview, busy }: Props) {
           </div>
         </div>
 
+        <section aria-label="단서 그래프" className="border-b border-line">
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 px-5 py-3 text-left text-[13px] font-bold text-ink-2 hover:bg-surface-2"
+            aria-expanded={graphOpen}
+            onClick={() => setGraphOpen((o) => !o)}
+          >
+            <Network className="h-4 w-4 text-ink-3" aria-hidden />
+            단서 그래프
+            <span className="font-normal text-ink-3">사례와 답에 나간 값이 어떻게 이어지는지</span>
+            {graphOpen ? <ChevronUp className="ml-auto h-4 w-4" aria-hidden /> : <ChevronDown className="ml-auto h-4 w-4" aria-hidden />}
+          </button>
+          {graphOpen && <ClueGraph facts={facts} focusCase={focus} />}
+        </section>
+
         <div className="px-5 pt-4">
           <h3 className="mb-2.5 text-[13px] font-bold text-ink-2">질문 흐름</h3>
           {groups.map((g, gi) =>
@@ -234,7 +387,13 @@ export function SessionDetail({ detail: d, onReveal, onReview, busy }: Props) {
         <button type="button" className="btn-primary" disabled={busy} onClick={() => onReview('reviewed')}>
           검토 완료
         </button>
-        <button type="button" className="btn-secondary" disabled={busy} onClick={() => onReview('ask_clinician')}>
+        <button
+          type="button"
+          className="btn-secondary"
+          disabled={busy}
+          aria-expanded={composer?.kind === 'check_request'}
+          onClick={() => setComposer({ kind: 'check_request', text: CHECK_DEFAULT })}
+        >
           의료진에게 확인 요청
         </button>
         <span className="flex-1" />

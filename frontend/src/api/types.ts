@@ -5,11 +5,13 @@ import type {
   CaseId,
   CaseRiskState,
   CaseSummary,
+  ClinicMessage,
   ConversationSession,
   DisclosureHistory,
   PatientContext,
   PolicyDecisionRationale,
   PatientOption,
+  PostClinicMessageRequest,
   PreflightRiskAssessment,
   ProtectionPolicy,
   SendQuestionRequest,
@@ -37,6 +39,13 @@ export interface ClinicalCaseApi {
   listPatients?(signal?: AbortSignal): Promise<PatientOption[]>;
   /** 새 대화(빈 State)로 다시 시작. trialId를 주면 그 질의 환자로. */
   resetSession?(trialId?: string): Promise<void>;
+  /**
+   * 지금 대화에서 개인정보 보호 담당자와 주고받은 메시지. null이면 이 백엔드는 메시지를 지원하지 않는다
+   * (화면에서 세부 정보 요청 버튼을 숨긴다).
+   */
+  listClinicMessages?(signal?: AbortSignal): Promise<ClinicMessage[] | null>;
+  /** 세부 정보 요청 또는 확인 요청에 대한 답장. 보낸 뒤의 전체 메시지 목록을 돌려준다. */
+  postClinicMessage?(request: PostClinicMessageRequest): Promise<ClinicMessage[]>;
 }
 
 export class ApiError extends Error {

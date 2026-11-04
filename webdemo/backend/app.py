@@ -4,9 +4,10 @@
 #     GET  /api/workspace · /api/protection-policy · /api/patient-context · /api/cases?patientContextId= · /api/risk-states
 #     GET  /api/cases/{id}/session · /disclosures · /policy-decision · /suggestions
 #     POST /api/cases/{id}/messages · /preflight          POST /api/session/reset {trialId}     GET /api/clinic/patients
+#     GET  /api/clinic/messages · POST /api/clinic/messages {kind, text, caseId}   보안 담당자와 주고받는 메시지 (세부 정보 요청 · 답장)
 #   보안 담당자 관제
 #     GET  /api/monitor/overview · /api/monitor/sessions/{sid} · /api/monitor/audit
-#     POST /api/monitor/sessions/{sid}/reveal {reason} · /review {action, note}
+#     POST /api/monitor/sessions/{sid}/reveal {reason} · /review {action, note} · /messages {kind, text, case}   GET …/messages
 #   레드팀·결과
 #     POST /api/redteam · GET /api/redteam/{id} · GET /api/poc (webdemo/data/poc_summary.json, 2026-10-23 POC 집계)
 #   평가 지표 대시보드: GET /eval/ (eval_demo/ 정적 페이지)
@@ -86,6 +87,20 @@ class ReviewIn(BaseModel):
     note: str | None = Field(None, max_length=500)
 
 
+class ClinicNoteIn(BaseModel):
+    """의료진 → 보안 담당자. kind: access_request(세부 정보 요청) · reply(확인 요청에 답장)."""
+    kind: str = "access_request"
+    text: str = Field(..., min_length=2, max_length=500)
+    caseId: str | None = None
+
+
+class SecurityNoteIn(BaseModel):
+    """보안 담당자 → 의료진. kind: reply(답장) · check_request(확인 요청). case는 '사례1' 같은 사례 표시."""
+    kind: str = "reply"
+    text: str = Field(..., min_length=2, max_length=500)
+    case: str | None = None
+
+
 def create_app(engine: Engine | None = None, *, trial: str | None = None, simulations: bool | None = None) -> FastAPI:
     state: dict[str, Any] = {}
 
@@ -100,7 +115,7 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
             state["monitor"].seed_simulations()
         yield
 
-    app = FastAPI(title="Zero PII 의료 AI 데모", version="0.2", lifespan=lifespan)
+    app = FastAPI(title="MediCloak 의료 AI 데모", version="0.2", lifespan=lifespan)
 
     def eng() -> Engine:
         return state["engine"]
@@ -200,6 +215,17 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
         mon().log("clinic_start", clinic().session, actor="의료진 (데모)")
         return dict(status="ok", workspaceId=clinic().workspace_id, trialId=tid)
 
+    @r.get("/clinic/messages")
+    def clinic_messages() -> list[dict[str, Any]]:
+        return clinic().messages()
+
+    @r.post("/clinic/messages")
+    def post_clinic_message(body: ClinicNoteIn) -> list[dict[str, Any]]:
+        c = clinic()
+        ref = guard(lambda: c.ref_of(body.caseId)) if body.caseId else None
+        guard(lambda: mon().post_message(c.session, "clinician", body.kind, body.text, ref))
+        return c.messages()
+
     @r.get("/clinic/patients")
     def clinic_patients() -> list[dict[str, Any]]:
         out = []
@@ -227,6 +253,16 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
         if body.action not in REVIEW_KO:
             raise HTTPException(422, f"action은 {', '.join(REVIEW_KO)} 중 하나입니다.")
         return mon().review(sess(sid), body.action, body.note)
+
+    @r.get("/monitor/sessions/{sid}/messages")
+    def security_thread(sid: str) -> dict[str, Any]:
+        return mon().thread(sess(sid))          # 원문을 열람한 상세를 다시 받지 않고 메시지만 새로 고칠 때
+
+    @r.post("/monitor/sessions/{sid}/messages")
+    def post_security_message(sid: str, body: SecurityNoteIn) -> dict[str, Any]:
+        s = sess(sid)
+        guard(lambda: mon().post_message(s, "security", body.kind, body.text, body.case))
+        return mon().thread(s)
 
     @r.get("/monitor/audit")
     def audit() -> list[dict[str, Any]]:
@@ -341,7 +377,7 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
     return app
 
 
-NO_BUILD_HTML = """<!doctype html><html lang="ko"><meta charset="utf-8"><title>Zero PII 데모</title>
+NO_BUILD_HTML = """<!doctype html><html lang="ko"><meta charset="utf-8"><title>MediCloak 데모</title>
 <body style="font-family:system-ui,sans-serif;max-width:640px;margin:64px auto;padding:0 16px;line-height:1.7;color:#161827">
 <h1 style="font-size:22px">화면 파일이 아직 없습니다</h1>
 <p>API 서버는 켜져 있습니다. 화면을 보려면 다른 터미널에서 프런트엔드를 한 번 빌드한 뒤 이 페이지를 새로 고치세요.</p>
