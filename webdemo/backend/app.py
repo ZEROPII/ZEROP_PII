@@ -555,7 +555,7 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
         d = e.ctx["staged"].defender
         return dict(modeLabel=e.live_label if e.live_ctx is not None else "결정적 응답기 (LLM 없음)", arm="C1",
                     stateModeLabel="누적 판정 (대화 전체 기억)", minK=d.g, suppressK=d.s, populationSize=e.ctx["staged"].p_ref, source="backend",
-                    kReq=e.cfg.k_req, llmLive=e.live_ctx is not None, compare=product.compare if product else True,
+                    kReq=e.cfg.k_req, llmLive=e.live_ctx is not None, ruleExtract=bool(e.live_ctx is not None and e.live_ctx.cfg.rule_extract), compare=product.compare if product else True,
                     auth=state["auth"] is not None, persist=state["store"] is not None, llmUsage=e.live_usage())
 
     @r.get("/monitor/sessions/{sid}")

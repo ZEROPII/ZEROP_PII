@@ -99,7 +99,7 @@ def serve(a: argparse.Namespace) -> None:
     first = Persist(store, None).next_id()          # type: ignore[arg-type]
     print(f"[medicloak] 위험 계산 엔진을 준비합니다 (10초 안팎) · 대상 AI: {label}")
     eng = Engine(db.parent / "engine", paths=paths, live_llm=live_llm, live_label=label, first_id=first,
-                 llm_concurrency=a.llm_concurrency)
+                 llm_concurrency=a.llm_concurrency, live_rule_extract=not a.no_rule_extract)
     product = Product(store=store, compare=not a.no_compare, keep=a.keep, cookie_secure=a.cookie_secure)
     app = create_app(eng, trial=a.trial, simulations=not a.no_sim, product=product)
     if not (DIST / "index.html").exists():
@@ -198,11 +198,13 @@ def _serve_args(p: argparse.ArgumentParser, top: bool = False) -> None:
     p.add_argument("--trial", **(kw or dict(default=None)), help="의료진이 처음 로그인했을 때 열 환자 (기본 T0014)")
     p.add_argument("--keep", type=int, **(kw or dict(default=12)), help="의료진마다 메모리에 둘 대화 수 (넘으면 DB에만)")
     p.add_argument("--cookie-secure", action="store_true", **(kw or {}), help="https로만 로그인 쿠키를 보낸다 (https 운영)")
+    p.add_argument("--no-rule-extract", action="store_true", **(kw or {}),
+                   help="실제 LLM 대화에서 나이 · 날짜 규칙 추출을 끈다 (기본은 켬, ADR-0021)")
 
 
 def _defaults(a: argparse.Namespace) -> argparse.Namespace:
     for k, v in dict(host="127.0.0.1", port=8000, llm="real", env_file=None, llm_concurrency=1, build=False, no_sim=False,
-                     no_compare=False, trial=None, keep=12, cookie_secure=False).items():
+                     no_compare=False, trial=None, keep=12, cookie_secure=False, no_rule_extract=False).items():
         if not hasattr(a, k):
             setattr(a, k, v)
     return a

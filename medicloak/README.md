@@ -65,6 +65,7 @@ python -m medicloak serve [옵션]          # serve는 생략해도 됨
 | `--port 8080` · `--host 0.0.0.0` | 주소 |
 | `--keep 12` | 의료진마다 메모리에 둘 대화 수 (넘는 대화는 DB에만 남고 읽기 전용) |
 | `--cookie-secure` | https로만 로그인 쿠키를 보냄 (역방향 프록시 뒤 https 운영) |
+| `--no-rule-extract` | 실제 LLM 대화의 나이 · 날짜 규칙 추출을 끔. 기본은 켬: 추출기가 날짜를 약 항목 안에만 적어도 날짜를 단서로 셈 (ADR-0021) |
 | `--db 경로` | DB 파일 (기본 `runs/medicloak/medicloak.db`) |
 
 ## 실제 LLM 호출 수

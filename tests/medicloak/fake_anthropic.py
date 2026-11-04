@@ -5,6 +5,8 @@
 #   추출기    : 답에 나온 약 이름(MED)과 날짜(PERIOD, MEDICATION_START)를 같은 사건(e1)으로 JSON 배열에 담는다
 #   재작성기  : [바꿀 표현]대로 고친다 (넓게 → 넓은 표현 그대로, 빼기 → 그 값을 지움)
 # fail_status를 주면 그 HTTP 상태로 답한다 (401: 키 오류처럼 바로 실패, 429/5xx: 재시도 뒤 실패).
+# period_in_med=True면 추출기가 날짜를 따로 된 PERIOD 단서로 내지 않고 약 항목의 period_start 칸에만 적는다
+#   (2026-11-04 실제 claude-haiku-4.5 추출기에서 나온 모양).
 
 from __future__ import annotations
 
@@ -29,11 +31,12 @@ class FakeResponse:
 
 
 class FakeAnthropic:
-    def __init__(self, *, fail_status: int | None = None, delay: float = 0.0, drop_date: bool = True) -> None:
+    def __init__(self, *, fail_status: int | None = None, delay: float = 0.0, drop_date: bool = True, period_in_med: bool = False) -> None:
         self.calls: list[dict[str, Any]] = []
         self.fail_status = fail_status
         self.delay = delay
         self.drop_date = drop_date
+        self.period_in_med = period_in_med
         self.lock = threading.Lock()
         self.active = 0
         self.max_active = 0
@@ -85,6 +88,11 @@ class FakeAnthropic:
             for m in re.finditer(r"(사례\d+) 환자는 (.+?)를 처방받았고", resp):
                 obs.append(dict(attribute="MED", raw_value=m.group(2), evidence_spans=[m.group(2)], inference_mode="EXPLICIT", confidence=5,
                                 case_ref=m.group(1), subject="TARGET_PATIENT", context_status="HISTORY", event_ref="e1", med_assertion="PRESCRIBED"))
+                if self.period_in_med:
+                    dm = _DATE.search(resp[m.end():])
+                    if dm:
+                        obs[-1]["period_start"] = dm.group(0)
+                    continue
                 for dm in _DATE.finditer(resp[m.end():]):
                     obs.append(dict(attribute="PERIOD", raw_value=dm.group(0), evidence_spans=[dm.group(0)], inference_mode="EXPLICIT",
                                     confidence=5, case_ref=m.group(1), subject="TARGET_PATIENT", context_status="HISTORY", event_ref="e1",

@@ -102,7 +102,8 @@ class Engine:
     """
 
     def __init__(self, workdir: Path | None = None, log: Callable[[str], None] = print, *, paths: MedicalPaths | None = None,
-                 live_llm: Any = None, live_label: str | None = None, first_id: int = 1, llm_concurrency: int = 1) -> None:
+                 live_llm: Any = None, live_label: str | None = None, first_id: int = 1, llm_concurrency: int = 1,
+                 live_rule_extract: bool = True) -> None:
         t0 = time.time()
         self.lock = threading.RLock()                                # kcalc 캐시·응답기 상태를 세션끼리 나눠 쓰므로 한 번에 한 요청
         self.workdir = Path(workdir or ROOT / "runs" / "webdemo")
@@ -114,7 +115,12 @@ class Engine:
         self.ctx: dict[str, Context] = {"staged": base, "full": replace(base, llm=self.llm["full"])}
         # 의료진 대화 LLM은 네트워크 호출 동안 엔진 잠금을 푸는 포장(LiveLLM)을 씌운다 (live.py)
         self.live_llm = LiveLLM(live_llm, self.lock, concurrency=llm_concurrency) if live_llm is not None else None
-        self.live_ctx: Context | None = replace(base, llm=self.live_llm) if self.live_llm is not None else None
+        # 실제 LLM 추출기는 날짜를 따로 된 단서(PERIOD)로 내지 않고 약 항목의 period_start 칸에만 적을 때가 있다.
+        # 그러면 공개 계획이 날짜를 세지 않고, 고친 답을 다시 뽑을 때에야 날짜가 단서로 나와 답 전체가 거절된다.
+        # 그래서 실제 LLM 대화에는 규칙 추출(medical/rule_extract.py: 답에 적힌 나이 · 날짜를 정규식으로 보탬)을 켠다.
+        # 결정적 응답기(데모 · 레드팀 · 시뮬레이션)는 바꾸지 않는다.
+        live_cfg = replace(base.cfg, rule_extract=True) if live_rule_extract else base.cfg
+        self.live_ctx: Context | None = replace(base, llm=self.live_llm, cfg=live_cfg) if self.live_llm is not None else None
         self.live_label = live_label or (ORACLE_LABEL if live_llm is None else "LLM")
         self.seed_by_id = {s["seed_id"]: s for s in base.seeds}
         self.plan = plan_all(None, self.cfg.seed)(self.data, self.split, self.cfg)     # POC와 같은 trial 번호 (T0001…)

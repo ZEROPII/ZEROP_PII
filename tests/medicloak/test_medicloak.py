@@ -280,6 +280,35 @@ def test_real_llm_question_is_defended_and_redacted(world):
     assert [r["turn"] for r in recs["C1S"]] == [0, 1]
 
 
+def test_dates_only_inside_med_fields_are_still_counted(world):
+    """실제 추출기가 날짜를 약 항목의 period_start에만 적어도(PERIOD 단서 없음) 규칙 추출이 날짜를 세어 가린다.
+    규칙 추출이 없으면 공개 계획이 날짜를 세지 않아, 다른 값을 고칠 일이 없으면 시작일이 그대로 나가고
+    다른 값을 고쳤다면 고친 답을 다시 뽑을 때에야 날짜가 나와 답 전체가 거절된다 (2026-11-04 실제 LLM 대화 S0009)."""
+    from dataclasses import replace
+    eng = world["eng"]
+    good, ctx0 = eng.live_llm.inner, eng.live_ctx
+    eng.live_llm.inner = fake_llm(FakeAnthropic(period_in_med=True))
+    try:
+        assert ctx0.cfg.rule_extract is True                                     # 실제 LLM 대화에는 기본으로 켠다
+        doc = login(world, "doctor2")
+        _, sid = launch(doc, "T0014")
+        body = doc.post("/api/cases/case-1/messages", json=dict(sessionId=sid, question=Q_DRUG, clientMessageId="p1")).json()
+        prot = body["assistantMessage"]["protection"]
+        assert prot["releaseMode"] == "REWRITTEN", prot
+        assert {t["attribute"]: t["action"] for t in prot["transformations"]} == {"MED": "allow", "PERIOD": "suppress"}
+        text = "".join(s["text"] for s in body["assistantMessage"]["segments"])
+        assert "loratadine" in text and "2004-06-16" not in json.dumps(body, ensure_ascii=False)
+
+        eng.live_ctx = replace(ctx0, cfg=replace(ctx0.cfg, rule_extract=False))  # 끄면 생기는 일 (설정 확인용)
+        _, sid2 = launch(doc, "T0014")
+        b2 = doc.post("/api/cases/case-1/messages", json=dict(sessionId=sid2, question=Q_DRUG, clientMessageId="p2")).json()
+        assert b2["assistantMessage"]["protection"]["releaseMode"] == "RAW"
+        assert "2004-06-16" in "".join(s["text"] for s in b2["assistantMessage"]["segments"])
+    finally:
+        eng.live_llm.inner, eng.live_ctx = good, ctx0
+        eng.wait_compare(20)
+
+
 def test_clinic_api_has_no_risk_numbers(world):
     doc = login(world, "doctor1")
     _, sid = launch(doc, "T0010")
