@@ -320,7 +320,7 @@ class ResearchWorkspace:
                     slot.decisions.append(dict(x, action=action, turn=self.turn))
                     new_entries[cid].append(dict(entryId=self._id("dh"), turn=self.turn, attribute=x["attribute"],
                                                  attributeLabel=ATTR_LABEL.get(x["attribute"], x["attribute"]), action=action,
-                                                 description=f"{value} (그대로 공개)" if action == ALLOW else desc))
+                                                 description=f"{value} (그대로 공개)" if action == ALLOW else desc, value=value))
         for cid, entries in new_entries.items():
             slot = self.cases[cid]
             slot.history += entries
@@ -333,11 +333,12 @@ class ResearchWorkspace:
         protection = dict(decision=decision, transformations=transformations, kBefore=k_before[s.case_id], kAfter=k_after,
                           explanation=self._explain(s, rec, transformations, k_before[s.case_id], k_after),
                           releaseMode=mode, extractionOk=bool(rec["extraction_ok"]))
+        # engineTurn: 대화 전체 턴 번호(공개 이력 turn과 같은 번호). 의료진 화면 사례 노트가 질문과 이력을 잇는 데 쓴다.
         user_msg = dict(messageId=client_message_id, caseId=s.case_id, role="user", turn=turn_no, createdAt=created,
-                        segments=[dict(kind="text", text=question)], status="sent")
+                        segments=[dict(kind="text", text=question)], status="sent", engineTurn=self.turn)
         asst_msg = dict(messageId=self._id("msg"), caseId=s.case_id, role="assistant", turn=turn_no, createdAt=_now(),
                         segments=[dict(kind="text", text=text)] if refusal else segments_of(text, transformations),
-                        protection=protection, status="sent")
+                        protection=protection, status="sent", engineTurn=self.turn)
         s.messages += [user_msg, asst_msg]
         s.questions = turn_no
         related = [self.risk_state(cid) for cid in self.cases if cid != s.case_id and (new_entries[cid] or self.k(cid) != k_before[cid])]

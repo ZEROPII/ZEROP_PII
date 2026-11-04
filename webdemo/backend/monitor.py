@@ -149,12 +149,17 @@ class Monitor:
         return self.detail(s, reveal=True)
 
     def review(self, s: Session, action: str, note: str | None) -> dict[str, Any]:
+        check = None
+        if action == "ask_clinician":                    # 표시만 하지 않고 의료진 화면에 확인 요청을 보낸다
+            check = (note or "").strip() or CHECK_DEFAULT
+            if len(check) < 2:                           # 상태를 바꾸기 전에 검사한다 (표시 · 감사 기록만 남고 메시지가 없는 일이 없게)
+                raise ValueError("확인 요청은 2자 이상 써 주세요.")
         s.review = dict(action=action, label=REVIEW_KO[action], at=time.time(), actor=ACTOR, note=note)
         self.log(action, s, note=note)
-        if action == "ask_clinician":                    # 표시만 하지 않고 의료진 화면에 확인 요청을 보낸다
+        if check is not None:
             with self.eng.lock:
                 case = self.row(s)["focus_case"]
-            self.post_message(s, "security", "check_request", (note or "").strip() or CHECK_DEFAULT, case, audit=False)
+            self.post_message(s, "security", "check_request", check, case, audit=False)
         with self.eng.lock:
             return self.row(s)
 

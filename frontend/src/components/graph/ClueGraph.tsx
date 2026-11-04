@@ -192,7 +192,10 @@ export function ClueGraph({ facts, focusCase = null, onPickCase, turnLabel = (t)
                   onBlur={() => setHover(null)}
                   onClick={() => onPickCase?.(ref)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter') onPickCase?.(ref);
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      onPickCase?.(ref);
+                    }
                   }}
                 >
                   <title>{n.label}</title>

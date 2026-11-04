@@ -189,6 +189,9 @@ export interface PreflightRiskAssessment {
   understood?: boolean;
   /** 데모 백엔드만: 보내면 어떻게 답할지. 의료진 화면은 후보 수 대신 이것으로 안내한다. */
   plannedAction?: 'suppress' | 'generalize' | null;
+  /** 데모 백엔드만: 질문이 가리킨 사례 (고른 사례와 다를 수 있다. 예: 사례 1 탭에서 '사례5 환자의 나이는?') */
+  targetCaseId?: CaseId | null;
+  targetCaseLabel?: string | null;
 }
 
 // ── 의료진 ↔ 개인정보 보호 담당자 메시지 ────────────────────────────────────────

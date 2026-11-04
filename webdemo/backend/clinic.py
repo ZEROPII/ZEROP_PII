@@ -201,7 +201,8 @@ class ClinicDesk:
             it = I.parse(question)
             focus = it.case or s.ref
             base = dict(caseId=case_id, question=question, requiresWarning=False, currentK=k_now, projectedK=None, message=None,
-                        affectedAttributes=[], suggestions=[], source="backend", supported=True, plannedAction=None)
+                        affectedAttributes=[], suggestions=[], source="backend", supported=True, plannedAction=None,
+                        targetCaseId=None, targetCaseLabel=None)
             if not it.understood:
                 return dict(base, understood=False)
             for seed in self._seed_for(it, focus):
@@ -223,8 +224,10 @@ class ClinicDesk:
                     msg = None
                 # plannedAction: 보내면 어떻게 답할지 (의료진 화면은 후보 수 대신 이것만 보고 안내 문구를 만든다)
                 planned = SUPPRESS if acts.get(SUPPRESS) else GENERALIZE if acts.get(GENERALIZE) else None
+                # targetCase*: 질문이 가리킨 사례 (고른 탭이 사례 1이어도 '사례5 환자의 나이'면 사례 5)
                 return dict(base, requiresWarning=warn, understood=True, currentK=mine["k_now"], projectedK=mine["k_if_raw"], message=msg,
                             affectedAttributes=mine["attributes"], plannedAction=planned,
+                            targetCaseId=self.case_of_ref(mine["ref"]), targetCaseLabel=label,
                             suggestions=[dict(label=f"{x['label']} 묻기", question=x["question"])
                                          for x in self._ranked(focus, skip=(seed["target_qi"], "PERIOD", "AGE", "SEX", "REGION"))][:2] if warn else [])
             return dict(base, understood=True)

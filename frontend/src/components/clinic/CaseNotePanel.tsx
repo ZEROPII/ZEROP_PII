@@ -230,6 +230,8 @@ function MessagesView({ focusNonce }: { focusNonce: number }) {
   const [text, setText] = useState('');
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const listRef = useRef<HTMLOListElement>(null);
+  /** 화면이 자동으로 채운 마지막 초안. 의료진이 고치지 않았으면 사례를 바꿀 때 새 사례 초안으로 바꾼다. */
+  const autoDraft = useRef('');
   const { markRead } = msgs;
 
   useEffect(() => {
@@ -248,15 +250,23 @@ function MessagesView({ focusNonce }: { focusNonce: number }) {
   }, [focusNonce]);
 
   useEffect(() => {
-    if (mode === 'access_request' && !text && summary) setText(requestDraft(summary.label, []));
-    // 모드를 바꿀 때만 초안을 채운다
+    if (mode !== 'access_request' || !summary) return;
+    const next = requestDraft(summary.label, []);
+    setText((t) => {
+      if (t !== '' && t !== autoDraft.current) return t; // 의료진이 고친 초안은 그대로 둔다
+      autoDraft.current = next;
+      return next;
+    });
   }, [mode, summary?.label]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function send() {
     const body = text.trim();
     if (body.length < 2) return;
     const ok = await msgs.send({ kind: mode, text: body, caseId: mode === 'access_request' ? caseId : (msgs.awaitingReply?.caseId ?? null) });
-    if (ok) setText('');
+    if (ok) {
+      autoDraft.current = '';
+      setText('');
+    }
   }
 
   if (msgs.supported === false) return <EmptyState message="이 서버는 개인정보 보호 담당자 메시지를 지원하지 않습니다." />;
@@ -313,7 +323,9 @@ function MessagesView({ focusNonce }: { focusNonce: number }) {
                 aria-pressed={mode === k}
                 onClick={() => {
                   setMode(k);
-                  setText(k === 'access_request' && summary ? requestDraft(summary.label, []) : '');
+                  const next = k === 'access_request' && summary ? requestDraft(summary.label, []) : '';
+                  autoDraft.current = next;
+                  setText(next);
                 }}
                 className={`h-7 flex-1 rounded-[8px] ${mode === k ? 'bg-surface text-ink shadow-sm' : 'text-ink-3 hover:text-ink'}`}
               >

@@ -1,5 +1,5 @@
 import { List, MessageSquare, NotebookText } from 'lucide-react';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { CaseNotePanel, type NoteTab } from '../components/clinic/CaseNotePanel';
 import { ClinicalChat, type JumpTarget } from '../components/clinic/ClinicalChat';
 import { EmrCaseList } from '../components/clinic/EmrCaseList';
@@ -28,7 +28,6 @@ export function ClinicalAssistPage() {
   const { actions } = useWorkspace();
   const { summary } = useSelectedCase();
   const msgs = useClinicMessages();
-  const seenOpen = useRef(msgs.openRequest);
 
   const openMessages = useCallback(() => {
     setNoteTab('messages');
@@ -36,13 +35,13 @@ export function ClinicalAssistPage() {
     setFocusNonce((n) => n + 1);
   }, []);
 
-  // 머리줄 알림을 누르면 메시지 탭을 연다
+  // 머리줄 알림을 누르면(조회 기록 · 보호 안내에서 눌러 이 화면으로 와도) 메시지 탭을 연다
+  const { openPending, consumeOpen } = msgs;
   useEffect(() => {
-    if (msgs.openRequest !== seenOpen.current) {
-      seenOpen.current = msgs.openRequest;
-      openMessages();
-    }
-  }, [msgs.openRequest, openMessages]);
+    if (!openPending) return;
+    consumeOpen();
+    openMessages();
+  }, [openPending, consumeOpen, openMessages]);
 
   const onJump = useCallback(
     (caseId: CaseId, messageId: string) => {

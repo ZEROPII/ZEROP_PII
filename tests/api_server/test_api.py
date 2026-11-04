@@ -89,6 +89,18 @@ def test_raw_and_source_data_never_leave_server(c1):
         assert d["doc_id"] not in blob and d["text"][:40] not in blob
 
 
+def test_messages_carry_engine_turn_and_history_values(c1):
+    """의료진 화면 사례 노트는 공개 이력 turn(대화 전체 턴)과 질문을 engineTurn으로 잇는다. 가린 값은 value가 None."""
+    c, ws, responses = c1
+    assert [r["userMessage"]["engineTurn"] for r in responses] == list(range(1, len(QUESTIONS) + 1))
+    assert all(r["assistantMessage"]["engineTurn"] == r["userMessage"]["engineTurn"] for r in responses)
+    entries = c.get("/api/cases/case-1/disclosures").json()["entries"]
+    assert entries and all("value" in e for e in entries)
+    assert all(e["value"] is None for e in entries if e["action"] == "suppress")
+    turns = {m["engineTurn"] for m in c.get("/api/cases/case-1/session").json()["messages"]}
+    assert {e["turn"] for e in entries} <= turns
+
+
 def test_cases_do_not_mix(tmp_path, data):
     c, ws = _client(tmp_path, data)
     p_ref = ws.ctx.p_ref

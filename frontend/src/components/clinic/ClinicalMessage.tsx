@@ -105,6 +105,9 @@ function ProtectionFooter({ message, caseLabel, cases }: { message: ChatMessage;
   const requestCase = caseIdOfRef(refs[0], cases) ?? message.caseId;
   const requestLabel = refs.length ? refLabel(refs[0]) : caseLabel;
   const canRequest = msgs.supported === true && changed.length > 0;
+  // 이 답 뒤에 같은 사례로 보낸 요청이 있으면 '요청함' (사례를 바꿨다 돌아와 다시 그려도 유지)
+  const requested =
+    sent || msgs.messages.some((m) => m.sender === 'clinician' && m.kind === 'access_request' && m.caseId === requestCase && m.createdAt >= message.createdAt);
 
   async function send() {
     if (!draft?.trim()) return;
@@ -128,7 +131,7 @@ function ProtectionFooter({ message, caseLabel, cases }: { message: ChatMessage;
             <CircleHelp className="h-3.5 w-3.5" aria-hidden />
             왜 그런가요?
           </button>
-          {canRequest && !sent && (
+          {canRequest && !requested && (
             <button
               type="button"
               className="btn-ghost btn-sm h-7 text-iris-text"
@@ -139,8 +142,8 @@ function ProtectionFooter({ message, caseLabel, cases }: { message: ChatMessage;
               세부 정보 요청
             </button>
           )}
-          {sent && (
-            <span className="inline-flex items-center gap-1 px-2 text-xs font-semibold text-iris-text">
+          {canRequest && requested && (
+            <span className="inline-flex items-center gap-1 px-2 text-xs font-semibold text-iris-text" title={`${requestLabel}에 대한 세부 정보 요청을 보냈습니다. 답장은 보호 담당자 메시지에 옵니다.`}>
               <Check className="h-3.5 w-3.5" aria-hidden /> 요청함
             </span>
           )}

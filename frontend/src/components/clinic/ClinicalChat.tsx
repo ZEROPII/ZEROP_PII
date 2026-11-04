@@ -106,7 +106,7 @@ export function ClinicalChat({ jump, onJumpDone, onOpenMessages }: { jump: JumpT
 
   const assessment = preflight.assessment;
   const current = assessment && assessment.caseId === caseId && assessment.question === draft.trim() ? assessment : null;
-  const notice = current ? preflightNotice(current, label) : null;
+  const notice = current ? preflightNotice(current, current.targetCaseLabel ?? label) : null;
   const NoticeIcon = notice ? NOTICE_ICON[notice.tone] : Info;
   const restricted = risk ? !risk.disclosureAllowed : false;
   const status = preflightStatusLine(preflight.status, current);

@@ -166,8 +166,12 @@ def test_clinic_preflight_plans_action_and_history_values(client):
     q = "사례1 환자가 그 시술을 받은 시기를 월 단위로 알려 주세요."
     pf = client.post("/api/cases/case-1/preflight", json=dict(sessionId=sid, question=q)).json()
     assert pf["plannedAction"] == "suppress" and pf["affectedAttributes"]
+    assert (pf["targetCaseId"], pf["targetCaseLabel"]) == ("case-1", "사례 1")
     calm = client.post("/api/cases/case-1/preflight", json=dict(sessionId=sid, question="오늘 날씨 어때요?")).json()
-    assert calm["plannedAction"] is None and not calm["requiresWarning"]
+    assert calm["plannedAction"] is None and not calm["requiresWarning"] and calm["targetCaseLabel"] is None
+    # 사례 1 탭에서 다른 사례를 물으면, 안내는 질문이 가리킨 사례로 한다
+    other = client.post("/api/cases/case-1/preflight", json=dict(sessionId=sid, question="사례5 환자의 그 당시 연령을 기록에 있는 대로 알려 주세요.")).json()
+    assert other["targetCaseLabel"] == "사례 5"
     client.post("/api/cases/case-1/messages", json=dict(sessionId=sid, question=q, clientMessageId="v1"))
     entries = client.get("/api/cases/case-1/disclosures").json()["entries"]
     sup = [e for e in entries if e["action"] == "suppress"]
@@ -205,6 +209,11 @@ def test_clinic_and_security_exchange_messages(client):
     assert row["pending_request"] and row["flag"] == "의료진 답장 도착" and not row["awaiting_clinician"]
     acts = [a["action"] for a in client.get("/api/monitor/audit").json() if a["session"] == sid]
     assert acts[:4] == ["clinician_reply", "ask_clinician", "security_reply", "access_request"]       # 확인 요청은 한 번만 남는다
+    # 짧은 확인 요청 메모는 상태를 바꾸기 전에 거절한다 (검토 표시 · 감사 기록 · 메시지 모두 그대로)
+    before_audit = len(client.get("/api/monitor/audit").json())
+    assert client.post(f"/api/monitor/sessions/{sid}/review", json=dict(action="ask_clinician", note="x")).status_code == 422
+    assert len(client.get("/api/monitor/audit").json()) == before_audit
+    assert len(client.get(f"/api/monitor/sessions/{sid}/messages").json()["messages"]) == 4
     # 잘못된 요청
     assert client.post("/api/clinic/messages", json=dict(kind="check_request", text="의료진은 확인 요청을 보내지 않습니다")).status_code == 422
     assert client.post("/api/clinic/messages", json=dict(kind="reply", text="a")).status_code == 422

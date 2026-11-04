@@ -83,15 +83,14 @@ function SecurityShell({ role, onOpenPalette }: { role: Role; onOpenPalette(): v
  */
 export function AppLayout() {
   const { pathname } = useLocation();
-  const [role, setRole] = useState<Role>(() => roleOfPath(pathname) ?? storedRole());
+  // 역할은 그리는 그 자리에서 주소로 정한다. 효과(useEffect)로 나중에 바꾸면, 화면 전환 직후 첫 그림이
+  // 이전 역할의 틀 안에서 그려져 의료진 화면 부품이 메시지 제공자 밖에 놓인다 (화면이 비는 오류).
+  const [fallback, setFallback] = useState<Role>(storedRole);
+  const role: Role = roleOfPath(pathname) ?? fallback;
   const [paletteOpen, setPaletteOpen] = useState(false);
 
   useEffect(() => {
-    const r = roleOfPath(pathname);
-    if (r && r !== role) setRole(r);
-  }, [pathname, role]);
-
-  useEffect(() => {
+    setFallback(role);
     try {
       localStorage.setItem('zp-role', role);
     } catch {
@@ -114,22 +113,20 @@ export function AppLayout() {
 
   return (
     <TermProvider view={role === 'security' ? 'security' : 'clinician'}>
-      {/* display: contents라 상자는 없고, 안쪽 모든 요소(대화상자 · 용어 패널 포함)가 의료진 토큰을 물려받는다 */}
-      <div data-app={role === 'clinician' ? 'emr' : undefined} className="contents">
-        {role === 'clinician' ? (
-          <ClinicMessagesProvider>
+      {/* 메시지 제공자는 두 틀 위에 둔다: 역할을 바꿔도 읽음 표시가 남고, 메시지는 의료진 화면에서만 받아 온다 */}
+      <ClinicMessagesProvider enabled={role === 'clinician'}>
+        {/* display: contents라 상자는 없고, 안쪽 모든 요소(대화상자 · 용어 패널 포함)가 의료진 토큰을 물려받는다 */}
+        <div data-app={role === 'clinician' ? 'emr' : undefined} className="contents">
+          {role === 'clinician' ? (
             <ClinicianShell role={role} onOpenPalette={() => setPaletteOpen(true)} />
-            {palette}
-          </ClinicMessagesProvider>
-        ) : (
-          <>
+          ) : (
             <SecurityShell role={role} onOpenPalette={() => setPaletteOpen(true)} />
-            {palette}
-          </>
-        )}
-        <TermDrawer />
-        <TermHoverCard />
-      </div>
+          )}
+          {palette}
+          <TermDrawer />
+          <TermHoverCard />
+        </div>
+      </ClinicMessagesProvider>
     </TermProvider>
   );
 }

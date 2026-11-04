@@ -252,7 +252,8 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
     def review(sid: str, body: ReviewIn) -> dict[str, Any]:
         if body.action not in REVIEW_KO:
             raise HTTPException(422, f"action은 {', '.join(REVIEW_KO)} 중 하나입니다.")
-        return mon().review(sess(sid), body.action, body.note)
+        s = sess(sid)
+        return guard(lambda: mon().review(s, body.action, body.note))
 
     @r.get("/monitor/sessions/{sid}/messages")
     def security_thread(sid: str) -> dict[str, Any]:
