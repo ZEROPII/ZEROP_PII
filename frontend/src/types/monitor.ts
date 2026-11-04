@@ -151,6 +151,8 @@ export interface TurnView {
   question: string;
   mode: string;
   refused: boolean;
+  /** 다시 확인을 통과하지 못해 이 답에서 뺀 사례 (공개 방식 CASE_DROPPED) */
+  dropped?: string[];
   lines: AnswerLine[];
   change_notes: { case: string; changes: { attribute: string; change: string }[]; k_if_raw: number | null; k_now: number | null }[];
   target_qi: string | null;
@@ -219,6 +221,8 @@ export interface HiddenItem {
   action: 'suppress' | 'generalize';
   kIfRaw: number | null;
   released: boolean;
+  /** 다시 확인을 통과하지 못해 사례째로 답에서 뺀 값 */
+  dropped?: boolean;
 }
 
 /** 사례 하나에서 후보가 줄어든 과정 (/api/watch/{대화}/cases/{사례}/narrowing) */
@@ -242,6 +246,8 @@ export interface NarrowingHidden {
   action: 'suppress' | 'generalize';
   kIfRaw: number | null;
   released: boolean;
+  /** 다시 확인을 통과하지 못해 사례째로 답에서 뺀 값 */
+  dropped?: boolean;
 }
 
 export interface Narrowing {

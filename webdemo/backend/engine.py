@@ -42,7 +42,7 @@ from medical.simulate import SUPPRESSED, OracleRoleLLM, plan_all
 from medical.tracking import Case, known_cases_json, view_of
 from medical.validate import validate_case
 from webdemo.backend.live import ORACLE_LABEL, LiveLLM, Turn0LLM, background_calls
-from webdemo.backend.review import RuledArmRun, decision_of, hidden_items
+from webdemo.backend.review import RELEASE_VERSION, RuledArmRun, decision_of, hidden_items
 
 PROFILES = ("staged", "full")
 FUZZERS = ("uniform", "feedback")
@@ -276,7 +276,7 @@ class Session:
         ctx0 = replace(eng.live_ctx, llm=Turn0LLM(eng.live_ctx.llm, self.ctx.llm)) if llm_mode == "live" else self.ctx
         p = self.prefix = make_prefix(ctx0, trial_id, pid, qt, "DOCTOR")
         self.logs: dict[str, list[dict[str, Any]]] = {a: [] for a in ARMS}
-        self.runs = {a: RuledArmRun(ctx0, p, a, self._logger(a), lambda a=a: self.rules_for(a)) for a in ARMS}
+        self.runs = {a: RuledArmRun(ctx0, p, a, self._logger(a), lambda a=a: self.rules_for(a), live=llm_mode == "live") for a in ARMS}
         self.steps: list[dict[str, Any]] = []           # 세션 턴마다: 질문 Seed와 조건별 처리 결과
         for a, r in self.runs.items():
             if isinstance(ctx0.llm, Turn0LLM):
@@ -400,7 +400,7 @@ class Session:
                               turn=None if ap else turn, approved=bool(ap), afterTurn=after, kBefore=k_prev, kAfter=k_i))
             k_prev = k_i
         hidden = [dict(turn=x["turn"], attribute=x["attribute"], attributeLabel=ATTR_KO.get(x["attribute"], x["attribute"]), action=x["action"],
-                       kIfRaw=x["kIfRaw"], released=x["released"])
+                       kIfRaw=x["kIfRaw"], released=x["released"], dropped=x["dropped"])
                   for x in (self.hidden() if arm == "C1" else []) if x["case"] == ref]
         rules = [dict(attribute=x["attribute"], attributeLabel=x["attribute_label"]) for x in self.rules if x["case"] == ref] if arm == "C1" else []
         return dict(case=ref, population=ctx.p_ref, generalizeK=ctx.defender.g, suppressK=ctx.defender.s, k=k_prev, steps=steps,
@@ -660,9 +660,13 @@ class Session:
     def _k_series(self, arm: str) -> dict[str, list[list[int]]]:
         out: dict[str, list[list[int]]] = collections.defaultdict(list)
         for rec in self._records(arm):
-            for ref, c in (rec.get("cases") or {}).items():
+            present = rec.get("cases") or {}
+            for ref, c in present.items():
                 if "k" in c:
                     out[ref].append([rec["turn"], c["k"]])
+            for p in rec.get("release_plans") or []:      # 답에 나왔지만 아직 State에 아무것도 없는 사례 (사례째로 뺌 등): 기준 집단 전체
+                if p["ref"] not in present:
+                    out[p["ref"]].append([rec["turn"], self.ctx.p_ref])
         if arm == "C1" and self.approvals:            # 승인 공개는 턴이 아니어서 기록에 없다: 지금 State의 후보 수를 끝에 잇는다
             for ref in {x["case"] for ap in self.approvals for x in ap["items"]} | set(out):
                 k = self.current_k(arm, ref)
@@ -716,6 +720,7 @@ class Session:
                       k_now=(rec.get("cases") or {}).get(ref, {}).get("k")) for ref, cnt in changed.items()]
         v = dict(turn=rec["turn"], question=rec["query_text"], mode=rec["release_mode"],
                  refused=rec["release_mode"].startswith("REFUSAL"),
+                 dropped=sorted({p["ref"] for p in rec.get("release_plans") or [] if any(d.get("dropped") for d in p["decisions"])}),
                  lines=[{k: x[k] for k in ("case", "field", "attribute", "value", "change", "text") if k in x} for x in lines],
                  change_notes=notes, target_qi=rec.get("target_qi"), picked_by=rec.get("picked_by") or ("retrieval" if rec["turn"] == 0 else None))
         if full:
@@ -895,7 +900,8 @@ class RedTeamJob(threading.Thread):
             final, self.error = "error", f"{type(exc).__name__}: {exc}\n{traceback.format_exc(limit=3)}"
         if trials and ctx is not None:
             try:
-                summary = dict(config=self.cfg.as_dict(), versions=ctx.versions, trials=trials)
+                versions = dict(ctx.versions, medicloak_release=RELEASE_VERSION) if self.live else ctx.versions
+                summary = dict(config=self.cfg.as_dict(), versions=versions, trials=trials)
                 (self.out / "trial요약.json").write_text(json.dumps(summary, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
                 with open(self.out / "llm_usage.jsonl", "w", encoding="utf-8") as f:
                     for u in self.llm.usage:
@@ -918,7 +924,8 @@ class RedTeamJob(threading.Thread):
                log: Callable[[dict[str, Any]], None]) -> list[dict[str, Any]]:
         """
         질의 환자 1명의 세 갈래. 결정적 응답기 실행은 연구 모듈 그대로(POC 재현). 실제 LLM 실행은 의료진 대화와 같은 방어를 시험해야 하므로
-        medical.session.run_trial_group과 같은 순서로 돌리되 갈래를 RuledArmRun(고친 답 다시 확인 보강, 규칙 없음)으로 만든다.
+        medical.session.run_trial_group과 같은 순서로 돌리되 갈래를 RuledArmRun(고친 답 다시 확인 보강 · 재작성 지시 보강 ·
+        사례 단위로 빼기, 규칙 없음)으로 만든다.
         """
         if not self.live:
             return run_trial_group(ctx, tid, pid, qt, role, self.cfg.arms, log)
@@ -927,7 +934,7 @@ class RedTeamJob(threading.Thread):
         except LLMError as exc:
             return [dict(trial_id=tid, arm=a, query_patient=pid, query_type=qt, role=role, outcome="LLM_ERROR",
                          error=f"{type(exc).__name__}: {exc}", versions=ctx.versions) for a in self.cfg.arms]
-        return [RuledArmRun(ctx, prefix, a, log, lambda: []).run() for a in self.cfg.arms]
+        return [RuledArmRun(ctx, prefix, a, log, lambda: [], live=True).run() for a in self.cfg.arms]
 
     def usage(self) -> dict[str, int]:
         u = list(getattr(self.llm, "usage", None) or []) if self.live else []

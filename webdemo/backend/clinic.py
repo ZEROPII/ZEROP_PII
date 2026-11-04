@@ -29,6 +29,7 @@ from api_server.engine import segments_of
 from medical.defense import ALLOW, GENERALIZE, SUPPRESS, SUPPRESSED_MARK as SUPPRESSED
 from webdemo.backend import intent as I
 from webdemo.backend.engine import ATTR_KO, QTYPE_KO, Engine, Session, parse_answer
+from webdemo.backend.review import CASE_DROPPED, ref_no
 
 ATTR_LABEL = dict(AGE="나이", SEX="성별", REGION="거주 지역", DX="진단", PROC="시술", PERIOD="시기", MED="처방 약", PLAN="관리 계획")
 TITLE_ATTRS = ("DX", "MED", "PROC", "PLAN")          # 사례 목록 제목에 쓰는 단서 (진단 + 관련 항목)
@@ -63,7 +64,7 @@ class Slot:
         self.last_action = ALLOW
 
 
-CHECK_MODE_KO = dict(REWRITTEN="재작성기가 고친 답", REWRITTEN_FALLBACK="값만 글자 그대로 바꾼 답")
+CHECK_MODE_KO = dict(REWRITTEN="재작성기가 고친 답", REWRITTEN_FALLBACK="값만 글자 그대로 바꾼 답", CASE_DROPPED="통과하지 못한 사례를 뺀 답")
 
 
 def _checks(rec: dict[str, Any]) -> list[dict[str, Any]]:
@@ -74,7 +75,8 @@ def _checks(rec: dict[str, Any]) -> list[dict[str, Any]]:
         cases = [dict(case=c.get("ref"), kAfter=c.get("k_after"), need=c.get("need"), rule=c.get("rule"), reason=c.get("reason"), ok=c.get("ok"),
                       attributeLabel=ATTR_LABEL.get(c["attribute"], c["attribute"]) if c.get("attribute") else None)
                  for c in a.get("checks") or []]
-        out.append(dict(attempt=i, mode=a["mode"], modeLabel=CHECK_MODE_KO.get(a["mode"], a["mode"]), ok=bool(a["ok"]), cases=cases))
+        out.append(dict(attempt=i, mode=a["mode"], modeLabel=CHECK_MODE_KO.get(a["mode"], a["mode"]), ok=bool(a["ok"]), cases=cases,
+                        dropped=a.get("dropped")))
     return out
 
 
@@ -347,6 +349,8 @@ class ClinicConversation:
                     value = None
                     if refusal:
                         desc = "거절 문장으로 대체"
+                    elif x.get("dropped"):
+                        desc = "이 사례 내용을 답에서 뺌"
                     elif (p["ref"], x["attribute"]) in ruled:
                         desc = "보안 담당자 규칙으로 가림"
                     else:
@@ -356,7 +360,8 @@ class ClinicConversation:
                 label = ATTR_LABEL.get(x["attribute"], x["attribute"])
                 tf.append(dict(id=self._id("tf"), attribute=x["attribute"], attributeLabel=(f"{p['ref'].replace('사례', '사례 ')} {label}"),
                                action=action, disclosedValue=value, levelDescription=desc, caseRef=p["ref"], kIfRaw=k_raw,
-                               rule=(p["ref"], x["attribute"]) in ruled and action == SUPPRESS and not refusal))
+                               rule=(p["ref"], x["attribute"]) in ruled and action == SUPPRESS and not refusal,
+                               dropped=bool(x.get("dropped")) and not refusal))
                 if cid:
                     turn = rec["turn"] if turn_for_entries is None else turn_for_entries
                     self.slots[cid].decisions.append(dict(x, action=action, turn=turn))
@@ -408,6 +413,12 @@ class ClinicConversation:
             return "답에서 단서를 확인하지 못해 위험을 판단할 수 없었습니다. 그래서 답 대신 거절 문장을 보냈습니다."
         if mode.startswith("REFUSAL"):
             return "고친 답이 다시 확인을 통과하지 못해 거절 문장을 보냈습니다."
+        if mode == CASE_DROPPED:
+            dropped = sorted({t["caseRef"] for t in tf if t.get("dropped")}, key=ref_no)
+            names = ", ".join(r.replace("사례", "사례 ") for r in dropped)
+            rest = [t for t in tf if t["action"] != ALLOW and not t.get("dropped")]
+            tail = f" 다른 사례도 일부 값을 보호했습니다 ({len(rest)}건)." if rest else " 다른 사례는 그대로 답했습니다."
+            return f"고친 답에서도 {names}의 내용으로 환자를 알아볼 수 있어, 그 사례 내용만 빼고 답했습니다.{tail}"
         if self.arm == "C0":
             return "방어 없이 원래 답을 그대로 보냈습니다."
         changed = [t for t in tf if t["action"] != ALLOW]

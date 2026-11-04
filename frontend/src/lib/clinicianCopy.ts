@@ -64,6 +64,7 @@ export function protectionNote(p: ProtectionResult): Notice | null {
   const mode = p.releaseMode ?? '';
   if (mode === 'REFUSAL_EXTRACTION_FAILED') return { tone: 'info', text: '답을 확인하지 못해 보내지 않았습니다. 질문을 조금 바꿔 다시 물어보세요.' };
   if (mode.startsWith('REFUSAL')) return { tone: 'lock', text: '이 질문에는 개인정보 보호를 위해 답하지 않았습니다.' };
+  if (mode === 'CASE_DROPPED') return { tone: 'lock', text: '환자를 알아볼 위험이 있는 사례는 이 답에서 뺐습니다.' };
   const sup = p.transformations.some((t) => t.action === 'suppress');
   const gen = p.transformations.some((t) => t.action === 'generalize');
   if (sup && gen) return { tone: 'lock', text: '개인을 알아볼 수 있는 값은 범위로 바꾸거나 비공개로 표시했습니다.' };
@@ -74,11 +75,15 @@ export function protectionNote(p: ProtectionResult): Notice | null {
 
 /** '왜 그런가요?'를 눌렀을 때의 설명. */
 export function whyText(p: ProtectionResult, caseLabel: string): string[] {
-  const sup = joinNames(p.transformations.filter((t) => t.action === 'suppress').map(attrName));
-  const gen = joinNames(p.transformations.filter((t) => t.action === 'generalize').map(attrName));
+  const kept = p.transformations.filter((t) => !t.dropped);
+  const sup = joinNames(kept.filter((t) => t.action === 'suppress').map(attrName));
+  const gen = joinNames(kept.filter((t) => t.action === 'generalize').map(attrName));
+  const dropped = joinNames(p.transformations.filter((t) => t.dropped && t.caseRef).map((t) => refLabel(t.caseRef!)));
   const out: string[] = [];
   if ((p.releaseMode ?? '').startsWith('REFUSAL'))
     out.push('답을 고쳐도 개인을 알아볼 수 있는 내용이 남아, 답 대신 안내 문장을 보냈습니다.');
+  if (dropped)
+    out.push(`${josa(dropped, '은', '는')} 답을 고쳐도 다른 내용과 합치면 환자가 누구인지 알 수 있어, 그 사례 내용을 이 답에서 뺐습니다.`);
   if (sup)
     out.push(
       `${caseLabel} 환자의 ${josa(sup, '은', '는')} 그 값에 해당하는 환자가 아주 적어, 그대로 알려 드리면 그 환자가 누구인지 알 수 있게 됩니다. 그래서 이 값만 비공개로 하고 나머지는 그대로 답했습니다.`,

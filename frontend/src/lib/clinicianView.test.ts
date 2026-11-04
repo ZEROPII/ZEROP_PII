@@ -70,6 +70,24 @@ describe('의료진 화면 문구', () => {
     expect(protectionNote(protection({ releaseMode: 'REFUSAL' }))!.text).toContain('답하지 않았습니다');
   });
 
+  it('통과하지 못한 사례를 뺀 답은 그 사례를 따로 설명하고, 뺀 사례의 값은 가린 항목 설명에 섞지 않는다', () => {
+    const p = protection({
+      releaseMode: 'CASE_DROPPED',
+      transformations: [
+        { id: 't1', attribute: 'PERIOD', attributeLabel: '사례 1 시기', action: 'suppress', disclosedValue: null, caseRef: '사례1' },
+        { id: 't3', attribute: 'DX', attributeLabel: '사례 2 진단', action: 'suppress', disclosedValue: null, caseRef: '사례2', dropped: true },
+        { id: 't4', attribute: 'MED', attributeLabel: '사례 2 처방 약', action: 'suppress', disclosedValue: null, caseRef: '사례2', dropped: true },
+      ],
+    });
+    expect(protectionNote(p)!.text).toBe('환자를 알아볼 위험이 있는 사례는 이 답에서 뺐습니다.');
+    const why = whyText(p, '사례 1');
+    expect(why[0]).toContain('사례 2는');
+    expect(why[0]).toContain('이 답에서 뺐습니다');
+    expect(why[1]).toContain('사례 1 환자의 시기는');
+    expect(why[1]).not.toContain('진단');
+    for (const t of why) expect(t).not.toMatch(RISK_NUMBER);
+  });
+
   it('항목 이름은 사례 접두어를 떼고, 모르는 코드는 백엔드 이름을 쓴다', () => {
     expect(attrName({ attribute: 'PERIOD', attributeLabel: '사례 1 시기' })).toBe('시기');
     expect(attrName({ attribute: 'DATE', attributeLabel: '시술 시점' })).toBe('시술 시점');

@@ -6,6 +6,7 @@
 import { Eye, Loader2, Plus, ShieldCheck, Trash2, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { monitorApi } from '../../api/monitorApi';
+import { josa } from '../../lib/korean';
 import { caseLabel, clockTime } from '../../lib/time';
 import type { HiddenItem, MonitorDetail, Narrowing } from '../../types/monitor';
 import { useToast } from '../layout/Toast';
@@ -72,7 +73,7 @@ export function CountsSection({ d, onReveal }: { d: MonitorDetail; onReveal(): v
     <section aria-label="후보 수" className="border-b border-line px-5 py-4">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <h3 className="text-[13px] font-bold text-ink-2">
-          {caseLabel(focus)}과 조건이 같은 과거 환자 <span className="num text-ink">{r.k_now != null ? `${r.k_now.toLocaleString()}명` : '–'}</span>
+          {josa(caseLabel(focus), '과', '와')} 조건이 같은 과거 환자 <span className="num text-ink">{r.k_now != null ? `${r.k_now.toLocaleString()}명` : '–'}</span>
         </h3>
         <span className="flex items-center gap-2 text-xs text-ink-3">
           환자 번호
@@ -296,7 +297,7 @@ export function ApprovePanel({ d, caseRef, onCancel, onDetail }: { d: MonitorDet
                 />
                 <span className="min-w-0 flex-1 text-ink">
                   {caseLabel(x.case)} <b>{ATTR_LABEL[x.attribute] ?? x.attribute}</b>
-                  <span className="text-ink-3"> · {where(x.turn)}에서 {x.action === 'generalize' ? '넓힘' : '가림'}</span>
+                  <span className="text-ink-3"> · {where(x.turn)}에서 {x.dropped ? '사례째로 뺌' : x.action === 'generalize' ? '넓힘' : '가림'}</span>
                 </span>
                 {x.kIfRaw != null && (
                   <span className="num shrink-0 text-ink-2">

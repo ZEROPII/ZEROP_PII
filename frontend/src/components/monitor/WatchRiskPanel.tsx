@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { monitorApi } from '../../api/monitorApi';
+import { josa } from '../../lib/korean';
 import { useWorkspace } from '../../state/WorkspaceContext';
 import type { Narrowing } from '../../types/monitor';
 import { Card, CardHeader } from '../common/Card';
@@ -49,7 +50,7 @@ export function WatchRiskPanel({ sid }: { sid: string | null }) {
         <>
           <section aria-label={`${label} 후보가 줄어든 과정`} className="border-b border-line px-4 pb-3 pt-3.5">
             <p className="text-[13px] text-ink-2">
-              {label}과 조건이 같은 과거 환자{' '}
+              {josa(label, '과', '와')} 조건이 같은 과거 환자{' '}
               <b className={`num text-[22px] font-extrabold tracking-[-0.02em] ${k != null && k <= g ? 'text-danger-text' : 'text-ink'}`}>
                 {k != null ? k.toLocaleString() : '–'}
               </b>

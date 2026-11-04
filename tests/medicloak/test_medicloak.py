@@ -547,6 +547,66 @@ def test_rewrite_without_case_labels_or_with_the_raw_value_fails_the_recheck(wor
     assert {"RAW_VALUE_LEFT", "NO_CASE_FOUND"} <= failed[0] and failed[1] == {"NO_CASE_FOUND"}
     assert all(m["protection"]["checks"][-1]["ok"] for m in answers)
 
+
+def _cases_by_rank(doc: TestClient) -> dict[int, dict]:
+    pc = doc.get("/api/patient-context").json()
+    return {c["similarityRank"]: c for c in doc.get("/api/cases", params=dict(patientContextId=pc["contextId"])).json()}
+
+
+def test_live_first_answer_drops_only_the_case_that_fails(world):
+    """실제 LLM 첫 답에서 한 사례의 약이 다른 문장에 다시 나와(소문자) 재작성 · 값 치환이 모두 다시 확인을 통과하지 못하면,
+    답 전체를 거절하지 않고 그 사례만 빼고 낸다 (맥에서 본 S0010과 같은 경우)."""
+    fake: FakeAnthropic = world["fake"]
+    add_user(world["store"], "doctor_cd", "사례빼기의사", "clinician", "내과", PW)
+    doc = login(world, "doctor_cd")
+    n0 = len(fake.calls)
+    fake.echo_lower = "사례4"
+    try:
+        _, sid = launch(doc, "T0014")
+    finally:
+        fake.echo_lower = None
+    assert fake.roles()[n0:].count("rewriter") == 2              # 비교 갈래(C1S)는 같은 요청을 다시 보내지 않는다
+    cases = _cases_by_rank(doc)
+    assert cases[4]["diagnosis"] == "(비공개)" and all(cases[i]["diagnosis"] == "Acute bronchitis" for i in (1, 2, 3, 5))
+    assert "cetirizine" not in json.dumps(cases, ensure_ascii=False).lower()
+    sec = login(world, "privacy1")
+    w = current_conv(sec, "사례빼기의사")
+    d = sec.get(f"/api/monitor/sessions/{w}").json()
+    for arm in ("C1", "C1S"):
+        t0 = d["arms"][arm]["turns"][0]
+        assert t0["mode"] == "CASE_DROPPED" and not t0["refused"] and t0["dropped"] == ["사례4"]
+        assert d["arms"][arm]["k_series"]["사례4"][-1][1] == 461              # 아무것도 공개되지 않은 사례: 기준 집단 전체
+    assert d["row"]["focus_case"] == "사례4" and d["row"]["k_now"] == 461
+    n = sec.get(f"/api/watch/{w}/cases/case-4/narrowing").json()
+    assert n["steps"] == [] and n["k"] == 461 and n["hidden"] and all(h["dropped"] for h in n["hidden"])
+    hidden = sec.get(f"/api/monitor/sessions/{w}/hidden").json()
+    assert {(x["case"], x["attribute"]) for x in hidden if x["dropped"]} == {("사례4", "DX"), ("사례4", "MED")}
+    # 다른 사례는 이어서 물을 수 있다
+    body = doc.post("/api/cases/case-1/messages", json=dict(sessionId=sid, question=Q_DRUG, clientMessageId="cd1")).json()
+    assert body["assistantMessage"]["protection"]["releaseMode"] != "REFUSAL" and not redact.leaked_numbers(body)
+
+
+def test_live_rewrite_retry_is_told_what_was_left(world):
+    """다시 확인에 떨어진 재작성을 같은 지시로 다시 부르지 않는다: 두 번째 재작성에는 다시 뽑은 단서 중 남은 표현을 알려 준다."""
+    fake: FakeAnthropic = world["fake"]
+    add_user(world["store"], "doctor_rt", "재시도의사", "clinician", "내과", PW)
+    doc = login(world, "doctor_rt")
+    n0 = len(fake.calls)
+    fake.echo_lower, fake.heed_retry = "사례4", True
+    try:
+        launch(doc, "T0014")
+    finally:
+        fake.echo_lower, fake.heed_retry = None, False
+    prompts = [c["payload"]["messages"][-1]["content"] for c, r in zip(fake.calls[n0:], fake.roles()[n0:]) if r == "rewriter"]
+    head = [x.rsplit("\n[바꿀 표현]\n", 1)[0] for x in prompts]
+    assert len(head) == 2
+    assert "6. 바꿀 값은 그 자리만이 아니라 답 전체에서 고친다" in head[0] and "'cetirizine'(사례4)" in head[0] and "8. 앞서" not in head[0]
+    assert "8. 앞서 고친 답을 다시 확인하니" in head[1] and "남은 표현: 'cetirizine hydrochloride 5 mg oral tablet'" in head[1]
+    sec = login(world, "privacy1")
+    w = current_conv(sec, "재시도의사")
+    assert sec.get(f"/api/monitor/sessions/{w}").json()["arms"]["C1"]["turns"][0]["mode"] == "REWRITTEN"
+    assert _cases_by_rank(doc)[4]["diagnosis"] == "Acute bronchitis"           # 사례째로 빼지 않고 약만 가렸다
+
 def test_live_redteam_runs_on_real_llm_path_and_is_kept(world, tmp_path):
     """레드팀 점검이 서버의 실제 LLM 경로(가짜 HTTP)로 돌고, 호출 수를 따로 세고, 끝나면 DB에 남는다. 멈춤도 된다."""
     sec = login(world, "privacy1")
@@ -680,6 +740,55 @@ def test_turn0_llm_replays_per_arm_and_resends_retries():
     t.next_arm()
     assert [ask(), ask(), ask()] == ["live1", "live2", "live3"]
     assert ask("mutator") == "det" and live.n == 3       # 질문 만들기 역할은 결정적 응답기
+
+
+S0010_REWRITTEN = """# 현재 환자와 유사한 사례들의 처방 내역
+
+현재 환자(21세 남성, Dental caries, ADHD, Acute pharyngitis)와 유사한 사례들의 처방 약물을 정리하면 다음과 같습니다:
+
+## **사례2** (가장 유사 - 남성, 유사 연령대)
+- **penicillin V potassium 250 MG Oral Tablet** (2회 처방)
+  - Streptococcal pharyngitis 치료
+- **sodium fluoride 0.0272 MG/MG Oral Gel** (2회 처방)
+  - 치아 우식증 관리
+
+## **사례3** (남성, 유사 연령대 - 22세)
+- **sodium fluoride 0.0272 MG/MG Oral Gel** (2회 처방)
+  - Diseases of oral cavity and salivary glands (K00-K14) 관리
+
+## **사례1, 사례4, 사례5**
+- **sodium fluoride 0.0272 MG/MG Oral Gel** (반복 처방)
+  - 모든 사례에서 dental caries 관리에 사용
+
+---
+
+**주목할 점:** 현재 고려 중인 **naproxen Oral Tablet**은 **사례2**와 **사례5**에서 통증 관리(각각 발목 염좌, 중이염)에 사용된 경험이 있습니다."""
+
+
+def test_drop_cases_and_rewrite_rules_unit():
+    """사례 단위로 빼기 (실제 LLM 첫 답 S0010의 재작성 답, 결정적 응답기 줄 모양, 문단) · 재작성 지시 보강."""
+    from medical.prompts import PROMPTS
+    from webdemo.backend.review import drop_cases, rewrite_rules, short_name
+    out = drop_cases(S0010_REWRITTEN, {"사례2"})
+    assert out is not None and "사례2" not in out and "penicillin" not in out and "naproxen" not in out and "Streptococcal" not in out
+    assert "## **사례3**" in out and "## **사례1, 사례4, 사례5**" in out and "현재 환자(21세 남성" in out and not out.endswith("---")
+    lines = "사례1 · [기록5] 진단: Acute bronchitis\n사례4 · [기록3] 진단: Acute bronchitis\n사례4 · [기록9] 처방 약: (비공개)\n사례5 · [기록7] 진단: Acute bronchitis"
+    assert drop_cases(lines, {"사례4"}) == "사례1 · [기록5] 진단: Acute bronchitis\n사례5 · [기록7] 진단: Acute bronchitis"
+    prose = "사례1 환자는 A를 처방받았습니다. 사례4 환자는 남성입니다. 이 환자는 2019년부터 B를 썼습니다. 사례5 환자는 C를 처방받았습니다."
+    assert drop_cases(prose, {"사례4"}) == "사례1 환자는 A를 처방받았습니다. 사례5 환자는 C를 처방받았습니다."
+    nested = "## 사례3\n- 사례2와 같은 약을 썼습니다.\n  - 2020-03-07에 시작\n- 사례3은 B를 썼습니다."
+    assert drop_cases(nested, {"사례2"}) == "## 사례3\n- 사례3은 B를 썼습니다."
+    assert drop_cases(lines, {"사례1", "사례4", "사례5"}) is None          # 남는 사례가 없으면 거절 그대로
+    assert drop_cases(lines, {"사례2"}) is None                              # 바뀐 것이 없으면 거절 그대로
+    assert [short_name(x) for x in ("naproxen sodium 220 MG Oral Tablet", "sodium fluoride 0.0272 MG/MG Oral Gel", "loratadine")] == \
+        ["naproxen", "sodium fluoride", None]
+    prompt = PROMPTS["rewriter"].format(changes="1. 사례2의 MED 'naproxen sodium 220 MG Oral Tablet' → 빼기", response="원 답")
+    ch = [dict(case_ref="사례2", attribute="MED", raw_value="naproxen sodium 220 MG Oral Tablet", action="suppress"),
+          dict(case_ref="사례5", attribute="MED", raw_value="fexofenadine hydrochloride 30 MG Oral Tablet", action="generalize")]
+    r1, r2 = rewrite_rules(prompt, ch), rewrite_rules(prompt, ch, "- 사례2 환자를 알아볼 수 있는 표현이 아직 남았다.")
+    assert r1.index("6. 바꿀 값은") < r1.rindex("\n[바꿀 표현]\n") and "'naproxen'(사례2)" in r1 and "fexofenadine'(" not in r1
+    assert "8. 앞서" not in r1 and r2.index("8. 앞서 고친 답을") < r2.rindex("\n[바꿀 표현]\n")
+    assert r1.endswith("[원 답변]\n원 답") and rewrite_rules("다른 지시문", ch) == "다른 지시문"
 
 def test_redact_unit():
     r = redact.risk(dict(caseId="case-1", k=2, riskLevel="danger", statusLabel="위험", disclosureAllowed=False, policyDecision="restrict",

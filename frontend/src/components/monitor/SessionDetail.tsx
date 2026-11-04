@@ -1,6 +1,7 @@
 import { ChevronDown, ChevronUp, Loader2, MailQuestion, MessageSquareText, Network, Send, ShieldCheck, Stethoscope } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ClueFact } from '../../lib/clueGraph';
+import { josa } from '../../lib/korean';
 import { caseLabel, clockTime, relativeTime } from '../../lib/time';
 import { useTermDetect } from '../../state/TermContext';
 import type { MonitorDetail, ReviewAction, ThreadMessage, TurnView } from '../../types/monitor';
@@ -58,6 +59,9 @@ function summarizeTurns(d: MonitorDetail): string {
   const hits = turns.filter((t) =>
     t.change_notes.some((n) => n.case === r.focus_case && n.changes.some((c) => (r.status === 'danger' ? c.change === 'suppress' : true))),
   ).length;
+  const droppedAt = r.focus_case ? turns.find((t) => t.dropped?.includes(r.focus_case!)) : undefined;
+  if (droppedAt)
+    return `${droppedAt.turn === 0 ? '첫 답(사례 검색)' : `${droppedAt.turn}턴 답`}에서 ${focus} 내용을 그대로 냈다면 후보가 ${r.k_if_raw}명으로 줄 수 있었고, 고친 답도 다시 확인을 통과하지 못해 그 사례만 답에서 뺐습니다. 지금 ${focus} 후보는 ${r.k_now ?? '–'}명입니다.`;
   if (r.status === 'danger')
     return `${focus} 환자를 좁히는 질문에 값을 가린 답이 ${hits}번 있었습니다. 그대로 답했다면 후보가 ${r.k_if_raw}명으로 줄어 환자가 특정될 수 있었습니다. 방어 규칙이 값을 가려 후보 ${kTurns}명을 지켰습니다.`;
   if (r.status === 'caution')
@@ -228,6 +232,11 @@ export function SessionDetail({ detail: d, onReveal, onReview, onMessage, onDeta
               )
             )}
           </div>
+          {t.dropped && t.dropped.length > 0 && (
+            <p className="mt-1 text-xs text-danger-text">
+              {josa(t.dropped.map(caseLabel).join(', '), '은', '는')} 고친 답도 다시 확인을 통과하지 못해 답에서 뺐습니다.
+            </p>
+          )}
           {t.released && (
             <div className="mt-1.5">
               <button

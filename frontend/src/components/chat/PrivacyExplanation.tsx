@@ -7,6 +7,7 @@ const MODE_KO: Record<string, string> = {
   RAW: '그대로 보냄',
   REWRITTEN: '재작성기가 고친 답',
   REWRITTEN_FALLBACK: '값만 글자 그대로 바꾼 답',
+  CASE_DROPPED: '통과하지 못한 사례를 뺀 답',
   REFUSAL: '거절 문장',
   REFUSAL_EXTRACTION_FAILED: '거절 문장 (단서 추출 실패)',
 };
@@ -22,18 +23,19 @@ function CheckLine({ c }: { c: ReleaseCheck }) {
       if (x.reason === 'EXTRACTION_FAILED') return '단서 추출 실패';
       if (x.reason === 'RAW_VALUE_LEFT') return `${caseText(x.case)} ${x.attributeLabel ?? '단서'} 원래 값이 그대로 남음`;
       if (x.reason === 'NO_CASE_FOUND') return '고친 답에서 사례 표기를 찾지 못함';
+      if (x.reason === 'DROPPED_CASE_LEFT') return `뺀 ${caseText(x.case)}의 단서가 다시 뽑힘`;
       if (x.rule?.length) return `${caseText(x.case)} 규칙에 걸린 단서가 남음`;
       if (x.kAfter != null && x.need != null) return `${caseText(x.case)} 후보 ${x.kAfter}명 (필요 ${x.need}명 이상)`;
       return null;
     })
-    .filter(Boolean)
-    .join(', ');
+    .filter((x): x is string => Boolean(x));
+  if (c.dropped?.length) why.unshift(`${c.dropped.map(caseText).join(', ')} 뺌`);
   return (
     <li className="flex gap-2">
       <span className="num w-10 shrink-0 text-ink-3">시도 {c.attempt}</span>
       <span className="min-w-0 flex-1">
         {c.modeLabel}
-        {why && <span className="text-ink-3"> · {why}</span>}
+        {why.length > 0 && <span className="text-ink-3"> · {why.join(', ')}</span>}
       </span>
       <span className={`shrink-0 font-semibold ${c.ok ? 'text-safe-text' : 'text-danger-text'}`}>{c.ok ? '통과' : '통과 못함'}</span>
     </li>
@@ -112,6 +114,7 @@ export function PrivacyExplanation({ protection }: { protection: ProtectionResul
                   <span className="inline-flex items-center gap-1.5">
                     <ActionBadge action={t.action} />
                     {t.rule && <span className="text-ink-3">규칙</span>}
+                    {t.dropped && <span className="text-ink-3">사례째로 뺌</span>}
                   </span>
                 </td>
                 <td className="num border-b border-line/70 py-1.5 pl-2 text-right">

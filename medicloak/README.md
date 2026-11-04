@@ -72,6 +72,7 @@ python -m medicloak serve [옵션]          # serve는 생략해도 됨
 ## 실제 LLM 호출 수
 
 - **환자를 열 때(첫 답, 턴 0)**: 대상 AI 1번, 추출기 1번(형식이 틀리면 다시), 가릴 값이 있으면 재작성기 1번과 확인 추출 1번. 사례 검색 질문 문장만 결정적 응답기가 만듭니다. 세 갈래의 첫 판정은 요청이 같아서 앞 갈래가 받은 답을 다시 씁니다(형식 오류 뒤 다시 보내는 요청은 새로 부름).
+- **다시 확인을 통과하지 못했을 때**: 두 번째 재작성에는 무엇이 남았는지 알려 주고, 값만 바꾼 답까지 통과하지 못하면 통과하지 못한 사례만 빼고 한 번 더 확인합니다(추출 1번 더). 그래도 안 되면 거절 문장입니다.
 - **의료진 질문 한 번**: 위와 같습니다. 비교 갈래 C1S는 의료진 답을 보낸 뒤 뒤에서 계산하므로 의료진은 기다리지 않지만, 값을 바꿀 때 재작성 · 확인 호출이 더 듭니다(`--no-compare`로 끔). C0은 같은 원 응답을 쓰므로 호출이 없습니다.
 - **레드팀 점검**: 질의 환자 한 명마다 갈래 3개 × 최대 10턴, 턴마다 공격 질문 만들기 · 확인 · 대상 AI · 추출 · 재작성 · 다시 확인으로 약 6번으로 어림합니다. 유형마다 1명(3명)이면 약 540번입니다. 위험에 닿은 대화는 일찍 끝나 줄고, 형식 오류로 다시 부르면 늘어납니다. 의료진 질문 호출이 기다리면 그쪽을 먼저 보냅니다.
 
@@ -133,6 +134,7 @@ python -m medicloak users passwd doctor1                   # 비밀번호 바꾸
 - 원 응답 · 가린 원래 값: DB의 턴 기록과 대화 스냅숏에만 있고, 보안 담당자 API에서도 사유를 남긴 열람 때만 나갑니다.
 - 공개 승인: 사유 5자 이상, 공개 목록(`/hidden`)과 승인 응답에는 값이 없고, 값은 승인 메시지로 그 의료진의 그 대화에만 갑니다. 관제 상세 · 메시지 목록은 열람 전에 공개한 값을 지웁니다. 감사 기록에는 항목과 사유만 남습니다. '공개 승인' 메시지는 승인 경로로만 보낼 수 있습니다.
 - 고친 답 다시 확인: 가리거나 넓히기로 한 원래 값이 글자 그대로 남았거나, 사례 표기가 사라져 사례를 찾지 못하면 통과시키지 않고 값만 바꾼 답 · 거절로 넘어갑니다. 실제 LLM 레드팀도 같은 확인을 씁니다(ADR-0022).
+- 거절 전에 사례 단위로 빼기: 재작성 · 값 치환이 모두 통과하지 못하면, 통과하지 못한 사례를 가리키는 머리줄 묶음과 문장만 빼고 다시 확인합니다. 통과하면 그 답을 내고(공개 방식 `CASE_DROPPED`), 뺀 사례는 의료진 화면에 '(비공개)'로 보입니다. 낸 답은 늘 다시 확인을 거칩니다. 재작성기 지시에는 같은 값이 요약 문장 · 줄인 이름으로 다시 나와도 고치라는 규칙을 더하고, 두 번째 재작성에는 남은 표현을 알려 줍니다. 실제 LLM 대화와 레드팀에만 적용합니다(ADR-0023).
 
 ## 구조
 
@@ -146,7 +148,7 @@ webdemo/backend/redact.py     의료진 화면 API에서 위험 숫자 지우기
 webdemo/backend/live.py       실제 LLM 만들기 · 네트워크 대기 중 엔진 잠금 풀기 · check-llm
 webdemo/backend/persist.py    대화 스냅숏 · 턴 기록 저장, 지난 대화 읽기, 번호 잇기
 webdemo/backend/clinic.py     의료진 대화(ClinicConversation) · 의료진 한 명(ClinicDesk) · 계정별 목록(DeskRegistry)
-webdemo/backend/review.py     규칙(RuleDefender · RuledArmRun) · 가린 값 목록 (공개 승인 · 후보가 줄어든 과정은 engine.Session)
+webdemo/backend/review.py     규칙(RuleDefender · RuledArmRun) · 가린 값 목록 · 재작성 지시 보강 · 사례 단위로 빼기 (공개 승인 · 후보가 줄어든 과정은 engine.Session)
 tests/medicloak/              운영 모드 테스트 (가짜 HTTP 세션으로 실제 LLM 경로)
 ```
 
@@ -159,4 +161,4 @@ tests/medicloak/              운영 모드 테스트 (가짜 HTTP 세션으로 
 - 서버 한 대 · SQLite입니다. 병원 SSO, 실제 EMR(SMART on FHIR) 연동, https 종단은 아직 없습니다.
 - 서버를 다시 켜면 진행 중이던 대화는 이어 갈 수 없고 읽기 전용으로 남습니다.
 - 개인정보보호법 · 의료법상 검토(가명정보 처리, 접속기록 보관 기간 등)는 코드 밖에서 해야 합니다.
-- 결정은 [ADR-0021](../docs/adr/0021-medicloak-production-mode.md) · [ADR-0022](../docs/adr/0022-medicloak-real-llm-everywhere-and-review-feedback.md)에 있습니다.
+- 결정은 [ADR-0021](../docs/adr/0021-medicloak-production-mode.md) · [ADR-0022](../docs/adr/0022-medicloak-real-llm-everywhere-and-review-feedback.md) · [ADR-0023](../docs/adr/0023-medicloak-drop-failing-case-before-refusal.md)에 있습니다.

@@ -170,6 +170,8 @@ class Monitor:
             refs = set(k_now) | {x["case"] for ap in s.approvals for x in ap["items"]}
             k_now = {ref: s.current_k(LIVE_ARM, ref) for ref in refs}
         focus = min(min_raw, key=lambda ref: (min_raw[ref], ref)) if min_raw else s.case_a(LIVE_ARM)
+        if focus and focus not in k_now and hasattr(s, "current_k"):
+            k_now[focus] = s.current_k(LIVE_ARM, focus)       # 아직 아무것도 공개되지 않은 사례 (예: 첫 답에서 사례째로 뺌): 기준 집단 전체
         status = "danger" if sup else "caution" if gen else "safe"
         k_req = s.cfg.k_req
         violated = sorted(ref for ref, k in k_now.items() if 1 <= k < k_req)

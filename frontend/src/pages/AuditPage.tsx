@@ -33,6 +33,7 @@ const RELEASE_KO: Record<string, string> = {
   RAW: '그대로',
   REWRITTEN: '고쳐 쓴 답',
   REWRITTEN_FALLBACK: '값만 바꾼 답',
+  CASE_DROPPED: '사례를 뺀 답',
   REFUSAL: '거절 문장',
   REFUSAL_EXTRACTION_FAILED: '거절 문장 (추출 실패)',
 };

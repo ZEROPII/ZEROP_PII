@@ -161,7 +161,7 @@ export function NarrowingLadder({ data, labelOf }: { data: Narrowing; labelOf?: 
         label={
           <>
             <span className="text-ink-2">{lab(h.attribute, h.attributeLabel)}</span>{' '}
-            <span className="font-semibold text-danger-text">{h.released ? '가렸다가 승인 공개' : h.action === 'generalize' ? '넓힘' : '가림'}</span>
+            <span className="font-semibold text-danger-text">{h.released ? '가렸다가 승인 공개' : h.dropped ? '사례째로 뺌' : h.action === 'generalize' ? '넓힘' : '가림'}</span>
           </>
         }
         num={h.kIfRaw != null ? <>그대로면 <b className="text-danger-text">{h.kIfRaw.toLocaleString()}</b></> : '–'}

@@ -64,6 +64,8 @@ export interface PrivacyTransformation {
   kIfRaw?: number | null;
   /** 보안 담당자 규칙으로 가린 값 */
   rule?: boolean;
+  /** 다시 확인을 통과하지 못해 이 사례 내용을 답에서 뺐다 (공개 방식 CASE_DROPPED) */
+  dropped?: boolean;
 }
 
 /** 응답 본문 조각. 보호 조치가 걸린 조각은 transformationId로 메타데이터를 가리킨다. */
@@ -80,7 +82,7 @@ export interface ProtectionResult {
   /** 의료진 화면 API에서는 null */
   kBefore: number | null;
   kAfter: number | null;
-  /** 실제 백엔드만: 공개 방식 (RAW · REWRITTEN · REWRITTEN_FALLBACK · REFUSAL · REFUSAL_EXTRACTION_FAILED) */
+  /** 실제 백엔드만: 공개 방식 (RAW · REWRITTEN · REWRITTEN_FALLBACK · CASE_DROPPED · REFUSAL · REFUSAL_EXTRACTION_FAILED) */
   releaseMode?: string;
   /** 실제 백엔드만: 원 응답 QI 추출 성공 여부. false면 이번 답변의 공개가 k에 반영되지 않았을 수 있다. */
   extractionOk?: boolean;
@@ -93,7 +95,10 @@ export interface ReleaseCheck {
   mode: string;
   modeLabel: string;
   ok: boolean;
-  /** reason: EXTRACTION_FAILED · RAW_VALUE_LEFT(가리거나 넓히기로 한 원래 값이 글자 그대로 남음) · NO_CASE_FOUND(사례 표기를 찾지 못함) */
+  /** 이 시도에서 답에서 뺀 사례 (CASE_DROPPED) */
+  dropped?: string[] | null;
+  /** reason: EXTRACTION_FAILED · RAW_VALUE_LEFT(가리거나 넓히기로 한 원래 값이 글자 그대로 남음) · NO_CASE_FOUND(사례 표기를 찾지 못함) ·
+   *  DROPPED_CASE_LEFT(뺀 사례의 단서가 다시 뽑힘) */
   cases: {
     case: string | null;
     kAfter: number | null;

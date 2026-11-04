@@ -34,13 +34,16 @@ class FakeResponse:
 
 class FakeAnthropic:
     def __init__(self, *, fail_status: int | None = None, delay: float = 0.0, drop_date: bool = True, period_in_med: bool = False,
-                 drop_labels: bool = False) -> None:
+                 drop_labels: bool = False, echo_lower: str | None = None, heed_retry: bool = False) -> None:
         self.calls: list[dict[str, Any]] = []
         self.fail_status = fail_status
         self.delay = delay
         self.drop_date = drop_date
         self.period_in_med = period_in_med
         self.drop_labels = drop_labels              # 재작성기가 '사례N' 표기를 떨어뜨리는 경우를 흉내 낸다
+        # 첫 답 끝에 그 사례의 약을 소문자로 한 번 더 적는다 (실제 LLM의 '주목할 점' 문장처럼, 글자 그대로 치환으로는 안 지워지는 반복)
+        self.echo_lower = echo_lower
+        self.heed_retry = heed_retry                # 재작성기가 다시 고칠 때 알려 준 '남은 표현'을 지운다
         self.lock = threading.Lock()
         self.active = 0
         self.max_active = 0
@@ -81,7 +84,7 @@ class FakeAnthropic:
         if "[검색된 사례]" in system:
             m = re.search(r"사례\s*(\d+)", user)
             if m is None and len(p["messages"]) == 1:
-                return self._retrieval_answer(system)
+                return self._retrieval_answer(system, self.echo_lower)
             n = m.group(1) if m else "1"
             block = system.split(f"[사례{n}]")[1].split("\n\n[사례")[0]
             d = re.search(r"처방 약: (.+?)\.\n\[\d+\] 위 약 첫 처방 시작일: (\d{4}-\d{2}-\d{2})", block)
@@ -100,6 +103,8 @@ class FakeAnthropic:
                                     case_ref=m.group(1), subject="TARGET_PATIENT", context_status="HISTORY", event_ref="e1",
                                     med_assertion="PRESCRIBED"))
             for m in re.finditer(r"(사례\d+) 환자는 (.+?)를 처방받았(?:고|습니다)", resp):
+                if any(o["case_ref"] == m.group(1) and o["attribute"] == "MED" for o in obs):
+                    continue                                                  # 한 답에서 같은 사례의 약은 처음 것만 적는다
                 obs.append(dict(attribute="MED", raw_value=m.group(2), evidence_spans=[m.group(2)], inference_mode="EXPLICIT", confidence=5,
                                 case_ref=m.group(1), subject="TARGET_PATIENT", context_status="HISTORY", event_ref="e1", med_assertion="PRESCRIBED"))
                 end = resp.find("\n", m.end())
@@ -126,16 +131,19 @@ class FakeAnthropic:
                 s = re.search(r"'([^']+)' → 빼기", ln)
                 if s and self.drop_date:
                     resp = resp.replace(f"를 처방받았고, 첫 처방 시작일은 {s.group(1)}입니다", "를 처방받았습니다").replace(s.group(1), "(비공개)")
+            if self.heed_retry:
+                left = re.findall(r"'([^']+)'", "".join(re.findall(r"남은 표현: ([^\n]*)", head)))
+                resp = "\n".join(ln for ln in resp.splitlines() if not any(v in ln for v in left))
             if self.drop_labels:
                 resp = re.sub(r"사례\d+\s*", "", resp)
             return resp
         return "확인"
 
     @staticmethod
-    def _retrieval_answer(system: str) -> str:
+    def _retrieval_answer(system: str, echo: str | None = None) -> str:
         panel = system.split("[현재 환자 맥락]", 1)[1].split("[검색된 사례]", 1)[0]
         main = re.search(r"주진단: (.+)", panel)
-        lines = []
+        lines, tail = [], None
         for n, block in re.findall(r"\[사례(\d+)\]\n(.*?)(?=\n\n\[사례|\Z)", system.split("[검색된 사례]", 1)[1], re.S):
             dxs = re.findall(r"\] 진단: (.+?)\.\n", block)
             dx = next((d for d in dxs if main and d in main.group(1)), dxs[0] if dxs else None)
@@ -144,4 +152,6 @@ class FakeAnthropic:
                 lines.append(f"사례{n} 환자의 진단은 {dx}이고, {med.group(1)}를 처방받았습니다.")
             elif dx:
                 lines.append(f"사례{n} 환자의 진단은 {dx}입니다.")
-        return "\n".join(lines)
+            if echo == f"사례{n}" and med:
+                tail = f"참고로 사례{n} 환자는 {med.group(1).lower()}를 처방받았습니다."
+        return "\n".join(lines + ([tail] if tail else []))
