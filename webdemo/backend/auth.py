@@ -50,8 +50,8 @@ ROUTE_ROLES: tuple[tuple[str, frozenset[str] | None], ...] = (
     ("/eval", frozenset({"security"})),
 )
 
-# 데모 계정 (python -m medicloak init 이 처음 한 번 만든다)
-DEMO_USERS = (
+# 처음 쓸 계정 (python -m medicloak init 이 계정이 없을 때 한 번 만든다)
+INITIAL_USERS = (
     ("doctor1", "김서연", "clinician", "내과"),
     ("doctor2", "박준호", "clinician", "가정의학과"),
     ("privacy1", "이하늘", "security", "개인정보보호팀"),
@@ -227,22 +227,22 @@ def set_password(store: Store, username: str, password: str) -> None:
     store.x("DELETE FROM auth_session WHERE user_id = (SELECT user_id FROM app_user WHERE username = ?)", (username,))
 
 
-def ensure_demo_accounts(store: Store, password: str | None = None, out_file: Path | None = None) -> list[tuple[str, str, str]] | None:
+def ensure_initial_accounts(store: Store, password: str | None = None, out_file: Path | None = None) -> list[tuple[str, str, str]] | None:
     """
-    계정이 하나도 없을 때만 데모 계정 셋을 만든다. 비밀번호는 password(또는 MEDICLOAK_DEMO_PASSWORD) 하나를 같이 쓰고,
+    계정이 하나도 없을 때만 처음 쓸 계정 셋을 만든다. 비밀번호는 password 하나를 같이 쓰고,
     없으면 계정마다 임의로 만든다. 만든 계정 [(아이디, 비밀번호, 역할)]을 돌려주고 out_file에 적는다 (권한 600).
     이미 계정이 있으면 None.
     """
     if store.count("app_user") > 0:
         return None
     made = []
-    for username, name, role, dept in DEMO_USERS:
+    for username, name, role, dept in INITIAL_USERS:
         pw = password or secrets.token_urlsafe(9)
         add_user(store, username, name, role, dept, pw)
         made.append((username, pw, role))
     if out_file is not None:
         out_file.parent.mkdir(parents=True, exist_ok=True)
-        lines = ["# MediCloak 데모 계정 (python -m medicloak init 이 만든 파일, 커밋하지 마세요)",
+        lines = ["# MediCloak 처음 계정 (python -m medicloak init 이 만든 파일, 커밋하지 마세요. 비밀번호를 바꾼 뒤 지워도 됩니다)",
                  "# 비밀번호 바꾸기: python -m medicloak users passwd <아이디>", ""]
         lines += [f"{u}\t{ROLE_KO[r]}\t{pw}" for u, pw, r in made]
         out_file.write_text("\n".join(lines) + "\n", encoding="utf-8")

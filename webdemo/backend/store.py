@@ -65,6 +65,9 @@ CREATE TABLE IF NOT EXISTS audit (
   audit_id TEXT PRIMARY KEY, seq INTEGER, at REAL, user_id INTEGER, actor TEXT, action TEXT, conv_id TEXT, trial TEXT,
   detail_json TEXT
 );
+CREATE TABLE IF NOT EXISTS redteam_run (
+  job_id TEXT PRIMARY KEY, started_at REAL, finished_at REAL, status TEXT, job_json TEXT
+);
 """
 
 
@@ -200,6 +203,14 @@ class Store:
     def messages_of(self, conv_id: str) -> list[dict[str, Any]]:
         return [dict(id=r["msg_id"], at=r["at"], sender=r["sender"], kind=r["kind"], kind_label=r["kind_label"], case=r["case_ref"],
                      text=r["text"], actor=r["actor"]) for r in self.q("SELECT * FROM thread_message WHERE conv_id = ? ORDER BY seq", (conv_id,))]
+
+    # ── 레드팀 실행 (실제 LLM 점검 결과는 다시 켜도 리포트에 남긴다) ──
+    def save_run(self, job: dict[str, Any]) -> None:
+        self.x("INSERT OR REPLACE INTO redteam_run (job_id, started_at, finished_at, status, job_json) VALUES (?, ?, ?, ?, ?)",
+               (job["id"], job.get("started_at"), job.get("finished_at"), job["status"], _dumps(job)))
+
+    def runs(self) -> list[dict[str, Any]]:
+        return [json.loads(r["job_json"]) for r in self.q("SELECT job_json FROM redteam_run ORDER BY started_at")]
 
     # ── 대화 ──
     def save_conversation(self, conv_id: str, **cols: Any) -> None:

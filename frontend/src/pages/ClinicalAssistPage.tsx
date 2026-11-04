@@ -1,5 +1,6 @@
-import { List, MessageSquare, NotebookText } from 'lucide-react';
+import { ClipboardList, List, MessageSquare, NotebookText } from 'lucide-react';
 import { useCallback, useEffect, useState } from 'react';
+import { NavLink } from 'react-router-dom';
 import { CaseNotePanel, type NoteTab } from '../components/clinic/CaseNotePanel';
 import { ClinicalChat, type JumpTarget } from '../components/clinic/ClinicalChat';
 import { EmrCaseList } from '../components/clinic/EmrCaseList';
@@ -25,7 +26,7 @@ export function ClinicalAssistPage() {
   const [noteTab, setNoteTab] = useState<NoteTab>('note');
   const [jump, setJump] = useState<JumpTarget | null>(null);
   const [focusNonce, setFocusNonce] = useState(0);
-  const { actions } = useWorkspace();
+  const { state, actions } = useWorkspace();
   const { summary } = useSelectedCase();
   const msgs = useClinicMessages();
 
@@ -53,6 +54,8 @@ export function ClinicalAssistPage() {
   );
   const onJumpDone = useCallback(() => setJump(null), []);
   const panelClass = (id: PanelTab) => `${tab === id ? 'flex' : 'hidden'} lg:flex min-h-0 flex-col`;
+
+  if (state.noConversation) return <NoPatientOpen />;
 
   return (
     <div className="flex h-full flex-col">
@@ -87,6 +90,26 @@ export function ClinicalAssistPage() {
         <aside id="panel-note" className={panelClass('note')}>
           <CaseNotePanel tab={noteTab} onTab={setNoteTab} onJump={onJump} focusNonce={focusNonce} />
         </aside>
+      </div>
+    </div>
+  );
+}
+
+/** 운영 모드에서 아직 EMR에서 환자를 열지 않았을 때 (진료 지원 AI는 환자를 열어야 시작한다). */
+function NoPatientOpen() {
+  return (
+    <div className="grid h-full place-items-center p-6">
+      <div className="max-w-[440px] text-center">
+        <span className="mx-auto grid h-11 w-11 place-items-center rounded-full bg-surface-2 text-ink-2">
+          <ClipboardList className="h-5 w-5" aria-hidden />
+        </span>
+        <h2 className="mt-4 text-[15px] font-bold text-ink">열린 환자가 없습니다</h2>
+        <p className="mt-2 text-[13px] leading-6 text-ink-2">
+          외래 진료 목록에서 환자와 진료 목적을 고르면, 진료 지원 AI가 비슷한 과거 사례를 찾아 이 화면에 보여 줍니다.
+        </p>
+        <NavLink to="/emr" className="btn-primary mt-5 inline-flex h-10 px-4">
+          외래 진료 목록 열기
+        </NavLink>
       </div>
     </div>
   );

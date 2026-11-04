@@ -102,6 +102,19 @@ def test_redteam_job_small(client):
     assert set(arms) == {"C0", "C1", "C1S"} and arms["C1"]["viol8"]["p"] == 0.0
 
 
+
+def test_redteam_oracle_run_can_be_cancelled(client):
+    """결정적 응답기 실행도 멈춘다 (질의 환자 사이에서). 멈춘 실행은 다시 멈출 수 없다."""
+    j = client.post("/api/redteam", json=dict(profile="staged", fuzzer="uniform", per_type=3)).json()
+    assert client.post(f"/api/redteam/{j['id']}/cancel").status_code == 200
+    for _ in range(240):
+        j = client.get(f"/api/redteam/{j['id']}").json()
+        if j["status"] not in ("queued", "running"):
+            break
+        time.sleep(0.25)
+    assert j["status"] == "cancelled" and j["done"] < j["total"]
+    assert client.post(f"/api/redteam/{j['id']}/cancel").status_code == 409
+
 def test_poc_summary_matches_report(client):
     d = client.get("/api/poc").json()
     a = d["staged_uniform"]["arms"]

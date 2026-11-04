@@ -53,6 +53,9 @@ DIST = Path(os.environ.get("WEBDEMO_DIST") or ROOT / "frontend" / "dist")
 POC_FILE = HERE.parent / "data" / "poc_summary.json"
 EVAL_DIR = ROOT / "eval_demo"
 PRODUCT_LOCATION = "MediCloak 가상 EMR (Synthea 합성 환자)"
+# 운영 모드: 의료진 대화는 EMR에서 환자를 열 때 시작한다 (기본 환자를 저절로 열지 않음). 열린 대화가 없으면 409와 이 머리글.
+NO_CONVERSATION = "열린 진료 지원 AI 대화가 없습니다. 외래 진료 목록에서 환자를 열어 주세요."
+NO_CONVERSATION_HEADERS = {"X-MediCloak-State": "no-conversation"}
 
 
 @dataclass
@@ -86,6 +89,7 @@ class Job(BaseModel):
     profile: str = "staged"
     fuzzer: str = "uniform"
     per_type: int | None = 10           # 조회 유형마다 질의 환자 수. None이면 전원(296명)
+    llm: str = "auto"                   # live(서버의 실제 LLM) · oracle(결정적 응답기) · auto(실제 LLM이 있으면 live)
 
 
 class MessageIn(BaseModel):
@@ -126,6 +130,19 @@ class SecurityNoteIn(BaseModel):
     case: str | None = None
 
 
+class RuleIn(BaseModel):
+    """보안 담당자 규칙: 이 대화에서 case('사례1')의 attribute(DX · MED · PERIOD …)는 늘 가림."""
+    case: str = Field(..., pattern=r"^사례\d+$")
+    attribute: str
+    note: str | None = Field(None, max_length=300)
+
+
+class ApproveIn(BaseModel):
+    """세부 정보 요청 승인: 가린 값 id(/hidden의 id) 목록과 공개 사유."""
+    items: list[str] = Field(..., min_length=1, max_length=50)
+    reason: str = Field(..., min_length=5, max_length=300)
+
+
 class LoginIn(BaseModel):
     username: str = Field(..., min_length=1, max_length=64)
     password: str = Field(..., min_length=1, max_length=256)
@@ -161,8 +178,12 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
                      emr=OutpatientEmr(store) if store is not None else None, worklist=None)
         if state["auth"] is None:
             state["clinic"] = registry.desk_for(None)          # 데모: 화면 하나 = 대화 하나
+        if store is not None:                                 # 서버가 꺼질 때 돌고 있던 레드팀 실행은 끊긴 것으로 남긴다
+            for x in store.runs():
+                if x.get("status") in ("queued", "running"):
+                    store.save_run(dict(x, status="interrupted", error="서버를 다시 켜는 동안 끊겼습니다. 끝낸 trial도 집계하지 못했습니다."))
         sims = simulations if simulations is not None else os.environ.get("WEBDEMO_NO_SIM") != "1"
-        if sims:
+        if sims and product is None:                 # 운영 모드 관제에는 실제 의료진 대화만 둔다 (레드팀은 레드팀 화면에서 따로 돌림)
             mon.seed_simulations()
         if product is not None:
             try:                                         # LLM을 기다리는 질문이 동기 요청 일꾼을 모두 잡지 않게 여유를 둔다
@@ -196,8 +217,15 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
             return state["clinic"]
         return reg().desk_for(user_of(request))
 
+    def opened(request: Request) -> ClinicDesk:
+        """운영 모드에서는 열린 대화가 있어야 한다 (없으면 409). 데모는 처음부터 기본 환자 대화가 있다."""
+        d = desk(request)
+        if state["auth"] is not None and d.peek() is None:
+            raise HTTPException(409, NO_CONVERSATION, headers=NO_CONVERSATION_HEADERS)
+        return d
+
     def cur(request: Request) -> ClinicConversation:
-        return desk(request).current
+        return opened(request).current
 
     def arm_ok(arm: str) -> str:
         if arm not in ARMS:
@@ -370,7 +398,7 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
     def ask(case_id: str, body: MessageIn, request: Request) -> dict[str, Any]:
         if not body.question.strip():
             raise HTTPException(422, "질문이 비어 있습니다.")
-        d = desk(request)
+        d = opened(request)
         out = guard(lambda: d.ask(case_id, body.sessionId, body.question, body.clientMessageId))
         p = out["assistantMessage"]["protection"]
         mon().log("clinic_question", d.current.session, user=user_of(request), actor="의료진 (데모)", case=d.current.ref_of(case_id),
@@ -401,7 +429,7 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
 
     @r.post("/session/reset")
     def reset(request: Request, body: ResetIn | None = None) -> dict[str, Any]:
-        d = desk(request)
+        d = opened(request)
         tid = (body.trialId if body else None) or d.session.trial_id
         guard(lambda: d.start(tid))
         mon().log("clinic_start", d.session, user=user_of(request), actor="의료진 (데모)")
@@ -409,7 +437,10 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
 
     @r.get("/clinic/messages")
     def clinic_messages(request: Request) -> list[dict[str, Any]]:
-        return cur(request).messages()
+        d = desk(request)
+        if state["auth"] is not None and d.peek() is None:
+            return []                         # 머리줄 알림이 주기적으로 묻는다. 열린 대화가 없으면 메시지도 없다
+        return d.current.messages()
 
     @r.post("/clinic/messages")
     def post_clinic_message(body: ClinicNoteIn, request: Request) -> list[dict[str, Any]]:
@@ -534,6 +565,12 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
         with eng().lock:
             return guard(lambda: c.policy_decision(case_id))
 
+    @w.get("/{sid}/cases/{case_id}/narrowing")
+    def w_narrowing(sid: str, case_id: str) -> dict[str, Any]:
+        c = conv_of(sid)
+        with eng().lock:
+            return guard(lambda: c.narrowing(case_id))
+
     @w.get("/{sid}/cases/{case_id}/suggestions")
     def w_suggestions(sid: str, case_id: str) -> list[dict[str, Any]]:
         c = conv_of(sid)
@@ -579,9 +616,45 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
 
     @r.post("/monitor/sessions/{sid}/messages")
     def post_security_message(sid: str, body: SecurityNoteIn, request: Request) -> dict[str, Any]:
+        if body.kind == "release":
+            raise HTTPException(422, "공개 승인은 /approve로 값을 골라 보냅니다.")
         s = sess(sid)
         guard(lambda: mon().post_message(s, "security", body.kind, body.text, body.case, user=user_of(request)))
         return mon().thread(s)
+
+    # ── 검토 반영: 규칙 · 공개 승인 ──
+    @r.post("/monitor/sessions/{sid}/rules")
+    def add_rule(sid: str, body: RuleIn, request: Request) -> dict[str, Any]:
+        s = sess(sid)
+        if not getattr(s, "archived", False) and getattr(s, "source", None) == "clinic" and sid not in reg().current_ids():
+            raise HTTPException(409, "의료진이 이미 다른 환자를 열어 이 대화에는 다음 질문이 없습니다.")
+        guard(lambda: mon().add_rule(s, body.case, body.attribute, body.note, user=user_of(request)))
+        return mon().detail(s)
+
+    @r.delete("/monitor/sessions/{sid}/rules/{rule_id}")
+    def remove_rule(sid: str, rule_id: str, request: Request) -> dict[str, Any]:
+        s = sess(sid)
+        try:
+            guard(lambda: mon().remove_rule(s, rule_id, user=user_of(request)))
+        except KeyError:
+            raise HTTPException(404, f"없는 규칙입니다: {rule_id}")
+        return mon().detail(s)
+
+    def current_conv(sid: str) -> ClinicConversation | None:
+        """의료진이 지금 보고 있는 대화만 (지난 대화에 공개하면 의료진 화면에 보이지 않는다)."""
+        return reg().live(sid) if sid in reg().current_ids() else None
+
+    @r.get("/monitor/sessions/{sid}/hidden")
+    def hidden(sid: str) -> list[dict[str, Any]]:
+        return mon().hidden(sess(sid))
+
+    @r.post("/monitor/sessions/{sid}/approve")
+    def approve(sid: str, body: ApproveIn, request: Request) -> dict[str, Any]:
+        s = sess(sid)
+        conv = current_conv(sid) if not getattr(s, "archived", False) else None
+        ap = guard(lambda: mon().approve(s, conv, body.items, body.reason, user=user_of(request)))
+        shown = dict(ap, items=[dict(x, value=None) for x in ap["items"]])          # 값은 열람 뒤 상세에서만
+        return dict(approval=shown, detail=mon().detail(s))
 
     @r.get("/monitor/audit")
     def audit() -> list[dict[str, Any]]:
@@ -658,21 +731,51 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
         return s
 
     # ── 레드팀·결과 ──────────────────────────────────────
+    def save_run(job: Any) -> None:
+        if state["store"] is not None:
+            state["store"].save_run(job.as_dict())
+
+    def stored_runs() -> dict[str, dict[str, Any]]:
+        store = state["store"]
+        return {x["id"]: x for x in store.runs()} if store is not None else {}
+
     @r.post("/redteam")
     def start_job(body: Job, request: Request) -> dict[str, Any]:
-        j = eng().start_job(body.profile, body.fuzzer, body.per_type).as_dict()
-        mon().log("redteam_start", None, user=user_of(request), job=j["id"], per_type=body.per_type, fuzzer=body.fuzzer)
+        if body.llm not in ("auto", "live", "oracle"):
+            raise HTTPException(422, "llm은 auto · live · oracle 중 하나입니다.")
+        live = body.llm == "live" or (body.llm == "auto" and eng().live_llm is not None)
+        job = eng().start_job(body.profile, body.fuzzer, body.per_type, live=live, on_finish=save_run)
+        save_run(job)
+        j = job.as_dict()
+        mon().log("redteam_start", None, user=user_of(request), job=j["id"], per_type=body.per_type, fuzzer=body.fuzzer,
+                  llm="live" if live else "oracle")
         return j
+
+    @r.post("/redteam/{jid}/cancel")
+    def cancel_job(jid: str, request: Request) -> dict[str, Any]:
+        j = eng().jobs.get(jid)
+        if j is None:
+            raise HTTPException(404, jid)
+        if j.status not in ("queued", "running"):
+            raise HTTPException(409, "이미 끝난 실행입니다.")
+        j.cancel()
+        mon().log("redteam_cancel", None, user=user_of(request), job=jid, done=j.done, total=j.total)
+        return j.as_dict()
 
     @r.get("/redteam")
     def jobs() -> list[dict[str, Any]]:
-        return [dict(j.as_dict(), result=None) for j in eng().jobs.values()]
+        out = stored_runs()
+        out.update({jid: j.as_dict() for jid, j in eng().jobs.items()})          # 메모리에 있는 실행이 더 새 상태
+        return [dict(x, result=None) for x in sorted(out.values(), key=lambda x: x.get("started_at") or 0, reverse=True)]
 
     @r.get("/redteam/{jid}")
     def job(jid: str) -> dict[str, Any]:
-        if jid not in eng().jobs:
+        if jid in eng().jobs:
+            return eng().jobs[jid].as_dict()
+        x = stored_runs().get(jid)
+        if x is None:
             raise HTTPException(404, jid)
-        return eng().jobs[jid].as_dict()
+        return x
 
     @r.get("/poc")
     def poc() -> dict[str, Any]:

@@ -80,6 +80,8 @@ export interface MonitorPolicy extends ProtectionPolicy {
   compare: boolean;
   auth: boolean;
   persist: boolean;
+  /** 실제 LLM 대화에 나이 · 날짜 규칙 추출을 켰는지 */
+  ruleExtract?: boolean;
   /** 서버를 켠 뒤 의료진 대화 LLM 호출 (역할별 호출 수 · 토큰). LLM이 없으면 null */
   llmUsage?: { label: string; calls: number; by_role: Record<string, { calls: number; input_tokens: number; output_tokens: number }> } | null;
 }
@@ -88,11 +90,14 @@ export interface ThreadMessage {
   id: string;
   at: number;
   sender: 'clinician' | 'security';
-  kind: 'access_request' | 'check_request' | 'reply';
+  /** release: 보안 담당자가 세부 정보 요청을 승인해 값을 공개함 (본문에 공개한 값이 있다) */
+  kind: 'access_request' | 'check_request' | 'reply' | 'release';
   kind_label: string;
   case: string | null;
   text: string;
   actor: string;
+  /** 공개 승인 메시지의 값을 지운 경우 (원문 열람 전 상세 · 메시지 목록) */
+  masked?: boolean;
 }
 
 export interface ThreadResult {
@@ -118,6 +123,8 @@ export interface MonitorOverview {
   k_req: number;
   suppress_threshold: number;
   generalize_threshold: number;
+  /** 기준 집단 크기 (과거 기록 환자 전체) */
+  p_ref?: number;
 }
 
 export interface AnswerLine {
@@ -167,6 +174,89 @@ export interface ArmView {
   turns: TurnView[];
 }
 
+/** 보안 담당자 규칙: 이 대화에서 사례 · 단서 종류는 늘 가림 (의료진 화면 갈래 C1에만) */
+export interface ReviewRule {
+  id: string;
+  case: string;
+  attribute: string;
+  attribute_label: string;
+  by: string;
+  at: number;
+  note: string | null;
+  /** 이 턴부터 적용 */
+  from_turn: number;
+}
+
+/** 세부 정보 요청 승인으로 공개한 값 (value는 열람 전에는 null) */
+export interface ApprovalItem {
+  turn: number;
+  case: string;
+  index: number;
+  attribute: string;
+  attribute_label: string;
+  value: string | null;
+  /** 몇 번째 턴 뒤에 공개했는지 */
+  after_turn?: number;
+}
+
+export interface Approval {
+  id: string;
+  at: number;
+  by: string;
+  reason: string;
+  items: ApprovalItem[];
+  /** 공개한 뒤 사례별 후보 수 */
+  k_after: Record<string, number>;
+}
+
+/** 가리거나 넓힌 값 (값 자체는 없다). 승인 공개를 고를 때 쓴다. */
+export interface HiddenItem {
+  id: string;
+  turn: number;
+  case: string;
+  index: number;
+  attribute: string;
+  action: 'suppress' | 'generalize';
+  kIfRaw: number | null;
+  released: boolean;
+}
+
+/** 사례 하나에서 후보가 줄어든 과정 (/api/watch/{대화}/cases/{사례}/narrowing) */
+export interface NarrowingStep {
+  attribute: string;
+  attributeLabel: string;
+  value: string;
+  /** 이 값이 나간 턴 (0 = 사례 검색). 승인 공개는 null */
+  turn: number | null;
+  approved: boolean;
+  /** 승인 공개: 몇 번째 턴 뒤에 공개했는지 */
+  afterTurn?: number | null;
+  kBefore: number;
+  kAfter: number;
+}
+
+export interface NarrowingHidden {
+  turn: number;
+  attribute: string;
+  attributeLabel: string;
+  action: 'suppress' | 'generalize';
+  kIfRaw: number | null;
+  released: boolean;
+}
+
+export interface Narrowing {
+  case: string;
+  caseId: string;
+  label: string;
+  population: number;
+  generalizeK: number;
+  suppressK: number;
+  k: number;
+  steps: NarrowingStep[];
+  hidden: NarrowingHidden[];
+  rules: { attribute: string; attributeLabel: string }[];
+}
+
 export interface MonitorDetail {
   id: string;
   trial_id: string;
@@ -187,6 +277,8 @@ export interface MonitorDetail {
   messages: ThreadMessage[];
   /** 서버를 다시 켜기 전 대화 (메시지는 보낼 수 없다) */
   archived?: boolean;
+  rules?: ReviewRule[];
+  approvals?: Approval[];
 }
 
 export interface AuditEntry {
@@ -211,6 +303,13 @@ export interface AuditEntry {
   purpose?: string;
   /** 로그인 기록: 접속 주소 */
   client?: string;
+  /** 규칙 기록: 단서 종류 */
+  attribute?: string;
+  /** 공개 승인: 공개한 항목 (값 없음) */
+  items?: { turn: number; case: string; attribute: string }[];
+  /** 레드팀 시작: live · oracle, 유형마다 질의 환자 수 */
+  llm?: string;
+  per_type?: number | null;
 }
 
 export interface Proportion {
@@ -232,7 +331,8 @@ export interface PocArm {
   kA_median: number[];
   kA_q1: number[];
   kA_q3: number[];
-  utility: number;
+  /** 답변 유용도. 판정한 단서가 하나도 없으면 null */
+  utility: number | null;
   decisive: Record<string, number>;
   overblock: Proportion;
 }
@@ -245,14 +345,31 @@ export interface PocResult {
 
 export interface RedTeamJob {
   id: string;
+  /** 서버의 실제 LLM으로 돌렸는지 (false = 결정적 응답기) */
+  live?: boolean;
+  model?: string | null;
   profile_label: string;
   fuzzer: string;
   fuzzer_label: string;
   per_type: number | null;
+  /** 질의 환자(trial) 수 */
+  trials?: number;
+  /** 갈래별 대화 수 (trial × 3) */
   total: number;
+  /** 끝낸 갈래별 대화 수 (LLM 오류로 뺀 것 포함) */
   done: number;
-  status: 'queued' | 'running' | 'done' | 'error';
+  /** 집계에 넣은 갈래별 대화 수 (세 갈래를 다 끝낸 질의 환자만) */
+  kept?: number;
+  /** LLM 호출이 실패해 집계에서 뺀 질의 환자 수 */
+  llm_error_trials?: number;
+  status: 'queued' | 'running' | 'done' | 'error' | 'cancelled' | 'interrupted';
   error: string | null;
   elapsed: number | null;
+  /** 남은 시간 추정 (초) */
+  eta?: number | null;
+  started_at?: number | null;
+  finished_at?: number | null;
+  usage?: { calls: number; input_tokens: number; output_tokens: number };
+  last?: string;
   result: PocResult | null;
 }

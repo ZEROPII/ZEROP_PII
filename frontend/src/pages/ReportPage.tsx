@@ -1,4 +1,4 @@
-import { ExternalLink, Play } from 'lucide-react';
+import { ExternalLink, Play, Square } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { MONITOR_UNAVAILABLE, monitorApi, type PocSummary } from '../api/monitorApi';
 import { ErrorState, LoadingState } from '../components/common/StatusViews';
@@ -35,7 +35,7 @@ function ResultView({ res, title }: { res: PocResult; title: string }) {
 
   const lead = c1
     ? c1.viol10.k === 0
-      ? `누적 방어를 쓴 공격 대화 ${n}건에서는 후보가 ${kReq}명 아래로 줄어든 적이 한 번도 없었습니다. 대신 답변 유용도는 ${c1.utility.toFixed(2)}로 낮아졌습니다.`
+      ? `누적 방어를 쓴 공격 대화 ${n}건에서는 후보가 ${kReq}명 아래로 줄어든 적이 한 번도 없었습니다.${c1.utility != null ? ` 대신 답변 유용도는 ${c1.utility.toFixed(2)}로 낮아졌습니다.` : ''}`
       : `누적 방어를 써도 공격 대화 ${n}건 중 ${c1.viol10.k}건(${pct(c1.viol10.p)})에서 후보가 ${kReq}명 아래로 줄었습니다.`
     : `공격 대화 ${n}건의 결과입니다.`;
 
@@ -75,7 +75,7 @@ function ResultView({ res, title }: { res: PocResult; title: string }) {
           <div className="mt-3.5 grid gap-3">
             {arms.map((a) => {
               const u = res.arms[a.key]!.utility;
-              return <BarRow key={a.key} label={a.name} value={u} max={1} color={a.color} text={u.toFixed(2)} />;
+              return <BarRow key={a.key} label={a.name} value={u ?? 0} max={1} color={a.color} text={u != null ? u.toFixed(2) : '–'} />;
             })}
           </div>
         </div>
@@ -104,7 +104,7 @@ function ResultView({ res, title }: { res: PocResult; title: string }) {
                     <td className="border-b border-line px-3 py-2.5 text-ink-2">{a.does}</td>
                     <td className="num border-b border-line px-3 py-2.5 text-right">{r.viol10.k}건</td>
                     <td className="border-b border-line px-3 py-2.5 text-right">{r.first_median != null ? `${r.first_median}턴` : '내려가지 않음'}</td>
-                    <td className="num border-b border-line px-3 py-2.5 text-right">{r.utility.toFixed(2)}</td>
+                    <td className="num border-b border-line px-3 py-2.5 text-right">{r.utility != null ? r.utility.toFixed(2) : '–'}</td>
                     <td className="num border-b border-line px-3 py-2.5 text-right">{pct(r.overblock.p)}</td>
                   </tr>
                 );
@@ -117,52 +117,138 @@ function ResultView({ res, title }: { res: PocResult; title: string }) {
   );
 }
 
+const SCALES: { value: number | null; trials: number; label: string }[] = [
+  { value: 1, trials: 3, label: '유형마다 1명 (질의 환자 3명)' },
+  { value: 2, trials: 6, label: '유형마다 2명 (6명)' },
+  { value: 5, trials: 15, label: '유형마다 5명 (15명)' },
+  { value: 10, trials: 30, label: '유형마다 10명 (30명)' },
+  { value: null, trials: 296, label: '전체 (296명)' },
+];
+/** 어림값: 질의 환자 한 명 × 갈래 3개 × 최대 10턴 × 턴마다 6번(공격 질문 · 확인 · 대상 AI · 추출 · 재작성 · 다시 확인). 형식 오류 다시 시도는 따로 */
+const MAX_CALLS_PER_TRIAL = 3 * 10 * 6;
+
+const STATUS_KO: Record<RedTeamJob['status'], string> = {
+  queued: '준비 중',
+  running: '점검 중',
+  done: '점검 끝남',
+  error: '점검 실패',
+  cancelled: '멈춤',
+  interrupted: '끊김',
+};
+
+function dur(sec: number | null | undefined): string {
+  if (sec == null) return '–';
+  const s = Math.round(sec);
+  if (s < 60) return `${s}초`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}분 ${s % 60}초`;
+  return `${Math.floor(m / 60)}시간 ${m % 60}분`;
+}
+
+function jobTitle(j: RedTeamJob): string {
+  const who = j.live ? (j.model ?? '실제 LLM') : `결정적 응답기 (${j.profile_label})`;
+  const n = j.trials ?? Math.round(j.total / 3);
+  const when = j.started_at ? new Date(j.started_at * 1000).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+  const kept = j.kept ?? j.done;
+  const part = j.status === 'done' ? '' : ` · ${STATUS_KO[j.status]}, 대화 ${kept}/${j.total}까지 집계`;
+  return `${j.id} ${who}, ${j.fuzzer_label}, 질의 환자 ${n}명 ${when}${part}`;
+}
+
 export function ReportPage() {
   const toast = useToast();
   const [poc, setPoc] = useState<PocSummary | null>(null);
+  const [jobs, setJobs] = useState<RedTeamJob[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [dataset, setDataset] = useState('staged_feedback');
-  const [perType, setPerType] = useState(5);
+  const [live, setLive] = useState<boolean | null>(null);
+  const [dataset, setDataset] = useState<string | null>(null);
+  const [perType, setPerType] = useState<number | null>(1);
   const [fuzzer, setFuzzer] = useState('feedback');
+  const [confirming, setConfirming] = useState(false);
   const [job, setJob] = useState<RedTeamJob | null>(null);
+  const [results, setResults] = useState<Record<string, RedTeamJob>>({});
 
   useEffect(() => {
     const ctl = new AbortController();
     monitorApi.poc(ctl.signal).then(setPoc, (e) => {
-      if (!(e instanceof DOMException)) setError(e instanceof Error ? e.message : MONITOR_UNAVAILABLE);
+      if (!(e instanceof DOMException)) setPoc({} as PocSummary);
     });
+    monitorApi.jobs(ctl.signal).then(
+      (js) => {
+        setJobs(js);
+        const running = js.find((j) => j.status === 'running' || j.status === 'queued');
+        if (running) setJob(running);
+      },
+      (e) => {
+        if (!(e instanceof DOMException)) setError(e instanceof Error ? e.message : MONITOR_UNAVAILABLE);
+      },
+    );
+    monitorApi.policy(ctl.signal).then((p) => setLive(p.llmLive), () => setLive(false));
     return () => ctl.abort();
   }, []);
 
+  // 돌고 있는 점검: 2초마다 진행을 받는다
   useEffect(() => {
-    if (!job || job.status === 'done' || job.status === 'error') return;
+    if (!job || (job.status !== 'running' && job.status !== 'queued')) return;
     const t = setTimeout(() => {
       monitorApi.job(job.id).then(
         (j) => {
           setJob(j);
-          if (j.status === 'done') {
-            setDataset('job');
-            toast('레드팀 점검을 마쳤습니다.');
+          if (j.status !== 'running' && j.status !== 'queued') {
+            setJobs((js) => [j, ...(js ?? []).filter((x) => x.id !== j.id)]);
+            if (j.result) {
+              setResults((r) => ({ ...r, [j.id]: j }));
+              setDataset(`job:${j.id}`);
+            }
+            toast(j.status === 'done' ? '레드팀 점검을 마쳤습니다.' : j.status === 'cancelled' ? '점검을 멈췄습니다. 끝낸 대화까지 집계했습니다.' : '점검이 끝나지 못했습니다.');
           }
         },
         () => undefined,
       );
-    }, 1000);
+    }, 2000);
     return () => clearTimeout(t);
   }, [job, toast]);
 
-  const options = useMemo(() => {
-    const o = Object.keys(DATASETS).filter((k) => poc?.[k]);
-    return job?.result ? ['job', ...o] : o;
-  }, [poc, job]);
+  const finished = useMemo(() => (jobs ?? []).filter((j) => j.status !== 'running' && j.status !== 'queued' && (j.kept ?? j.done) > 0), [jobs]);
+  const pocKeys = useMemo(() => Object.keys(DATASETS).filter((k) => poc?.[k]), [poc]);
+
+  // 처음 고를 결과: 가장 최근의 실제 LLM 점검, 없으면 POC
+  useEffect(() => {
+    if (dataset || jobs == null || poc == null) return;
+    const latest = finished.find((j) => j.live) ?? finished[0];
+    setDataset(latest ? `job:${latest.id}` : (pocKeys.includes('staged_feedback') ? 'staged_feedback' : pocKeys[0] ?? null));
+  }, [dataset, jobs, poc, finished, pocKeys]);
+
+  // 고른 점검의 결과 받기 (목록에는 결과가 빠져 온다)
+  const pickedJob = dataset?.startsWith('job:') ? dataset.slice(4) : null;
+  useEffect(() => {
+    if (!pickedJob || results[pickedJob]) return;
+    const ctl = new AbortController();
+    monitorApi.job(pickedJob, ctl.signal).then((j) => setResults((r) => ({ ...r, [j.id]: j })), () => undefined);
+    return () => ctl.abort();
+  }, [pickedJob, results]);
+
+  const running = !!job && (job.status === 'running' || job.status === 'queued');
+  const scale = SCALES.find((s) => s.value === perType) ?? SCALES[0];
 
   async function start() {
+    setConfirming(false);
     try {
-      const j = await monitorApi.startRedTeam(perType, fuzzer);
+      const j = await monitorApi.startRedTeam(perType, fuzzer, live ? 'live' : 'oracle');
       setJob(j);
-      toast('레드팀 점검을 시작했습니다.');
+      setJobs((js) => [j, ...(js ?? [])]);
+      toast(j.live ? '실제 LLM으로 레드팀 점검을 시작했습니다.' : '레드팀 점검을 시작했습니다.');
     } catch (e) {
       toast(e instanceof Error ? e.message : '점검을 시작하지 못했습니다.');
+    }
+  }
+
+  async function cancel() {
+    if (!job) return;
+    try {
+      setJob(await monitorApi.cancelRedTeam(job.id));
+      toast('멈추는 중입니다. 돌던 질의 환자는 빼고, 세 갈래를 다 끝낸 질의 환자까지 집계합니다.');
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '멈추지 못했습니다.');
     }
   }
 
@@ -172,11 +258,15 @@ export function ReportPage() {
         <ErrorState message={error} />
       </div>
     );
-  if (!poc) return <LoadingState label="점검 결과를 불러오는 중" />;
+  if (!poc || jobs == null) return <LoadingState label="점검 결과를 불러오는 중" />;
 
-  const res = dataset === 'job' && job?.result ? job.result : poc[dataset];
-  const title = dataset === 'job' && job ? `방금 실행한 점검 (${job.fuzzer_label}, 유형마다 ${job.per_type}명)` : `2026-10-23 POC (${DATASETS[dataset]})`;
-  const running = job && (job.status === 'running' || job.status === 'queued');
+  const shownJob = pickedJob ? results[pickedJob] : null;
+  const res = pickedJob ? shownJob?.result ?? null : dataset ? poc[dataset] : null;
+  const title = pickedJob
+    ? shownJob
+      ? jobTitle(shownJob)
+      : '점검 결과를 불러오는 중'
+    : `결정적 응답기 기준 2026-10-23 POC (${dataset ? DATASETS[dataset] : ''})`;
 
   return (
     <div className="scroll-thin h-full overflow-y-auto px-4 pb-6 pt-4 md:px-6">
@@ -184,24 +274,47 @@ export function ReportPage() {
         <label className="text-[13px] text-ink-3" htmlFor="dataset">
           결과
         </label>
-        <select id="dataset" value={dataset} onChange={(e) => setDataset(e.target.value)} className="h-9 rounded-control border border-line-input bg-surface px-3 text-[13px]">
-          {options.map((k) => (
-            <option key={k} value={k}>
-              {k === 'job' ? '방금 실행한 점검' : `POC ${DATASETS[k]}`}
-            </option>
-          ))}
+        <select
+          id="dataset"
+          value={dataset ?? ''}
+          onChange={(e) => setDataset(e.target.value)}
+          className="h-9 max-w-full rounded-control border border-line-input bg-surface px-3 text-[13px]"
+        >
+          {finished.length > 0 && (
+            <optgroup label="레드팀 점검">
+              {finished.map((j) => (
+                <option key={j.id} value={`job:${j.id}`}>
+                  {jobTitle(j)}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          {pocKeys.length > 0 && (
+            <optgroup label="참고: 결정적 응답기 POC (2026-10-23)">
+              {pocKeys.map((k) => (
+                <option key={k} value={k}>
+                  POC {DATASETS[k]}
+                </option>
+              ))}
+            </optgroup>
+          )}
         </select>
-        <a href="/eval/" target="_blank" rel="noreferrer" className="btn-ghost btn-sm" title="평가 지표 대시보드 (eval_demo/, 데모 서버의 /eval/)">
+        <a href="/eval/" target="_blank" rel="noreferrer" className="btn-ghost btn-sm" title="평가 지표 대시보드 (eval_demo/)">
           <ExternalLink className="h-3.5 w-3.5" aria-hidden />
           평가 지표 22개
         </a>
         <span className="flex-1" />
         <div className="flex flex-wrap items-center gap-2 rounded-control bg-surface-2 p-1.5 pl-3 text-[13px]">
-          <span className="text-ink-2">새로 점검</span>
-          <select aria-label="조회 유형마다 질의 환자 수" value={perType} onChange={(e) => setPerType(Number(e.target.value))} className="h-[30px] rounded-cell border border-line-input bg-surface px-2 text-xs">
-            {[2, 5, 10].map((n) => (
-              <option key={n} value={n}>
-                유형마다 {n}명
+          <span className="text-ink-2">{live ? '실제 LLM으로 새 점검' : '새 점검 (결정적 응답기)'}</span>
+          <select
+            aria-label="질의 환자 수"
+            value={perType ?? 'all'}
+            onChange={(e) => setPerType(e.target.value === 'all' ? null : Number(e.target.value))}
+            className="h-[30px] rounded-cell border border-line-input bg-surface px-2 text-xs"
+          >
+            {SCALES.map((s) => (
+              <option key={s.label} value={s.value ?? 'all'}>
+                {s.label}
               </option>
             ))}
           </select>
@@ -209,28 +322,87 @@ export function ReportPage() {
             <option value="feedback">k 피드백 퍼저</option>
             <option value="uniform">균등 퍼저</option>
           </select>
-          <button type="button" onClick={start} disabled={!!running} className="btn-primary btn-sm">
+          <button type="button" onClick={() => (live ? setConfirming(true) : void start())} disabled={running || live == null} className="btn-primary btn-sm">
             <Play className="h-3.5 w-3.5" aria-hidden />
-            다시 점검
+            점검 시작
           </button>
         </div>
       </div>
-      {job && (
-        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-control border border-line bg-surface px-4 py-3 text-[13px]">
-          <StatusChip tone={job.status === 'error' ? 'danger' : job.status === 'done' ? 'safe' : 'brand'}>
-            {job.status === 'done' ? '점검 끝남' : job.status === 'error' ? '점검 실패' : '점검 중'}
-          </StatusChip>
-          <span className="num text-ink-2">
-            {job.done.toLocaleString()} / {job.total.toLocaleString()} 대화
-            {job.elapsed != null && `, ${job.elapsed}초`}
-          </span>
-          <div className="h-2 min-w-[160px] flex-1 overflow-hidden rounded-full bg-surface-2">
-            <div className="h-full rounded-full bg-iris transition-[width] duration-300" style={{ width: `${job.total ? (job.done / job.total) * 100 : 0}%` }} />
+      {confirming && (
+        <div role="alertdialog" aria-label="실제 LLM 점검 확인" className="mb-4 rounded-control border border-caution bg-caution-tint px-4 py-3 text-[13px] text-ink">
+          <p>
+            실제 LLM으로 질의 환자 <b className="num">{scale.trials}명</b> × 갈래 3개(누적 방어 · 턴별 방어 · 방어 없음)를 최대 10턴씩 돌립니다. LLM 호출은 턴마다 6번으로 잡으면{' '}
+            <b className="num">약 {(scale.trials * MAX_CALLS_PER_TRIAL).toLocaleString()}번</b>입니다. 위험에 닿은 대화는 일찍 끝나 줄고, 형식 오류로 다시 부르면 늘어납니다.
+          </p>
+          <p className="mt-1 text-xs text-ink-2">의료진 질문이 들어오면 그 호출을 먼저 보냅니다. 중간에 멈춰도 끝낸 질의 환자까지는 집계해 리포트에 남깁니다.</p>
+          <div className="mt-2 flex gap-1.5">
+            <button type="button" className="btn-primary btn-sm" onClick={() => void start()}>
+              시작
+            </button>
+            <button type="button" className="btn-ghost btn-sm" onClick={() => setConfirming(false)}>
+              취소
+            </button>
           </div>
-          {job.error && <span className="w-full text-xs text-danger-text">{job.error.split('\n')[0]}</span>}
         </div>
       )}
-      {res ? <ResultView res={res} title={title} /> : <ErrorState message="이 결과가 없습니다." />}
+      {job && (running || job.id === pickedJob || !finished.some((j) => j.id === job.id)) && (
+        <div className="mb-4 rounded-control border border-line bg-surface px-4 py-3 text-[13px]">
+          <div className="flex flex-wrap items-center gap-3">
+            <StatusChip tone={job.status === 'error' || job.status === 'interrupted' ? 'danger' : job.status === 'done' ? 'safe' : job.status === 'cancelled' ? 'plain' : 'brand'}>
+              {STATUS_KO[job.status]}
+            </StatusChip>
+            <span className="font-mono text-xs text-ink-3">{job.id}</span>
+            <span className="text-ink-2">{job.live ? job.model ?? '실제 LLM' : '결정적 응답기'}</span>
+            <span className="flex-1" />
+            {running && job.status === 'running' && (
+              <button type="button" className="btn-ghost btn-sm" onClick={() => void cancel()}>
+                <Square className="h-3.5 w-3.5" aria-hidden />
+                멈추기
+              </button>
+            )}
+          </div>
+          <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-surface-2" role="progressbar" aria-valuemin={0} aria-valuemax={job.total} aria-valuenow={job.done}>
+            <div className="h-full rounded-full bg-iris transition-[width] duration-300" style={{ width: `${job.total ? (job.done / job.total) * 100 : 0}%` }} />
+          </div>
+          <dl className="num mt-2 grid grid-cols-2 gap-x-6 gap-y-1 text-xs sm:grid-cols-4">
+            <div>
+              <dt className="text-ink-3">끝낸 대화</dt>
+              <dd className="font-semibold text-ink">
+                {job.done.toLocaleString()} / {job.total.toLocaleString()}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-ink-3">LLM 호출</dt>
+              <dd className="font-semibold text-ink">{job.live ? `${(job.usage?.calls ?? 0).toLocaleString()}번` : '없음'}</dd>
+            </div>
+            <div>
+              <dt className="text-ink-3">토큰 (입력 / 출력)</dt>
+              <dd className="font-semibold text-ink">
+                {job.live ? `${(job.usage?.input_tokens ?? 0).toLocaleString()} / ${(job.usage?.output_tokens ?? 0).toLocaleString()}` : '–'}
+              </dd>
+            </div>
+            <div>
+              <dt className="text-ink-3">걸린 시간{running && job.eta != null ? ' · 남은 시간' : ''}</dt>
+              <dd className="font-semibold text-ink">
+                {dur(job.elapsed)}
+                {running && job.eta != null && <span className="font-normal text-ink-2"> · 약 {dur(job.eta)}</span>}
+              </dd>
+            </div>
+          </dl>
+          {!!job.llm_error_trials && (
+            <p className="mt-1.5 text-xs text-caution-text">LLM 호출이 실패한 질의 환자 {job.llm_error_trials}명은 집계에서 뺐습니다 (세 갈래 짝을 맞추려고).</p>
+          )}
+          {job.last && <p className="mt-1.5 truncate text-xs text-ink-3">마지막: {job.last}</p>}
+          {job.error && <p className="mt-1.5 text-xs text-danger-text">{job.error.split('\n')[0]}</p>}
+        </div>
+      )}
+      {res ? (
+        <ResultView res={res} title={title} />
+      ) : pickedJob && !shownJob ? (
+        <LoadingState label="점검 결과를 불러오는 중" />
+      ) : (
+        <ErrorState message={pickedJob ? '이 점검에는 집계할 대화가 없습니다.' : '아직 점검 결과가 없습니다. 위에서 점검을 시작하세요.'} />
+      )}
     </div>
   );
 }

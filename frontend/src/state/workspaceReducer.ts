@@ -40,6 +40,8 @@ export interface WorkspaceState {
   selectedCaseId: CaseId | null;
   sessions: Record<CaseId, SessionSlot>;
   disclosures: Record<CaseId, Async<DisclosureHistoryEntry[]>>;
+  /** 운영 모드: 아직 EMR에서 환자를 열지 않아 대화가 없다 (서버 409 no-conversation) */
+  noConversation: boolean;
 }
 
 export const initialWorkspaceState: WorkspaceState = {
@@ -51,6 +53,7 @@ export const initialWorkspaceState: WorkspaceState = {
   selectedCaseId: null,
   sessions: {},
   disclosures: {},
+  noConversation: false,
 };
 
 type ResourceKey = 'environment' | 'policy' | 'patient' | 'cases' | 'riskStates';
@@ -74,7 +77,8 @@ export type WorkspaceAction =
   /** 다른 화면(다른 탭)에서 바뀐 대화를 조용히 받아 온다. 보내는 중인 사례는 건드리지 않는다. */
   | { type: 'session/refresh'; caseId: CaseId; session: ConversationSession }
   | { type: 'risk/apply'; risk: CaseRiskState }
-  | { type: 'workspace/reset' };
+  | { type: 'workspace/reset' }
+  | { type: 'workspace/none' };
 
 function updateSession(state: WorkspaceState, caseId: CaseId, fn: (slot: SessionSlot) => SessionSlot): WorkspaceState {
   const slot = state.sessions[caseId] ?? { status: 'idle', sending: false };
@@ -98,7 +102,9 @@ export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction)
     case 'resource/loading':
       return { ...state, [action.key]: { ...state[action.key], status: 'loading', error: undefined } };
     case 'resource/success':
-      return { ...state, [action.key]: { status: 'success', data: action.data } };
+      return { ...state, [action.key]: { status: 'success', data: action.data }, noConversation: false };
+    case 'workspace/none':
+      return { ...initialWorkspaceState, noConversation: true };
     case 'resource/error':
       return { ...state, [action.key]: { ...state[action.key], status: 'error', error: action.error } };
 

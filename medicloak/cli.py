@@ -1,11 +1,11 @@
 # python -m medicloak … : MediCloak 운영 모드 (로그인 · 역할 분리 · DB · 가상 EMR · .env의 실제 LLM)
 #
-#   python -m medicloak init [--reset]        DB를 만들고 가상 EMR(Synthea 합성 환자)을 넣고 데모 계정을 만든다
+#   python -m medicloak init [--reset]        DB를 만들고 가상 EMR(Synthea 합성 환자)을 넣고 처음 쓸 계정을 만든다
 #   python -m medicloak serve [--llm real]    서버를 켠다 (명령을 생략하면 serve). DB가 없으면 init부터 한다
 #   python -m medicloak check-llm             .env를 읽어 실제 LLM에 짧은 요청을 한 번 보낸다 (키 값은 출력하지 않음)
 #   python -m medicloak users …               계정 목록 · 추가 · 비밀번호 바꾸기
 #
-# 기본 위치: runs/medicloak/ (medicloak.db · demo_accounts.txt · emr_snapshot/ · engine/). runs/는 커밋하지 않는다.
+# 기본 위치: runs/medicloak/ (medicloak.db · initial_accounts.txt · emr_snapshot/ · engine/). runs/는 커밋하지 않는다.
 
 from __future__ import annotations
 
@@ -19,6 +19,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 HOME = ROOT / "runs" / "medicloak"
 DEFAULT_DB = HOME / "medicloak.db"
+ACCOUNTS_FILE = "initial_accounts.txt"            # init이 처음 쓸 계정을 적는 파일 (DB 폴더)
+LEGACY_ACCOUNTS_FILE = "demo_accounts.txt"       # 예전 init이 쓴 이름
 
 
 def _store(db: Path):
@@ -27,15 +29,20 @@ def _store(db: Path):
 
 
 def _print_accounts(made, out_file: Path) -> None:
-    print("[medicloak] 데모 계정을 만들었습니다 (이 비밀번호는 지금 한 번만 보여 줍니다)")
+    print("[medicloak] 처음 쓸 계정 셋을 만들었습니다 (이 비밀번호는 지금 한 번만 보여 줍니다)")
     for username, pw, role in made:
         print(f"    {username:<10} {'의료진' if role == 'clinician' else '보안 담당자':<7} {pw}")
     print(f"[medicloak] 같은 내용을 {out_file} 에 적었습니다 (권한 600). 바꾸려면 python -m medicloak users passwd <아이디>")
 
 
-def init(db: Path, *, reset: bool = False, demo_password: str | None = None, quiet: bool = False) -> None:
+def accounts_file(folder: Path) -> Path | None:
+    """init이 처음 쓸 계정을 적은 파일. 예전 이름(demo_accounts.txt)으로 만든 것도 찾는다."""
+    return next((p for p in (folder / ACCOUNTS_FILE, folder / LEGACY_ACCOUNTS_FILE) if p.exists()), None)
+
+
+def init(db: Path, *, reset: bool = False, initial_password: str | None = None, quiet: bool = False) -> None:
     from webdemo.backend import emr
-    from webdemo.backend.auth import ensure_demo_accounts
+    from webdemo.backend.auth import ensure_initial_accounts
     if reset and db.exists():
         for p in (db, db.with_name(db.name + "-wal"), db.with_name(db.name + "-shm")):
             if p.exists():
@@ -47,8 +54,9 @@ def init(db: Path, *, reset: bool = False, demo_password: str | None = None, qui
             emr.load_csv(store, log=print)
         elif not quiet:
             print(f"[medicloak] 가상 EMR이 이미 들어 있습니다 (환자 {store.count('emr_patient'):,}명 · 사건 {store.count('emr_event'):,}건)")
-        out_file = db.parent / "demo_accounts.txt"
-        made = ensure_demo_accounts(store, demo_password or os.environ.get("MEDICLOAK_DEMO_PASSWORD") or None, out_file)
+        out_file = db.parent / ACCOUNTS_FILE
+        pw = initial_password or os.environ.get("MEDICLOAK_INITIAL_PASSWORD") or os.environ.get("MEDICLOAK_DEMO_PASSWORD") or None
+        made = ensure_initial_accounts(store, pw, out_file)
         if made:
             _print_accounts(made, out_file)
         elif not quiet:
@@ -101,10 +109,11 @@ def serve(a: argparse.Namespace) -> None:
     eng = Engine(db.parent / "engine", paths=paths, live_llm=live_llm, live_label=label, first_id=first,
                  llm_concurrency=a.llm_concurrency, live_rule_extract=not a.no_rule_extract)
     product = Product(store=store, compare=not a.no_compare, keep=a.keep, cookie_secure=a.cookie_secure)
-    app = create_app(eng, trial=a.trial, simulations=not a.no_sim, product=product)
+    app = create_app(eng, simulations=False, product=product)          # 운영 모드: 환자는 EMR에서 열 때 정해진다
     if not (DIST / "index.html").exists():
         print("[medicloak] 화면 파일(frontend/dist)이 없습니다. --build 를 붙여 한 번 빌드하세요. 지금은 API만 켭니다.", file=sys.stderr)
-    print(f"[medicloak] 준비되었습니다: http://{a.host}:{a.port}  (계정: {db.parent / 'demo_accounts.txt'})")
+    acc = accounts_file(db.parent)
+    print(f"[medicloak] 준비되었습니다: http://{a.host}:{a.port}" + (f"  (처음 쓸 계정: {acc})" if acc else ""))
     uvicorn.run(app, host=a.host, port=a.port, log_level="warning")
 
 
@@ -115,7 +124,7 @@ def users(a: argparse.Namespace) -> None:
         if a.users_cmd in (None, "list"):
             rows = store.users()
             if not rows:
-                print("계정이 없습니다. python -m medicloak init 으로 데모 계정을 만드세요.")
+                print("계정이 없습니다. python -m medicloak init 으로 처음 쓸 계정을 만드세요.")
             for u in rows:
                 print(f"{u['username']:<12} {auth.ROLE_KO[u['role']]:<7} {u['display_name']:<8} {u['department'] or '':<10} {'사용' if u['active'] else '중지'}")
             return
@@ -146,9 +155,10 @@ def main(argv: list[str] | None = None) -> None:
     ap.add_argument("--db", default=str(DEFAULT_DB), help=f"DB 파일 (기본 {DEFAULT_DB.relative_to(ROOT)})")
     sub = ap.add_subparsers(dest="cmd")
 
-    p = sub.add_parser("init", help="DB · 가상 EMR · 데모 계정 준비")
+    p = sub.add_parser("init", help="DB · 가상 EMR · 처음 쓸 계정 준비")
     p.add_argument("--reset", action="store_true", help="기존 DB(대화 · 감사 기록 포함)를 지우고 새로 만든다")
-    p.add_argument("--demo-password", default=None, help="데모 계정 셋이 같이 쓸 비밀번호 (없으면 계정마다 임의로 만든다)")
+    p.add_argument("--initial-password", default=None, help="처음 계정 셋이 같이 쓸 비밀번호 (없으면 계정마다 임의로 만든다)")
+    p.add_argument("--demo-password", dest="initial_password", help=argparse.SUPPRESS)          # 예전 이름
 
     p = sub.add_parser("serve", help="서버 켜기 (기본)")
     _serve_args(p)
@@ -173,7 +183,7 @@ def main(argv: list[str] | None = None) -> None:
     _serve_args(ap, top=True)
     a = ap.parse_args(argv)
     if a.cmd == "init":
-        init(Path(a.db), reset=a.reset, demo_password=a.demo_password)
+        init(Path(a.db), reset=a.reset, initial_password=a.initial_password)
     elif a.cmd == "check-llm":
         from webdemo.backend.live import check_llm
         raise SystemExit(0 if check_llm(a.env_file, send=not a.no_send) else 1)
@@ -193,9 +203,7 @@ def _serve_args(p: argparse.ArgumentParser, top: bool = False) -> None:
     p.add_argument("--env-file", **(kw or dict(default=None)), help="읽을 .env (기본: 저장소 루트의 .env)")
     p.add_argument("--llm-concurrency", type=int, **(kw or dict(default=1)), help="동시에 보내는 LLM 요청 수 (기본 1)")
     p.add_argument("--build", action="store_true", **(kw or {}), help="시작 전에 frontend/를 빌드한다 (npm 필요)")
-    p.add_argument("--no-sim", action="store_true", **(kw or {}), help="관제 화면용 레드팀 시뮬레이션 대화를 만들지 않는다")
     p.add_argument("--no-compare", action="store_true", **(kw or {}), help="의료진 대화에서 비교 갈래(C0 · C1S)를 계산하지 않는다 (호출 줄이기)")
-    p.add_argument("--trial", **(kw or dict(default=None)), help="의료진이 처음 로그인했을 때 열 환자 (기본 T0014)")
     p.add_argument("--keep", type=int, **(kw or dict(default=12)), help="의료진마다 메모리에 둘 대화 수 (넘으면 DB에만)")
     p.add_argument("--cookie-secure", action="store_true", **(kw or {}), help="https로만 로그인 쿠키를 보낸다 (https 운영)")
     p.add_argument("--no-rule-extract", action="store_true", **(kw or {}),
@@ -203,8 +211,8 @@ def _serve_args(p: argparse.ArgumentParser, top: bool = False) -> None:
 
 
 def _defaults(a: argparse.Namespace) -> argparse.Namespace:
-    for k, v in dict(host="127.0.0.1", port=8000, llm="real", env_file=None, llm_concurrency=1, build=False, no_sim=False,
-                     no_compare=False, trial=None, keep=12, cookie_secure=False, no_rule_extract=False).items():
+    for k, v in dict(host="127.0.0.1", port=8000, llm="real", env_file=None, llm_concurrency=1, build=False,
+                     no_compare=False, keep=12, cookie_secure=False, no_rule_extract=False).items():
         if not hasattr(a, k):
             setattr(a, k, v)
     return a

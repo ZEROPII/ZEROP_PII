@@ -86,6 +86,7 @@ class Persist:
         작업(R…)의 번호를 다시 쓰면, 지난 감사 기록이 엉뚱한 대화를 가리키게 되기 때문이다.
         """
         ids = [r["conv_id"] for r in self.store.q("SELECT conv_id FROM conversation")]
+        ids += [r["job_id"] for r in self.store.q("SELECT job_id FROM redteam_run")]
         for r in self.store.q("SELECT conv_id, detail_json FROM audit"):
             ids.append(r["conv_id"] or "")
             try:

@@ -7,7 +7,7 @@ import { useToast } from '../components/layout/Toast';
 import { QueueTable } from '../components/monitor/QueueTable';
 import { RevealDialog } from '../components/monitor/RevealDialog';
 import { SessionDetail } from '../components/monitor/SessionDetail';
-import type { MonitorDetail, MonitorOverview, MonitorRow, ReviewAction } from '../types/monitor';
+import type { MonitorDetail, MonitorOverview, MonitorRow, ReviewAction, ThreadMessage } from '../types/monitor';
 
 type TabId = 'all' | 'review' | 'danger' | 'caution' | 'safe';
 const TABS: { id: TabId; label: string; match(r: MonitorRow): boolean }[] = [
@@ -23,6 +23,13 @@ const REVIEW_TOAST: Record<ReviewAction, string> = {
   add_rule: '질문 패턴을 규칙 후보에 추가했습니다.',
 };
 const POLL_MS = 3000;
+
+/** 메시지 목록 응답은 공개 승인 메시지의 값을 늘 지운다. 원문을 열람한 상세에서는 이미 받은 값을 그대로 둔다. */
+function keepRevealed(d: MonitorDetail, next: ThreadMessage[]): ThreadMessage[] {
+  if (!d.revealed) return next;
+  const shown = new Map(d.messages.filter((m) => m.kind === 'release' && !m.masked).map((m) => [m.id, m]));
+  return next.map((m) => (m.masked && shown.has(m.id) ? shown.get(m.id)! : m));
+}
 
 function Brief({ o }: { o: MonitorOverview }) {
   const k = o.kpi;
@@ -45,15 +52,18 @@ function Brief({ o }: { o: MonitorOverview }) {
   return (
     <section className="grid gap-5 px-4 pb-4 pt-5 md:px-6 xl:grid-cols-[1fr_auto] xl:items-end">
       <p className="max-w-[30em] text-[21px] font-bold leading-[1.42] tracking-[-0.025em] md:text-2xl">{text}</p>
-      <dl className="flex gap-7">
-        {[
-          [k.sessions, '살핀 대화'],
-          [k.suppressed, '가린 항목'],
-          [k.identified, '기준 아래 사례'],
-        ].map(([v, l]) => (
-          <div key={l} className="min-w-[84px]">
-            <dd className="num text-3xl font-extrabold leading-tight tracking-[-0.03em]">{Number(v).toLocaleString()}</dd>
-            <dt className="text-xs text-ink-2">{l}</dt>
+      <dl className="grid grid-cols-[auto_auto] gap-x-5 gap-y-1 text-[13px] sm:grid-cols-[auto_auto_auto_auto]" aria-label="지금까지 집계">
+        {(
+          [
+            ['살핀 대화', `${k.sessions.toLocaleString()}건`, '관제 목록에 있는 대화 수 (지난 대화 포함)'],
+            ['가린 값', `${k.suppressed.toLocaleString()}개`, '의료진 화면 답의 공개 계획에서 비공개로 정한 단서 수'],
+            ['넓힌 값', `${k.generalized.toLocaleString()}개`, '넓은 범주로 바꿔 보낸 단서 수'],
+            [`기준 ${o.k_req}명 아래 사례`, `${k.identified.toLocaleString()}건`, `지금 후보가 ${o.k_req}명 아래인 사례 수 (승인 공개로 내려간 사례 포함)`],
+          ] as const
+        ).map(([l, v, help]) => (
+          <div key={l} className="contents" title={help}>
+            <dt className="text-ink-3">{l}</dt>
+            <dd className={`num text-right font-semibold ${l.startsWith('기준') && k.identified > 0 ? 'text-danger-text' : 'text-ink'}`}>{v}</dd>
           </div>
         ))}
       </dl>
@@ -116,7 +126,7 @@ export function MonitorPage() {
       // 열람한 상세는 새로 받지 않는다 (다시 가려지지 않게). 목록 행 정보(검토 표시 등)와 메시지만 바꾼다.
       setDetail((d) => (d && row ? { ...d, row } : d));
       monitorApi.thread(selected).then(
-        (t) => setDetail((d) => (d && d.id === selected ? { ...d, row: t.row, messages: t.messages } : d)),
+        (t) => setDetail((d) => (d && d.id === selected ? { ...d, row: t.row, messages: keepRevealed(d, t.messages) } : d)),
         () => undefined,
       );
       return;
@@ -172,12 +182,12 @@ export function MonitorPage() {
     const sid = selected;
     if (kind === 'check_request') {
       const ok = await review('ask_clinician', text);
-      if (ok) monitorApi.thread(sid).then((t) => setDetail((d) => (d && d.id === sid ? { ...d, row: t.row, messages: t.messages } : d)), () => undefined);
+      if (ok) monitorApi.thread(sid).then((t) => setDetail((d) => (d && d.id === sid ? { ...d, row: t.row, messages: keepRevealed(d, t.messages) } : d)), () => undefined);
       return ok;
     }
     try {
       const t = await monitorApi.message(sid, 'reply', text, caseRef);
-      setDetail((d) => (d && d.id === sid ? { ...d, row: t.row, messages: t.messages } : d));
+      setDetail((d) => (d && d.id === sid ? { ...d, row: t.row, messages: keepRevealed(d, t.messages) } : d));
       toast('의료진에게 답장을 보냈습니다.');
       await loadOverview();
       return true;
@@ -226,7 +236,7 @@ export function MonitorPage() {
           </div>
           <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
             {rows.length ? (
-              <QueueTable rows={rows} selected={selected} onSelect={select} kReq={overview.k_req} />
+              <QueueTable rows={rows} selected={selected} onSelect={select} kReq={overview.k_req} pRef={overview.p_ref} />
             ) : (
               <EmptyState message={tab === 'review' ? '지금 확인할 대화가 없습니다.' : '이 조건에 맞는 대화가 없습니다.'} />
             )}
@@ -238,7 +248,17 @@ export function MonitorPage() {
           {detailError ? (
             <ErrorState message={detailError} />
           ) : detail && detail.id === selected ? (
-            <SessionDetail detail={detail} busy={busy} onReveal={() => setRevealOpen(true)} onReview={(a) => void review(a)} onMessage={message} />
+            <SessionDetail
+              detail={detail}
+              busy={busy}
+              onReveal={() => setRevealOpen(true)}
+              onReview={(a) => void review(a)}
+              onMessage={message}
+              onDetail={(d) => {
+                setDetail(d);
+                void loadOverview();
+              }}
+            />
           ) : (
             <LoadingState label="대화 상세를 불러오는 중" />
           )}

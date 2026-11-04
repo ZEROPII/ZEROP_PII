@@ -293,7 +293,7 @@ function MessagesView({ focusNonce }: { focusNonce: number }) {
               </p>
               <p
                 className={`mt-1 whitespace-pre-wrap break-words rounded-control px-3 py-2 text-[13px] leading-5 text-ink ${
-                  mine ? 'bg-iris-tint' : m.kind === 'check_request' ? 'border border-iris bg-surface' : 'bg-surface-2'
+                  mine ? 'bg-iris-tint' : m.kind === 'check_request' ? 'border border-iris bg-surface' : m.kind === 'release' ? 'border border-caution bg-caution-tint' : 'bg-surface-2'
                 }`}
               >
                 {m.text}

@@ -60,6 +60,10 @@ export interface PrivacyTransformation {
   levelDescription?: string;
   /** 데모 백엔드만: 이 조치가 걸린 사례 표기 (사례1 …) */
   caseRef?: string;
+  /** 보안 담당자 화면만: 이 값을 그대로 냈다면의 후보 수 */
+  kIfRaw?: number | null;
+  /** 보안 담당자 규칙으로 가린 값 */
+  rule?: boolean;
 }
 
 /** 응답 본문 조각. 보호 조치가 걸린 조각은 transformationId로 메타데이터를 가리킨다. */
@@ -80,6 +84,25 @@ export interface ProtectionResult {
   releaseMode?: string;
   /** 실제 백엔드만: 원 응답 QI 추출 성공 여부. false면 이번 답변의 공개가 k에 반영되지 않았을 수 있다. */
   extractionOk?: boolean;
+  /** 보안 담당자 화면만: 고친 답을 다시 뽑아 확인한 기록 (시도마다) */
+  checks?: ReleaseCheck[];
+}
+
+export interface ReleaseCheck {
+  attempt: number;
+  mode: string;
+  modeLabel: string;
+  ok: boolean;
+  /** reason: EXTRACTION_FAILED · RAW_VALUE_LEFT(가리거나 넓히기로 한 원래 값이 글자 그대로 남음) · NO_CASE_FOUND(사례 표기를 찾지 못함) */
+  cases: {
+    case: string | null;
+    kAfter: number | null;
+    need: number | null;
+    rule: string[] | null;
+    reason: string | null;
+    ok: boolean | null;
+    attributeLabel?: string | null;
+  }[];
 }
 
 // ── 대화 ──────────────────────────────────────────────────────────────────────
@@ -120,6 +143,8 @@ export interface DisclosureHistoryEntry {
   description: string;
   /** 데모 백엔드만: 답에 실제로 나간 값 (그대로면 원래 값, 넓혔으면 넓힌 값, 가렸으면 null) */
   value?: string | null;
+  /** 보안 담당자가 세부 정보 요청을 승인해 공개한 값 */
+  approved?: boolean;
 }
 
 export interface DisclosureHistory {
@@ -202,7 +227,7 @@ export interface PreflightRiskAssessment {
 
 export type ClinicMessageSender = 'clinician' | 'security';
 /** access_request: 의료진의 세부 정보 요청 · check_request: 보호 담당자의 확인 요청 · reply: 답장 */
-export type ClinicMessageKind = 'access_request' | 'check_request' | 'reply';
+export type ClinicMessageKind = 'access_request' | 'check_request' | 'reply' | 'release';
 
 export interface ClinicMessage {
   messageId: string;

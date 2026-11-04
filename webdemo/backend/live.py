@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import json
 import threading
 import time
 from typing import Any
@@ -16,6 +17,9 @@ LLM_CHOICES = ("real", "dry-run", "oracle")
 ORACLE_LABEL = "결정적 응답기 (LLM 호출 없음)"
 DRY_RUN_LABEL = "배선 확인용 가짜 LLM (dry-run, 답 내용 의미 없음)"
 
+
+# 질문 문장을 만드는 역할. 의료진 대화의 사례 검색 질문(턴 0)은 시스템이 보내는 질문이라 결정적 응답기가 만든다.
+QUESTION_ROLES = frozenset({"mutator", "checker", "doc_writer"})
 
 _BACKGROUND = threading.local()
 
@@ -78,6 +82,12 @@ class LiveLLM:
     def usage(self) -> list[dict[str, Any]]:
         return self.inner.usage
 
+    def sibling(self, inner: Any) -> "LiveLLM":
+        """같은 자리(동시 호출 수 · 의료진 질문 우선)를 나눠 쓰는 다른 LLM (레드팀 실행이 호출 수를 따로 세려고 씀)."""
+        s = LiveLLM.__new__(LiveLLM)
+        s.inner, s.lock, s.concurrency, s._slots = inner, self.lock, self.concurrency, self._slots
+        return s
+
     @property
     def waiting(self) -> int:
         """자리를 기다리는 의료진 질문 호출 수 (/api/health 표시용)."""
@@ -116,6 +126,40 @@ def make_live_llm(choice: str, cfg: Any, env_file: str | None = None) -> tuple[A
     from medical.llm import ClientRoleLLM
     s = get_settings(env_file)
     return ClientRoleLLM(LLMClient(s), models=dict(cfg.models), temperature=cfg.temperature), f"실제 LLM ({s.llm_model})"
+
+
+class Turn0LLM:
+    """
+    의료진 대화의 첫 답(턴 0, 사례 검색)을 만들 때 쓰는 LLM.
+      - 사례 검색 질문 문장(mutator · checker)은 결정적 응답기가 만든다 (시스템이 보내는 검색 질문).
+      - 대상 AI 답 · 단서 추출 · 재작성 · 확인 추출은 실제 LLM이 한다.
+      - 턴 0에서는 C1과 C1S가 모두 빈 State에서 시작해 공개 계획과 재작성 요청이 똑같다. 그래서 다음 갈래(next_arm 뒤)는
+        앞 갈래가 받은 답을 같은 요청의 차례대로 다시 쓴다. 한 갈래 안에서 같은 요청을 다시 보내면(형식이 틀려 다시 추출,
+        재작성 두 번째 시도) 실제로 다시 부른다.
+    대화 하나를 만들 때마다 새로 만든다 (받은 답을 다른 대화에 쓰지 않는다).
+    """
+
+    def __init__(self, live: Any, det: Any) -> None:
+        self.live, self.det = live, det
+        self._answers: dict[tuple[str, str, str], list[str]] = {}
+        self._used: dict[tuple[str, str, str], int] = {}
+
+    def next_arm(self) -> None:
+        """다음 갈래의 턴 0을 시작한다: 같은 요청을 처음부터 차례대로 다시 쓴다."""
+        self._used = {}
+
+    def complete(self, role: str, system: str, messages: list[dict[str, str]], **kw: Any) -> str:
+        if role in QUESTION_ROLES:
+            return self.det.complete(role, system, messages, **kw)
+        key = (role, system, json.dumps(messages, ensure_ascii=False))
+        got = self._answers.setdefault(key, [])
+        n = self._used.get(key, 0)
+        self._used[key] = n + 1
+        if n < len(got):
+            return got[n]
+        out = self.live.complete(role, system, messages, **kw)
+        got.append(out)
+        return out
 
 
 def check_llm(env_file: str | None = None, *, send: bool = True, out=print) -> bool:

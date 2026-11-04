@@ -260,9 +260,12 @@ export function EmrPage() {
             <footer className="border-t border-line px-4 py-3.5">
               <button type="button" className="btn-primary h-10 w-full" disabled={busy || !sel} onClick={() => void open()}>
                 {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <ChevronRight className="h-4 w-4" aria-hidden />}
-                {sel ? `${sel.purposeLabel} 참고로 진료 지원 AI 열기` : '진료 목적을 고르세요'}
+                {busy ? '비슷한 사례를 찾는 중' : sel ? `${sel.purposeLabel} 참고로 진료 지원 AI 열기` : '진료 목적을 고르세요'}
               </button>
-              <p className="mt-2 text-xs leading-5 text-ink-3">
+              <p role="status" aria-live="polite" className="mt-2 text-xs leading-5 text-ink-2">
+                {busy ? 'AI가 과거 사례를 찾고, MediCloak이 첫 답을 확인하고 있습니다. 실제 LLM을 쓰면 수십 초 걸릴 수 있습니다.' : ''}
+              </p>
+              <p className="mt-1 text-xs leading-5 text-ink-3">
                 AI에는 이 환자의 요약(연령대, 성별, 주진단, 고려 중인 처치)만 함께 보냅니다. MediCloak은 AI가 찾아 준 과거 사례 쪽에서 나오는 값을 보호합니다.
               </p>
             </footer>

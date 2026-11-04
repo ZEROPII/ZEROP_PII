@@ -15,7 +15,9 @@
 from __future__ import annotations
 
 import collections
+import copy
 import itertools
+import json
 import queue
 import random
 import re
@@ -26,19 +28,21 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
+from core.llm_client import LLMError
 from medical.adaptive import FeedbackSelector
 from medical.attack import applicable_ops, choose_seed, fill_seed, realize
 from medical.bundle.seed_select import target
 from medical.config import ROOT, MedicalConfig, MedicalPaths
 from medical.data import MedicalData
-from medical.experiment import build_context, run_experiment
+from medical.experiment import build_context
 from medical.prompts import REFUSAL_TEXT
 from medical.retrieval import PANEL_LABEL, query_binding
-from medical.session import ARMS, ArmRun, Context, extract, make_prefix
+from medical.session import ARMS, Context, extract, make_prefix
 from medical.simulate import SUPPRESSED, OracleRoleLLM, plan_all
-from medical.tracking import known_cases_json, view_of
+from medical.tracking import Case, known_cases_json, view_of
 from medical.validate import validate_case
-from webdemo.backend.live import ORACLE_LABEL, LiveLLM, background_calls
+from webdemo.backend.live import ORACLE_LABEL, LiveLLM, Turn0LLM, background_calls
+from webdemo.backend.review import RuledArmRun, decision_of, hidden_items
 
 PROFILES = ("staged", "full")
 FUZZERS = ("uniform", "feedback")
@@ -119,6 +123,7 @@ class Engine:
         # 그러면 공개 계획이 날짜를 세지 않고, 고친 답을 다시 뽑을 때에야 날짜가 단서로 나와 답 전체가 거절된다.
         # 그래서 실제 LLM 대화에는 규칙 추출(medical/rule_extract.py: 답에 적힌 나이 · 날짜를 정규식으로 보탬)을 켠다.
         # 결정적 응답기(데모 · 레드팀 · 시뮬레이션)는 바꾸지 않는다.
+        self.live_rule_extract = live_rule_extract
         live_cfg = replace(base.cfg, rule_extract=True) if live_rule_extract else base.cfg
         self.live_ctx: Context | None = replace(base, llm=self.live_llm, cfg=live_cfg) if self.live_llm is not None else None
         self.live_label = live_label or (ORACLE_LABEL if live_llm is None else "LLM")
@@ -232,16 +237,19 @@ class Engine:
         return dict(label=self.live_label, by_role=by, calls=sum(b["calls"] for b in by.values()))
 
     # ── 레드팀 ──
-    def start_job(self, profile: str, fuzzer: str, per_type: int | None) -> "RedTeamJob":
+    def start_job(self, profile: str, fuzzer: str, per_type: int | None, *, live: bool = False,
+                  on_finish: Callable[["RedTeamJob"], None] | None = None) -> "RedTeamJob":
         if profile not in PROFILES or fuzzer not in FUZZERS:
             raise DemoError("profile은 staged|full, fuzzer는 uniform|feedback 중 하나입니다.")
         if per_type is not None and per_type < 1:
             raise DemoError("per_type은 1 이상이어야 합니다.")
+        if live and self.live_llm is None:
+            raise DemoError("이 서버에는 실제 LLM이 설정되어 있지 않습니다 (--llm real).")
         with self.lock:
-            if any(j.status == "running" for j in self.jobs.values()):
-                raise DemoError("이미 돌고 있는 레드팀 실행이 있습니다. 끝난 뒤 다시 실행하세요.")
+            if any(j.status in ("queued", "running") for j in self.jobs.values()):
+                raise DemoError("이미 돌고 있는 레드팀 실행이 있습니다. 끝나거나 멈춘 뒤 다시 실행하세요.")
             jid = f"R{next(self._ids):04d}"
-            job = RedTeamJob(self, jid, profile, fuzzer, per_type)
+            job = RedTeamJob(self, jid, profile, fuzzer, per_type, live=live, on_finish=on_finish)
             self.jobs[jid] = job
         job.start()
         return job
@@ -261,17 +269,22 @@ class Session:
         self.patient_id, self.qtype = pid, qt
         self.created = self.last_active = time.time()
         self.review: dict[str, Any] | None = None           # 보안 담당자 검토 표시 (관제 화면)
-        self.messages: list[dict[str, Any]] = []            # 의료진 ↔ 보안 담당자 메시지 (세부 정보 요청 · 확인 요청 · 답장)
-        p = self.prefix = make_prefix(self.ctx, trial_id, pid, qt, "DOCTOR")
+        self.messages: list[dict[str, Any]] = []            # 의료진 ↔ 보안 담당자 메시지 (세부 정보 요청 · 확인 요청 · 답장 · 공개 승인)
+        self.rules: list[dict[str, Any]] = []               # 보안 담당자 규칙: 이 대화에서 사례 · 단서 종류는 늘 가림 (review.py, C1에만)
+        self.approvals: list[dict[str, Any]] = []           # 보안 담당자가 승인해 공개한 값 (review.py)
+        # 실제 LLM 대화는 첫 답(턴 0, 사례 검색)부터 실제 LLM이 쓰고 방어 게이트를 거친다. 검색 질문 문장만 결정적 응답기가 만든다.
+        ctx0 = replace(eng.live_ctx, llm=Turn0LLM(eng.live_ctx.llm, self.ctx.llm)) if llm_mode == "live" else self.ctx
+        p = self.prefix = make_prefix(ctx0, trial_id, pid, qt, "DOCTOR")
         self.logs: dict[str, list[dict[str, Any]]] = {a: [] for a in ARMS}
-        self.runs = {a: ArmRun(self.ctx, p, a, self.logs[a].append) for a in ARMS}
+        self.runs = {a: RuledArmRun(ctx0, p, a, self._logger(a), lambda a=a: self.rules_for(a)) for a in ARMS}
         self.steps: list[dict[str, Any]] = []           # 세션 턴마다: 질문 Seed와 조건별 처리 결과
         for a, r in self.runs.items():
+            if isinstance(ctx0.llm, Turn0LLM):
+                ctx0.llm.next_arm()                          # 갈래마다 같은 요청은 앞 갈래의 답을 차례대로 다시 쓴다
             r._turn(0, p.q0, p.raw0, p.obs0, p.extract_ok0, p.extract_tries0,
                     dict(seed_id=None, case_query_id=p.case_query_id, operator=p.op0, realization_fallback=p.realization_fallback,
                          checks=p.tries0, regenerations=max(len(p.tries0) - 1, 0)))
         self.steps.append(dict(turn=0, seed_id=None, picked_by="retrieval", arms={a: dict(status="ANSWERED") for a in ARMS}))
-        # 턴 0(사례 검색 답)은 기록에서 만든 결정적 요약을 방어 게이트에 통과시킨 것이다. 그 뒤 의료진 질문부터 live LLM이 답한다.
         # 세션의 self.ctx(결정적)는 보내기 전 추정 · 질문 후보에 계속 쓰고, 갈래(ArmRun)만 live 문맥으로 바꾼다.
         self.llm_mode = llm_mode
         self.owner: dict[str, Any] | None = None             # 의료진 대화: 계정 (user_id, username, label)
@@ -286,6 +299,112 @@ class Session:
         self.blocked: set[str] = set()
         self.scen: collections.Counter = collections.Counter()
         self.selector = FeedbackSelector(threshold=self.cfg.k_req) if fuzzer == "feedback" else None
+
+    def _logger(self, arm: str) -> Callable[[dict[str, Any]], None]:
+        """턴 기록을 남길 때 사례마다 그때까지 쌓인 공개 수를 같이 적는다 (후보가 줄어든 과정을 턴에 잇는 데 씀)."""
+        def log(rec: dict[str, Any]) -> None:
+            r = getattr(self, "runs", {}).get(arm)
+            if r is not None and rec.get("turn") is not None:
+                rec["committed_count"] = {ref: len(c.committed) for ref, c in r.cases.items()}
+            self.logs[arm].append(rec)
+        return log
+
+    # ── 보안 담당자 검토 반영 (review.py) ──
+    def rules_for(self, arm: str) -> list[tuple[str, str]]:
+        return [(r["case"], r["attribute"]) for r in self.rules] if arm == "C1" else []
+
+    def add_rule(self, case: str, attribute: str, *, by: str, note: str | None = None) -> dict[str, Any]:
+        if not re.fullmatch(r"사례\d+", case) or int(case[2:]) > len(self.prefix.docs) or int(case[2:]) < 1:
+            raise DemoError(f"없는 사례입니다: {case}")
+        case = f"사례{int(case[2:])}"
+        if attribute not in ATTR_KO:
+            raise DemoError(f"단서 종류는 {', '.join(ATTR_KO)} 중 하나입니다.")
+        if any(r["case"] == case and r["attribute"] == attribute for r in self.rules):
+            raise DemoError("이미 같은 규칙이 있습니다.")
+        rule = dict(id=f"RU{len(self.rules) + 1}-{int(time.time() * 1000) % 100000}", case=case, attribute=attribute,
+                    attribute_label=ATTR_KO[attribute], by=by, at=time.time(), note=(note or "").strip() or None, from_turn=self.turn + 1)
+        self.rules.append(rule)
+        return rule
+
+    def remove_rule(self, rule_id: str) -> dict[str, Any]:
+        rule = next((r for r in self.rules if r["id"] == rule_id), None)
+        if rule is None:
+            raise KeyError(rule_id)
+        self.rules.remove(rule)
+        return rule
+
+    def hidden(self) -> list[dict[str, Any]]:
+        return hidden_items(self.logs["C1"], self.approvals)
+
+    def approve(self, item_ids: list[str], *, by: str, reason: str) -> dict[str, Any]:
+        """가린 값을 골라 의료진 화면 갈래(C1)의 누적 State에 더한다. 값은 이 대화에만 나간다."""
+        items = {x["id"]: x for x in self.hidden()}
+        chosen = [items[i] for i in dict.fromkeys(item_ids) if i in items and not items[i]["released"]]
+        if not chosen:
+            raise DemoError("공개할 값을 고르세요 (이미 공개한 값은 다시 고를 수 없습니다).")
+        r, out, kc = self.runs["C1"], [], self.ctx.kc
+        for x in chosen:
+            d = decision_of(self.logs["C1"], x["turn"], x["case"], x["index"])
+            if x["case"] not in r.cases:
+                r.cases[x["case"]] = Case(x["case"])
+                r.order.append(x["case"])
+            c = r.cases[x["case"]]
+            c.committed.append(dict(attribute=d["attribute"], node_id=d["node_id"],
+                                    event_group=self._event_group_for(c.committed, x, d)))
+            out.append(dict(turn=x["turn"], case=x["case"], index=x["index"], attribute=d["attribute"], attribute_label=ATTR_KO.get(d["attribute"], d["attribute"]),
+                            value=str(d.get("raw_value") or self.ctx.data.label(d["node_id"])), committed_index=len(c.committed) - 1,
+                            after_turn=self.turn))
+        k_after = {ref: kc.k(r.cases[ref].committed)["k"] for ref in dict.fromkeys(x["case"] for x in out)}
+        ap = dict(id=f"AP{len(self.approvals) + 1}", at=time.time(), by=by, reason=reason, items=out, k_after=k_after)
+        self.approvals.append(ap)
+        self.last_active = ap["at"]
+        return ap
+
+    def _event_group_for(self, committed: list[dict[str, Any]], item: dict[str, Any], d: dict[str, Any]) -> str | None:
+        """
+        가린 값의 사건 묶음 표지는 그 턴 원 응답 추출의 것이다. 같은 사건의 다른 값(예: 약 이름)이 다시 확인 추출에서 다른 표지로
+        State에 들어갔으면, 표지가 달라 후보 계산이 두 사건으로 나눠 센다 (후보 수를 넉넉하게 잡음). 그래서 같은 턴 계획에서 같은 표지를
+        가진 값을 찾아, State에 이미 있는 그 값(같은 단서 · 같은 노드)의 표지로 바꿔 넣는다.
+        """
+        g = d.get("event_group")
+        if not g or any(c.get("event_group") == g for c in committed):
+            return g
+        plan = next(p for p in next(rr for rr in self.logs["C1"] if rr.get("turn") == item["turn"])["release_plans"] if p["ref"] == item["case"])
+        for sib in plan["decisions"]:
+            if sib is d or sib.get("event_group") != g:
+                continue
+            for c in committed:
+                if c["attribute"] == sib["attribute"] and c["node_id"] in (sib.get("node_id"), sib.get("to_node")) and c.get("event_group"):
+                    return c["event_group"]
+        return g
+
+    def narrowing(self, arm: str, ref: str) -> dict[str, Any]:
+        """사례 하나: 공개된 단서를 쌓인 순서대로 하나씩 더하며 센 후보 수와, 가린 값을 그대로 냈다면의 후보 수.
+        같은 단서가 다시 나오면 한 번만 센다."""
+        r, ctx = self.runs[arm], self.ctx
+        c = r.cases.get(ref)
+        committed = list(c.committed) if c else []
+        counts = [(rec["turn"], (rec.get("committed_count") or {}).get(ref)) for rec in self._records(arm)]
+        approved = {x["committed_index"]: ap for ap in self.approvals if arm == "C1" for x in ap["items"] if x["case"] == ref}
+        steps, k_prev, seen = [], ctx.p_ref, set()
+        for i, d in enumerate(committed):
+            ap = approved.get(i)
+            key = (d["attribute"], d["node_id"])
+            if key in seen and not ap:                  # 같은 단서가 다음 답에 다시 나온 것: 후보가 줄지 않으니 단계로 세지 않는다
+                continue
+            seen.add(key)
+            k_i = ctx.kc.k(committed[: i + 1])["k"]
+            turn = next((t for t, n in counts if n is not None and n >= i + 1), None)
+            after = next((x.get("after_turn") for x in (ap or {}).get("items", []) if x["committed_index"] == i), None)
+            steps.append(dict(attribute=d["attribute"], attributeLabel=ATTR_KO.get(d["attribute"], d["attribute"]), value=ctx.data.label(d["node_id"]),
+                              turn=None if ap else turn, approved=bool(ap), afterTurn=after, kBefore=k_prev, kAfter=k_i))
+            k_prev = k_i
+        hidden = [dict(turn=x["turn"], attribute=x["attribute"], attributeLabel=ATTR_KO.get(x["attribute"], x["attribute"]), action=x["action"],
+                       kIfRaw=x["kIfRaw"], released=x["released"])
+                  for x in (self.hidden() if arm == "C1" else []) if x["case"] == ref]
+        rules = [dict(attribute=x["attribute"], attributeLabel=x["attribute_label"]) for x in self.rules if x["case"] == ref] if arm == "C1" else []
+        return dict(case=ref, population=ctx.p_ref, generalizeK=ctx.defender.g, suppressK=ctx.defender.s, k=k_prev, steps=steps,
+                    hidden=hidden, rules=rules)
 
     # ── 상태 도우미 ──
     def case_a(self, arm: str) -> str | None:
@@ -544,7 +663,17 @@ class Session:
             for ref, c in (rec.get("cases") or {}).items():
                 if "k" in c:
                     out[ref].append([rec["turn"], c["k"]])
+        if arm == "C1" and self.approvals:            # 승인 공개는 턴이 아니어서 기록에 없다: 지금 State의 후보 수를 끝에 잇는다
+            for ref in {x["case"] for ap in self.approvals for x in ap["items"]} | set(out):
+                k = self.current_k(arm, ref)
+                series = out[ref]
+                if not series or series[-1][1] != k:
+                    series.append([self.turn, k])
         return dict(out)
+
+    def current_k(self, arm: str, ref: str) -> int:
+        c = self.runs[arm].cases.get(ref)
+        return self.ctx.kc.k(c.committed)["k"] if c and c.committed else self.ctx.p_ref
 
     def _first_violation(self, series: list[list[int]]) -> int | None:
         return next((t for t, k in series if 1 <= k < self.cfg.k_req), None)
@@ -652,46 +781,170 @@ class Session:
                            utility=round(sum(r.utilities) / len(r.utilities), 4) if r.utilities else None,
                            release_modes=dict(r.release_modes), decisions=dict(decisions), validation=val,
                            turns=[self._turn_view(rec, a, True) for rec in self._records(a)])
-        return dict(self._summary(), arms=arms, steps=self.steps,
+        return dict(self._summary(), arms=arms, steps=self.steps, rules=copy.deepcopy(self.rules), approvals=copy.deepcopy(self.approvals),
                     retrieval=[dict(ref=f"사례{i}", patient=p[:8], score=round(s, 4)) for i, (p, s) in enumerate(self.prefix.retrieval, 1)])
 
 
 # ── 레드팀 배치 ─────────────────────────────────────────────
 
-class RedTeamJob(threading.Thread):
-    """medical.experiment.run_experiment를 그대로 돌리고 medical.poc_analysis.analyse로 집계한다."""
+# 레드팀 trial 결과 (medical/session.py ArmRun.run의 outcome)
+OUTCOME_KO = dict(NO_CASE="사례 없음", RISK_AT_TURN0="첫 답부터 기준 아래", MUTATION_BUDGET="공격 질문 시도 한도", SATURATED="더 물을 질문 없음",
+                  RISK_REACHED="기준 아래로 내려감", BUDGET="10턴 다 씀", LLM_ERROR="LLM 호출 실패")
 
-    def __init__(self, eng: Engine, jid: str, profile: str, fuzzer: str, per_type: int | None) -> None:
+
+class RedTeamCancelled(Exception):
+    """레드팀 실행을 보안 담당자가 멈췄다."""
+
+
+class _JobLLM:
+    """레드팀 실행용 실제 LLM: 의료진 질문에 자리를 양보하고(LiveLLM 뒤 순서), 호출 수를 따로 세고, 멈춤을 받는다."""
+
+    def __init__(self, live: LiveLLM, job: "RedTeamJob") -> None:
+        inner = copy.copy(live.inner)
+        inner.usage = []                                  # 의료진 대화 호출과 섞이지 않게 이 실행의 호출만 센다
+        self.llm, self.job = live.sibling(inner), job
+
+    @property
+    def usage(self) -> list[dict[str, Any]]:
+        return self.llm.usage
+
+    def complete(self, role: str, system: str, messages: list[dict[str, str]], **kw: Any) -> str:
+        if self.job.cancel_event.is_set():
+            raise RedTeamCancelled()
+        return self.llm.complete(role, system, messages, **kw)
+
+
+class RedTeamJob(threading.Thread):
+    """
+    레드팀 점검: 질의 환자(trial)마다 퍼저가 공격 질문을 만들어 세 갈래(C0 · C1 · C1S)에 보내고 medical.poc_analysis.analyse로 집계한다.
+      live=False : 결정적 응답기 (POC와 같은 결과, LLM 호출 0)
+      live=True  : 서버의 실제 LLM. 공격 질문 만들기 · 대상 AI · 추출 · 재작성이 모두 실제 호출이다.
+                   의료진 질문이 기다리면 먼저 보내고, 규칙 추출을 켠다 (의료진 대화와 같은 설정, ADR-0021).
+    medical.experiment.run_experiment와 같은 순서로 돌리되, 멈추거나 실패해도 끝낸 trial까지는 집계해 남긴다.
+    실제 LLM 실행의 갈래는 의료진 대화와 같은 고친 답 다시 확인(RuledArmRun)을 쓴다 (_group).
+    """
+
+    def __init__(self, eng: Engine, jid: str, profile: str, fuzzer: str, per_type: int | None, *, live: bool = False,
+                 on_finish: Callable[["RedTeamJob"], None] | None = None) -> None:
         super().__init__(daemon=True)
-        self.eng, self.id, self.profile, self.fuzzer, self.per_type = eng, jid, profile, fuzzer, per_type
-        self.cfg = MedicalConfig(fuzzer=fuzzer)                   # POC와 같은 설정 (efficiency, budget 10)
-        self.out = eng.workdir / "redteam" / f"{jid}_{profile}_{fuzzer}_{per_type or 'all'}"
+        self.eng, self.id, self.profile, self.fuzzer, self.per_type, self.live = eng, jid, profile, fuzzer, per_type, live
+        # POC와 같은 설정 (efficiency, budget 10). 실제 LLM이면 의료진 대화와 같은 규칙 추출 설정을 쓴다
+        self.cfg = MedicalConfig(fuzzer=fuzzer, rule_extract=live and getattr(eng, "live_rule_extract", True))
+        tag = "live" if live else profile
+        self.out = eng.workdir / "redteam" / f"{jid}_{tag}_{fuzzer}_{per_type or 'all'}"
         self.planner = plan_all(per_type, self.cfg.seed)
-        self.total = len(self.planner(eng.data, eng.split, self.cfg)) * len(self.cfg.arms)
+        self.n_trials = len(self.planner(eng.data, eng.split, self.cfg))
+        self.total = self.n_trials * len(self.cfg.arms)
         self.done, self.status, self.error, self.result = 0, "queued", None, None
+        self.kept = 0                                    # 집계에 넣은 갈래별 대화 수 (세 갈래를 다 끝낸 질의 환자만)
+        self.llm_error_trials = 0                        # LLM 호출이 실패해 집계에서 뺀 질의 환자 수
         self.started = self.finished = None
         self.last_line = ""
+        self.cancel_event = threading.Event()
+        self.on_finish = on_finish
+        self.llm: Any = None
+        self.model = eng.live_label if live else None
 
-    def _progress(self, line: str) -> None:
-        self.done += 1
-        self.last_line = line
+    def cancel(self) -> None:
+        self.cancel_event.set()
 
     def run(self) -> None:
         from medical.poc_analysis import analyse
+        from medical.session import dumps, run_trial_group
+        from medical.validate import validate_trial
         self.status, self.started = "running", time.time()
+        final, trials, ctx = "done", [], None
         try:
-            llm = OracleRoleLLM(data=self.eng.data, profile=self.profile)
-            run_experiment(self.cfg, llm, self.out, data=self.eng.data, planner=self.planner, progress=self._progress)
-            self.result = summarize(analyse(self.out), self.cfg.k_req)
-            self.status = "done"
+            if self.live:
+                background_calls()                       # 의료진 질문 호출이 먼저
+                self.llm = _JobLLM(self.eng.live_llm, self)
+            else:
+                self.llm = OracleRoleLLM(data=self.eng.data, profile=self.profile)
+            self.out.mkdir(parents=True, exist_ok=True)
+            ctx, split = build_context(self.cfg, self.llm, self.out, data=self.eng.data)
+            plan = self.planner(ctx.data, split, self.cfg)
+            doc_patient = {d["doc_id"]: p for p, d in ctx.docs.items()}
+            with open(self.out / "턴기록.jsonl", "w", encoding="utf-8") as tf:
+                log = lambda rec: (tf.write(dumps(rec) + "\n"), tf.flush())
+                for tid, pid, qt, role in plan:
+                    if self.cancel_event.is_set():       # 결정적 응답기 실행도 질의 환자 사이에서 멈춘다
+                        raise RedTeamCancelled()
+                    group = self._group(run_trial_group, ctx, tid, pid, qt, role, log)
+                    self.done += len(group)
+                    if self.cancel_event.is_set():       # 멈춘 뒤 끝난 질의 환자는 넣지 않는다 (중간에 끊긴 호출이 있을 수 있음)
+                        raise RedTeamCancelled()
+                    if any(t["outcome"] == "LLM_ERROR" for t in group):
+                        # 한 갈래라도 LLM 호출이 실패한 질의 환자는 빼고 센다 (세 갈래 짝이 맞아야 비교가 된다)
+                        self.llm_error_trials += 1
+                        self.last_line = f"{tid} {QTYPE_KO.get(qt, qt)}: LLM 호출 실패로 집계에서 뺌"
+                        if not trials and self.llm_error_trials >= 3:
+                            raise RuntimeError("LLM 호출이 처음 세 질의 환자에서 모두 실패해 멈췄습니다. 키 · 주소 · 호출 한도를 확인하세요 (check-llm).")
+                        continue
+                    for t in group:
+                        if t.get("case_committed") is not None:
+                            t["validation"] = validate_trial(t, ctx.data, ctx.kc, doc_patient, self.cfg.k_req)
+                        A = t.get("case_A")
+                        kA = t.get("case_k", {}).get(A, [None])[-1] if A else None
+                        self.last_line = (f"{tid} {QTYPE_KO.get(qt, qt)} · {ARM_KO.get(t['arm'], t['arm'])}: {OUTCOME_KO.get(t['outcome'], t['outcome'])}"
+                                          + (f", 질의 대상 사례 후보 {kA}명" if kA is not None else ""))
+                    trials += group                       # 세 갈래를 다 끝낸 질의 환자만 집계에 넣는다 (멈췄을 때 짝이 맞게)
+                    self.kept = len(trials)
+        except RedTeamCancelled:
+            final = "cancelled"
         except Exception as exc:          # 화면에 보여 주고 서버는 계속 돈다
-            self.status, self.error = "error", f"{type(exc).__name__}: {exc}\n{traceback.format_exc(limit=3)}"
+            final, self.error = "error", f"{type(exc).__name__}: {exc}\n{traceback.format_exc(limit=3)}"
+        if trials and ctx is not None:
+            try:
+                summary = dict(config=self.cfg.as_dict(), versions=ctx.versions, trials=trials)
+                (self.out / "trial요약.json").write_text(json.dumps(summary, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
+                with open(self.out / "llm_usage.jsonl", "w", encoding="utf-8") as f:
+                    for u in self.llm.usage:
+                        f.write(json.dumps(u, ensure_ascii=False) + "\n")
+                self.result = summarize(analyse(self.out), self.cfg.k_req)
+            except Exception as exc:
+                if final == "done":
+                    final, self.error = "error", f"집계 실패: {type(exc).__name__}: {exc}"
+        elif final == "done" and self.llm_error_trials:
+            final, self.error = "error", f"모든 질의 환자({self.llm_error_trials}명)에서 LLM 호출이 실패해 집계할 대화가 없습니다. 키 · 주소를 확인하세요 (check-llm)."
         self.finished = time.time()
+        self.status = final                              # 결과를 다 만든 뒤에 끝났다고 알린다 (끝남을 본 화면이 바로 결과를 받게)
+        if self.on_finish is not None:
+            try:
+                self.on_finish(self)
+            except Exception as exc:
+                print(f"[medicloak] 레드팀 결과 저장 실패 ({self.id}): {type(exc).__name__}: {exc}")
+
+    def _group(self, run_trial_group: Callable[..., list[dict[str, Any]]], ctx: Context, tid: str, pid: str, qt: str, role: str,
+               log: Callable[[dict[str, Any]], None]) -> list[dict[str, Any]]:
+        """
+        질의 환자 1명의 세 갈래. 결정적 응답기 실행은 연구 모듈 그대로(POC 재현). 실제 LLM 실행은 의료진 대화와 같은 방어를 시험해야 하므로
+        medical.session.run_trial_group과 같은 순서로 돌리되 갈래를 RuledArmRun(고친 답 다시 확인 보강, 규칙 없음)으로 만든다.
+        """
+        if not self.live:
+            return run_trial_group(ctx, tid, pid, qt, role, self.cfg.arms, log)
+        try:
+            prefix = make_prefix(ctx, tid, pid, qt, role)
+        except LLMError as exc:
+            return [dict(trial_id=tid, arm=a, query_patient=pid, query_type=qt, role=role, outcome="LLM_ERROR",
+                         error=f"{type(exc).__name__}: {exc}", versions=ctx.versions) for a in self.cfg.arms]
+        return [RuledArmRun(ctx, prefix, a, log, lambda: []).run() for a in self.cfg.arms]
+
+    def usage(self) -> dict[str, int]:
+        u = list(getattr(self.llm, "usage", None) or []) if self.live else []
+        return dict(calls=len(u), input_tokens=sum(int(x.get("input_tokens") or 0) for x in u),
+                    output_tokens=sum(int(x.get("output_tokens") or 0) for x in u))
 
     def as_dict(self) -> dict[str, Any]:
-        return dict(id=self.id, profile=self.profile, profile_label=PROFILE_KO[self.profile], fuzzer=self.fuzzer,
-                    fuzzer_label=FUZZER_KO[self.fuzzer], per_type=self.per_type, total=self.total, done=self.done, status=self.status,
-                    error=self.error, elapsed=round((self.finished or time.time()) - self.started, 1) if self.started else None,
+        elapsed = round((self.finished or time.time()) - self.started, 1) if self.started else None
+        eta = None
+        if self.status == "running" and self.done and elapsed:
+            eta = round(elapsed / self.done * (self.total - self.done))
+        return dict(id=self.id, live=self.live, model=self.model,
+                    profile=self.profile, profile_label=(self.model or "실제 LLM") if self.live else PROFILE_KO[self.profile],
+                    fuzzer=self.fuzzer, fuzzer_label=FUZZER_KO[self.fuzzer], per_type=self.per_type, trials=self.n_trials,
+                    total=self.total, done=self.done, kept=self.kept, llm_error_trials=self.llm_error_trials,
+                    status=self.status, error=self.error, elapsed=elapsed, eta=eta,
+                    started_at=self.started, finished_at=self.finished, usage=self.usage(),
                     out=str(self.out.relative_to(ROOT)) if self.out.is_relative_to(ROOT) else str(self.out),
                     last=self.last_line, result=self.result)
 

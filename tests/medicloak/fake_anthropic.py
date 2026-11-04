@@ -1,8 +1,10 @@
 # 테스트용 가짜 Anthropic Messages API (core.llm_client.LLMClient의 session 자리에 끼운다).
 #
 # 실제 키 · 네트워크 없이 '--llm real' 경로(ClientRoleLLM → LLMClient → HTTP)를 끝까지 돌리기 위한 것.
-#   대상 AI   : 질문이 가리킨 사례 문서에서 처방 약 하나와 첫 처방 시작일을 문장으로 답한다 (실제 LLM처럼 줄 형식 없음)
-#   추출기    : 답에 나온 약 이름(MED)과 날짜(PERIOD, MEDICATION_START)를 같은 사건(e1)으로 JSON 배열에 담는다
+#   대상 AI   : 첫 질문(턴 0, 사례 검색)에는 사례마다 진단 하나와 처방 약 하나를 한 줄씩 답한다 (주진단과 같은 진단을 고름).
+#               그 뒤 질문에는 질문이 가리킨 사례 문서에서 처방 약 하나와 첫 처방 시작일을 문장으로 답한다 (실제 LLM처럼 줄 형식 없음)
+#   추출기    : 답에 나온 진단(DX) · 약 이름(MED) · 날짜(PERIOD, MEDICATION_START)를 JSON 배열에 담는다. 약과 그 날짜는 같은 사건(e1).
+#               '(비공개)'로 바뀐 값은 단서로 내지 않는다.
 #   재작성기  : [바꿀 표현]대로 고친다 (넓게 → 넓은 표현 그대로, 빼기 → 그 값을 지움)
 # fail_status를 주면 그 HTTP 상태로 답한다 (401: 키 오류처럼 바로 실패, 429/5xx: 재시도 뒤 실패).
 # period_in_med=True면 추출기가 날짜를 따로 된 PERIOD 단서로 내지 않고 약 항목의 period_start 칸에만 적는다
@@ -31,12 +33,14 @@ class FakeResponse:
 
 
 class FakeAnthropic:
-    def __init__(self, *, fail_status: int | None = None, delay: float = 0.0, drop_date: bool = True, period_in_med: bool = False) -> None:
+    def __init__(self, *, fail_status: int | None = None, delay: float = 0.0, drop_date: bool = True, period_in_med: bool = False,
+                 drop_labels: bool = False) -> None:
         self.calls: list[dict[str, Any]] = []
         self.fail_status = fail_status
         self.delay = delay
         self.drop_date = drop_date
         self.period_in_med = period_in_med
+        self.drop_labels = drop_labels              # 재작성기가 '사례N' 표기를 떨어뜨리는 경우를 흉내 낸다
         self.lock = threading.Lock()
         self.active = 0
         self.max_active = 0
@@ -76,6 +80,8 @@ class FakeAnthropic:
         user = p["messages"][-1]["content"]
         if "[검색된 사례]" in system:
             m = re.search(r"사례\s*(\d+)", user)
+            if m is None and len(p["messages"]) == 1:
+                return self._retrieval_answer(system)
             n = m.group(1) if m else "1"
             block = system.split(f"[사례{n}]")[1].split("\n\n[사례")[0]
             d = re.search(r"처방 약: (.+?)\.\n\[\d+\] 위 약 첫 처방 시작일: (\d{4}-\d{2}-\d{2})", block)
@@ -85,15 +91,25 @@ class FakeAnthropic:
         if user.startswith("너는 의료 대화의 정보 추출기다"):
             resp = user.split("[이번 답변]")[-1]
             obs = []
-            for m in re.finditer(r"(사례\d+) 환자는 (.+?)를 처방받았고", resp):
+            for m in re.finditer(r"(사례\d+) 환자의 진단은 (.+?)(?:이고, (.+?)를 처방받았습니다|입니다)", resp):
+                if m.group(2) != "(비공개)":
+                    obs.append(dict(attribute="DX", raw_value=m.group(2), evidence_spans=[m.group(2)], inference_mode="EXPLICIT", confidence=5,
+                                    case_ref=m.group(1), subject="TARGET_PATIENT", context_status="HISTORY", event_ref="dx1"))
+                if m.group(3) and m.group(3) != "(비공개)":
+                    obs.append(dict(attribute="MED", raw_value=m.group(3), evidence_spans=[m.group(3)], inference_mode="EXPLICIT", confidence=5,
+                                    case_ref=m.group(1), subject="TARGET_PATIENT", context_status="HISTORY", event_ref="e1",
+                                    med_assertion="PRESCRIBED"))
+            for m in re.finditer(r"(사례\d+) 환자는 (.+?)를 처방받았(?:고|습니다)", resp):
                 obs.append(dict(attribute="MED", raw_value=m.group(2), evidence_spans=[m.group(2)], inference_mode="EXPLICIT", confidence=5,
                                 case_ref=m.group(1), subject="TARGET_PATIENT", context_status="HISTORY", event_ref="e1", med_assertion="PRESCRIBED"))
+                end = resp.find("\n", m.end())
+                rest = resp[m.end(): end if end >= 0 else len(resp)]          # 같은 줄의 날짜만 이 약의 날짜로 본다
                 if self.period_in_med:
-                    dm = _DATE.search(resp[m.end():])
+                    dm = _DATE.search(rest)
                     if dm:
                         obs[-1]["period_start"] = dm.group(0)
                     continue
-                for dm in _DATE.finditer(resp[m.end():]):
+                for dm in _DATE.finditer(rest):
                     obs.append(dict(attribute="PERIOD", raw_value=dm.group(0), evidence_spans=[dm.group(0)], inference_mode="EXPLICIT",
                                     confidence=5, case_ref=m.group(1), subject="TARGET_PATIENT", context_status="HISTORY", event_ref="e1",
                                     time_role="MEDICATION_START"))
@@ -110,5 +126,22 @@ class FakeAnthropic:
                 s = re.search(r"'([^']+)' → 빼기", ln)
                 if s and self.drop_date:
                     resp = resp.replace(f"를 처방받았고, 첫 처방 시작일은 {s.group(1)}입니다", "를 처방받았습니다").replace(s.group(1), "(비공개)")
+            if self.drop_labels:
+                resp = re.sub(r"사례\d+\s*", "", resp)
             return resp
         return "확인"
+
+    @staticmethod
+    def _retrieval_answer(system: str) -> str:
+        panel = system.split("[현재 환자 맥락]", 1)[1].split("[검색된 사례]", 1)[0]
+        main = re.search(r"주진단: (.+)", panel)
+        lines = []
+        for n, block in re.findall(r"\[사례(\d+)\]\n(.*?)(?=\n\n\[사례|\Z)", system.split("[검색된 사례]", 1)[1], re.S):
+            dxs = re.findall(r"\] 진단: (.+?)\.\n", block)
+            dx = next((d for d in dxs if main and d in main.group(1)), dxs[0] if dxs else None)
+            med = re.search(r"\] 처방 약: (.+?)\.\n", block)
+            if dx and med:
+                lines.append(f"사례{n} 환자의 진단은 {dx}이고, {med.group(1)}를 처방받았습니다.")
+            elif dx:
+                lines.append(f"사례{n} 환자의 진단은 {dx}입니다.")
+        return "\n".join(lines)

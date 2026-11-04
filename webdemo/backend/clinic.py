@@ -26,11 +26,12 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from api_server.engine import segments_of
-from medical.defense import ALLOW, GENERALIZE, SUPPRESS
+from medical.defense import ALLOW, GENERALIZE, SUPPRESS, SUPPRESSED_MARK as SUPPRESSED
 from webdemo.backend import intent as I
-from webdemo.backend.engine import ATTR_KO, QTYPE_KO, DemoError, Engine, Session, parse_answer
+from webdemo.backend.engine import ATTR_KO, QTYPE_KO, Engine, Session, parse_answer
 
 ATTR_LABEL = dict(AGE="나이", SEX="성별", REGION="거주 지역", DX="진단", PROC="시술", PERIOD="시기", MED="처방 약", PLAN="관리 계획")
+TITLE_ATTRS = ("DX", "MED", "PROC", "PLAN")          # 사례 목록 제목에 쓰는 단서 (진단 + 관련 항목)
 STATE_MODE_LABEL = dict(C0="방어 없음", C1="누적 판정 (대화 전체 기억)", C1S="턴별 판정 (매 턴 새로)")
 DEMO_LOCATION = "MediCloak 데모 (Synthea 합성 환자)"
 MAX_QUESTION = 1000                     # 의료진 질문 한 건의 최대 글자 수 (실제 LLM 호출 비용 · 지연 상한)
@@ -60,6 +61,21 @@ class Slot:
         self.history: list[dict[str, Any]] = []
         self.decisions: list[dict[str, Any]] = []
         self.last_action = ALLOW
+
+
+CHECK_MODE_KO = dict(REWRITTEN="재작성기가 고친 답", REWRITTEN_FALLBACK="값만 글자 그대로 바꾼 답")
+
+
+def _checks(rec: dict[str, Any]) -> list[dict[str, Any]]:
+    """고친 답을 다시 뽑아 확인한 기록 (보안 담당자 화면). 시도마다: 어떤 방식 · 통과 여부 · 사례별 후보 수와 필요한 수 · 규칙 위반 ·
+    원래 값이 글자 그대로 남음(RAW_VALUE_LEFT) · 사례 표기를 찾지 못함(NO_CASE_FOUND)."""
+    out = []
+    for i, a in enumerate(rec.get("release_attempts") or [], 1):
+        cases = [dict(case=c.get("ref"), kAfter=c.get("k_after"), need=c.get("need"), rule=c.get("rule"), reason=c.get("reason"), ok=c.get("ok"),
+                      attributeLabel=ATTR_LABEL.get(c["attribute"], c["attribute"]) if c.get("attribute") else None)
+                 for c in a.get("checks") or []]
+        out.append(dict(attempt=i, mode=a["mode"], modeLabel=CHECK_MODE_KO.get(a["mode"], a["mode"]), ok=bool(a["ok"]), cases=cases))
+    return out
 
 
 def _messages_view(raw: list[dict[str, Any]], case_of_ref: Callable[[str], str | None], label_of: Callable[[str], str]) -> list[dict[str, Any]]:
@@ -94,6 +110,12 @@ class ClinicConversation:
             if "case" in ln:
                 self.titles[ln["case"]][ln["attribute"]] = ln["value"]
         self._absorb(rec0, None)
+        if not self.titles:
+            # 실제 LLM의 첫 답은 '사례1 · [기록5] 진단: …' 줄 형식이 아니다. 사례 목록 제목은 턴 0 공개 판정에서 만든다 (가린 값은 '(비공개)').
+            for sl in self.slots.values():
+                for e in sl.history:
+                    if e["attribute"] in TITLE_ATTRS and e["attribute"] not in self.titles[sl.ref]:
+                        self.titles[sl.ref][e["attribute"]] = e["value"] or SUPPRESSED
 
     @property
     def live(self) -> bool:
@@ -251,6 +273,11 @@ class ClinicConversation:
                     msg = None
                 # plannedAction: 보내면 어떻게 답할지 (의료진 화면은 후보 수 대신 이것만 보고 안내 문구를 만든다)
                 planned = SUPPRESS if acts.get(SUPPRESS) else GENERALIZE if acts.get(GENERALIZE) else None
+                ruled = {(r["case"], r["attribute"]) for r in getattr(self.session, "rules", [])} if self.arm == "C1" else set()
+                if (mine["ref"], seed["target_qi"]) in ruled:
+                    # 보안 담당자 규칙: 이 단서는 후보 수와 상관없이 가린다
+                    planned, warn = SUPPRESS, True
+                    msg = f"이 대화에서 {label}의 {ATTR_KO.get(seed['target_qi'], seed['target_qi'])}은(는) 보안 담당자 규칙으로 가리고 답합니다."
                 # targetCase*: 질문이 가리킨 사례 (고른 탭이 사례 1이어도 '사례5 환자의 나이'면 사례 5)
                 return dict(base, requiresWarning=warn, understood=True, currentK=mine["k_now"], projectedK=mine["k_if_raw"], message=msg,
                             affectedAttributes=mine["attributes"], plannedAction=planned,
@@ -306,6 +333,7 @@ class ClinicConversation:
         data = self.session.ctx.data
         refusal = rec["release_mode"].startswith("REFUSAL")
         cand = rec.get("cases_candidate_k") or {}
+        ruled = {(r["case"], r["attribute"]) for r in getattr(self.session, "rules", []) if r["from_turn"] <= rec["turn"]} if self.arm == "C1" else set()
         tf, entries = [], {cid: [] for cid in self.slots}
         for p in rec.get("release_plans") or []:
             cid = self.case_of_ref(p["ref"])
@@ -317,12 +345,18 @@ class ClinicConversation:
                     value, desc = to_label, f"넓은 범주로 바꿔 공개: {to_label}"
                 elif action == SUPPRESS:
                     value = None
-                    desc = "거절 문장으로 대체" if refusal else (f"가림 (그대로면 후보 {k_raw}명)" if k_raw is not None else "가림")
+                    if refusal:
+                        desc = "거절 문장으로 대체"
+                    elif (p["ref"], x["attribute"]) in ruled:
+                        desc = "보안 담당자 규칙으로 가림"
+                    else:
+                        desc = f"가림 (그대로면 후보 {k_raw}명)" if k_raw is not None else "가림"
                 else:
                     value, desc = str(x.get("raw_value") or to_label or ""), "그대로 공개"
                 label = ATTR_LABEL.get(x["attribute"], x["attribute"])
                 tf.append(dict(id=self._id("tf"), attribute=x["attribute"], attributeLabel=(f"{p['ref'].replace('사례', '사례 ')} {label}"),
-                               action=action, disclosedValue=value, levelDescription=desc, caseRef=p["ref"]))
+                               action=action, disclosedValue=value, levelDescription=desc, caseRef=p["ref"], kIfRaw=k_raw,
+                               rule=(p["ref"], x["attribute"]) in ruled and action == SUPPRESS and not refusal))
                 if cid:
                     turn = rec["turn"] if turn_for_entries is None else turn_for_entries
                     self.slots[cid].decisions.append(dict(x, action=action, turn=turn))
@@ -353,7 +387,8 @@ class ClinicConversation:
         decision = SUPPRESS if SUPPRESS in acts else GENERALIZE if GENERALIZE in acts else ALLOW
         k_after = self.k(s.case_id)
         protection = dict(decision=decision, transformations=tf, kBefore=k_before[s.case_id], kAfter=k_after, explanation=explanation,
-                          releaseMode=mode, extractionOk=bool(rec["extraction_ok"]) if rec else True)
+                          releaseMode=mode, extractionOk=bool(rec["extraction_ok"]) if rec else True,
+                          checks=_checks(rec) if rec else [])
         # engineTurn: 대화 전체의 턴 번호. 공개 이력(entries.turn)과 관제 화면이 이 번호를 쓰므로 의료진 화면이 질문과 이력을 잇는 데 쓴다.
         et = rec["turn"] if rec else None
         user = dict(messageId=cmid, caseId=s.case_id, role="user", turn=turn_no, createdAt=created, segments=[dict(kind="text", text=question)],
@@ -389,11 +424,42 @@ class ClinicConversation:
         how = " 대상 AI의 답을 재작성기가 고친 뒤 다시 확인했습니다." if self.live and rec["release_mode"] == "REWRITTEN" else ""
         return f"{head}일부 값을 보호해 답했습니다 ({what}).{how}"
 
+    # ── 보안 담당자 검토 반영 (review.py) ──
+    def apply_approval(self, ap: dict[str, Any]) -> str:
+        """승인해 공개한 값을 사례 노트(공개 이력)에 더하고, 의료진에게 보낼 메시지 문장을 돌려준다."""
+        lines = []
+        for x in ap["items"]:
+            cid = self.case_of_ref(x["case"])
+            label = ATTR_LABEL.get(x["attribute"], x["attribute"])
+            where = "사례 검색 답" if x["turn"] == 0 else f"질문 {self._question_no(cid, x['turn'])}의 답"
+            if cid:
+                sl = self.slots[cid]
+                sl.history.append(dict(entryId=self._id("dh"), turn=x["turn"], attribute=x["attribute"], attributeLabel=label, action=ALLOW,
+                                       description=f"{x['value']} (보안 담당자 승인)", value=x["value"], approved=True))
+            lines.append(f"{x['case'].replace('사례', '사례 ')} {label}: {x['value']} ({where}에서 가렸던 값)")
+        self.version += 1
+        self.updated_at = _iso()
+        return "세부 정보 요청을 승인해 아래 값을 이 대화에서 공개합니다.\n" + "\n".join(lines)
+
+    def _question_no(self, cid: str | None, engine_turn: int) -> int | str:
+        if cid:
+            for m in self.slots[cid].messages:
+                if m["role"] == "user" and m.get("engineTurn") == engine_turn:
+                    return m["turn"]
+        return engine_turn
+
+    def narrowing(self, case_id: str) -> dict[str, Any]:
+        sl = self.slot(case_id)
+        n = self.session.narrowing(self.arm, sl.ref)
+        for x in n["steps"] + n["hidden"] + n["rules"]:
+            x["attributeLabel"] = ATTR_LABEL.get(x["attribute"], x["attributeLabel"])
+        return dict(n, caseId=case_id, label=sl.label)
+
     # ── DB 스냅숏 (서버를 다시 켠 뒤 읽기 전용으로 보여 줄 화면 계약 전체) ──
     def snapshot(self) -> dict[str, Any]:
         with self.eng.lock:
             per = {cid: dict(conversation=copy.deepcopy(self.conversation(cid)), disclosures=copy.deepcopy(self.disclosures(cid)),
-                             decision=self.policy_decision(cid), risk=self.risk_state(cid)) for cid in self.slots}
+                             decision=self.policy_decision(cid), risk=self.risk_state(cid), narrowing=self.narrowing(cid)) for cid in self.slots}
             return dict(workspace_id=self.workspace_id, version=self.version, updated_at=self.updated_at, labels={cid: s.label for cid, s in self.slots.items()},
                         environment=self.environment(), policy=self.policy(), patient=self.patient_context(),
                         cases=self.similar_cases(f"{self.workspace_id}:patient"), per_case=per)
@@ -460,6 +526,12 @@ class ArchivedConversation:
 
     def risk_states(self) -> list[dict[str, Any]]:
         return [v["risk"] for v in self.snap["per_case"].values()]
+
+    def narrowing(self, case_id: str) -> dict[str, Any]:
+        n = self._case(case_id).get("narrowing")
+        if n is None:                                    # 이 기능 전에 저장한 대화
+            raise NotFound(f"{case_id}: 후보가 줄어든 과정이 저장되지 않은 지난 대화입니다.")
+        return n
 
     def messages(self) -> list[dict[str, Any]]:
         labels = self.snap.get("labels") or {}
@@ -528,7 +600,9 @@ class ClinicDesk:
     def start(self, trial_id: str, *, launch: dict[str, Any] | None = None) -> ClinicConversation:
         with self.lock:
             cur = self._current
-            if cur is not None and cur.session.trial_id == trial_id and cur.session.turn == 0 and not cur.session.messages:
+            first = next((r for r in cur.session.logs[self.arm] if r.get("turn") == 0), None) if cur is not None else None
+            refused0 = bool(first and first["release_mode"].startswith("REFUSAL"))          # 첫 답이 거절이면 새로 시도한다
+            if cur is not None and cur.session.trial_id == trial_id and cur.session.turn == 0 and not cur.session.messages and not refused0:
                 # 같은 환자이고 아직 아무것도 묻지 않은 대화는 그대로 쓴다 (화면을 열 때 만든 기본 대화를 EMR에서 다시 열 때 등)
                 if launch is not None:
                     cur.session.launch = launch

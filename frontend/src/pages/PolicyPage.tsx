@@ -55,11 +55,17 @@ export function PolicyPage() {
         ['그대로 답함', `새 단서를 모두 더해도 후보가 ${p.minK}명보다 많을 때`],
         ['넓혀서 답함', `그 외에, 원래 값으로 후보가 ${p.suppressK}명보다 많으면 후보가 ${p.minK}명을 넘는 가장 가까운 상위 범주로`],
         ['가림', `원래 값으로 후보가 ${p.suppressK}명 이하일 때`],
-        ['기준 집단', `${(p.populationSize ?? 0).toLocaleString()}명 (위험 막대 로그 눈금의 끝)`],
+        ['기준 집단', `${(p.populationSize ?? 0).toLocaleString()}명 (후보 수 로그 눈금의 오른쪽 끝)`],
         ...(p.auth !== undefined
           ? ([
               ['비교 갈래', p.compare ? '방어 없음(C0)은 바로, 턴별 방어(C1S)는 의료진 답을 보낸 뒤 계산' : '계산하지 않음 (--no-compare)'],
               ['서버', `${p.auth ? '로그인 · 역할 분리' : '로그인 없는 데모'} · ${p.persist ? '기록을 DB에 남김' : '기록은 메모리에만 (다시 켜면 지워짐)'}`],
+              ...(p.llmLive
+                ? ([
+                    ['날짜 · 나이 규칙 추출', p.ruleExtract ? '켬: 추출기가 놓친 날짜 · 나이도 답에서 찾아 단서로 셈 (의료진 대화 · 레드팀)' : '끔 (--no-rule-extract)'],
+                  ] as [string, string][])
+                : []),
+              ['검토 반영', '규칙(이 대화에서 사례 · 단서는 늘 가림), 세부 정보 요청 승인 공개 (사유 · 감사 기록)'],
               ...(p.llmUsage ? ([['LLM 호출', `서버를 켠 뒤 ${usageText(p.llmUsage)}`]] as [string, string][]) : []),
             ] as [string, string][])
           : []),

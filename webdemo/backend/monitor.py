@@ -41,14 +41,24 @@ CLINICIAN = "의료진 (데모)"
 SIM_TRIALS = ("T0010", "T0015", "T0036", "T0024", "T0016", "T0005")
 AUDIT_LIMIT = 2000
 
-MSG_KINDS = dict(clinician=("access_request", "reply"), security=("check_request", "reply"))
-MSG_KIND_KO = dict(access_request="세부 정보 요청", check_request="확인 요청", reply="답장")
+MSG_KINDS = dict(clinician=("access_request", "reply"), security=("check_request", "reply", "release"))
+MSG_KIND_KO = dict(access_request="세부 정보 요청", check_request="확인 요청", reply="답장", release="공개 승인")
 # 메시지마다 감사 기록 action. 보안 담당자의 확인 요청은 검토 표시(ask_clinician)와 같은 이름을 쓴다.
 MSG_AUDIT = {("clinician", "access_request"): "access_request", ("clinician", "reply"): "clinician_reply",
-             ("security", "check_request"): "ask_clinician", ("security", "reply"): "security_reply"}
+             ("security", "check_request"): "ask_clinician", ("security", "reply"): "security_reply", ("security", "release"): "approve_release"}
 CHECK_DEFAULT = "이 대화에서 같은 사례의 세부 정보를 여러 번 물으셨습니다. 진료에 필요한 내용이었는지 알려 주세요."
 FLAG_KO = dict(access_request="의료진 세부 정보 요청", reply="의료진 답장 도착")
 ARCHIVED_PENDING = "답하지 못한 요청 (지난 대화)"
+# 관제 화면의 공개 승인 메시지: 열람 전에는 값 대신 이 문장 (의료진에게는 값이 그대로 간다)
+RELEASE_MASKED = "세부 정보 요청을 승인해 가린 값을 이 대화에서 공개했습니다. 공개한 값은 원문 열람 뒤에 보입니다."
+
+
+def mask_messages(msgs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    out = copy.deepcopy(msgs)
+    for m in out:
+        if m.get("kind") == "release":
+            m["text"], m["masked"] = RELEASE_MASKED, True
+    return out
 _CASE_REF = re.compile(r"사례\d+")
 
 
@@ -156,6 +166,9 @@ class Monitor:
             for ref, c in (r.get("cases") or {}).items():
                 if "k" in c:
                     k_now[ref] = c["k"]
+        if getattr(s, "approvals", None):                # 승인 공개 뒤의 후보 수 (턴 기록 밖에서 State가 바뀌었다)
+            refs = set(k_now) | {x["case"] for ap in s.approvals for x in ap["items"]}
+            k_now = {ref: s.current_k(LIVE_ARM, ref) for ref in refs}
         focus = min(min_raw, key=lambda ref: (min_raw[ref], ref)) if min_raw else s.case_a(LIVE_ARM)
         status = "danger" if sup else "caution" if gen else "safe"
         k_req = s.cfg.k_req
@@ -211,7 +224,7 @@ class Monitor:
                    blocked_sessions=sum(r["status"] == "danger" for r in rows), requests=sum(r["pending_request"] for r in rows))
         return dict(kpi=kpi, sessions=rows, simulations=self.sim_status, live_arm=LIVE_ARM, live_arm_label=ARM_KO[LIVE_ARM],
                     k_req=self.eng.cfg.k_req, suppress_threshold=self.eng.cfg.suppress_threshold,
-                    generalize_threshold=self.eng.cfg.generalize_threshold)
+                    generalize_threshold=self.eng.cfg.generalize_threshold, p_ref=self.eng.ctx["staged"].p_ref)
 
     # ── 상세 ──
     def detail(self, s: Any, reveal: bool = False) -> dict[str, Any]:
@@ -226,6 +239,7 @@ class Monitor:
                 msgs = copy.deepcopy(s.messages)
         if not reveal:
             v = mask(v)
+            msgs = mask_messages(msgs)
         return dict(v, row=row, revealed=reveal, source_label=SOURCE_KO.get(s.source, s.source), live_arm=LIVE_ARM, messages=msgs,
                     archived=bool(getattr(s, "archived", False)))
 
@@ -257,6 +271,53 @@ class Monitor:
         with self.eng.lock:
             return self.row(s)
 
+    # ── 검토 반영: 규칙 · 공개 승인 (review.py) ──
+    def add_rule(self, s: Any, case: str, attribute: str, note: str | None, user: dict[str, Any] | None = None) -> dict[str, Any]:
+        if getattr(s, "archived", False):
+            raise Conflict("지난 대화에는 규칙을 더할 수 없습니다.")
+        if getattr(s, "source", None) != "clinic":
+            raise Conflict("규칙은 의료진 대화에만 걸 수 있습니다.")
+        with self.eng.lock:
+            rule = s.add_rule(case, attribute, by=actor_label(user, ACTOR), note=note)
+        self.log("add_rule", s, user=user, case=case, attribute=attribute, note=note)
+        self._changed(s)
+        return rule
+
+    def remove_rule(self, s: Any, rule_id: str, user: dict[str, Any] | None = None) -> dict[str, Any]:
+        if getattr(s, "archived", False):
+            raise Conflict("지난 대화의 규칙은 바꿀 수 없습니다.")
+        with self.eng.lock:
+            rule = s.remove_rule(rule_id)
+        self.log("remove_rule", s, user=user, case=rule["case"], attribute=rule["attribute"])
+        self._changed(s)
+        return rule
+
+    def hidden(self, s: Any) -> list[dict[str, Any]]:
+        if getattr(s, "archived", False):
+            return []
+        with self.eng.lock:
+            return s.hidden()
+
+    def approve(self, s: Any, conv: Any, item_ids: list[str], reason: str, user: dict[str, Any] | None = None) -> dict[str, Any]:
+        """가린 값을 골라 그 의료진의 그 대화에 공개한다. 공개 승인 메시지(값 포함)를 의료진에게 보내고 감사 기록에 남긴다."""
+        if getattr(s, "archived", False):
+            raise Conflict("지난 대화의 값은 공개할 수 없습니다.")
+        if getattr(s, "source", None) != "clinic":
+            raise Conflict("의료진 대화의 값만 공개할 수 있습니다.")
+        if conv is None:
+            raise Conflict("의료진이 이미 다른 환자를 열어, 이 대화에 공개해도 의료진 화면에 보이지 않습니다. 답장으로 안내해 주세요.")
+        reason = (reason or "").strip()
+        if len(reason) < 5:
+            raise ValueError("공개 사유를 5자 이상 써 주세요.")
+        with self.eng.lock:
+            ap = s.approve(item_ids, by=actor_label(user, ACTOR), reason=reason)
+            text = conv.apply_approval(ap)
+        case = ap["items"][0]["case"] if len({x["case"] for x in ap["items"]}) == 1 else None
+        self.log("approve_release", s, user=user, reason=reason, case=case,
+                 items=[dict(turn=x["turn"], case=x["case"], attribute=x["attribute"]) for x in ap["items"]], k_after=ap["k_after"])
+        self.post_message(s, "security", "release", text[:2000], case, audit=False, user=user)
+        return ap
+
     # ── 의료진 ↔ 보안 담당자 메시지 ──
     def post_message(self, s: Any, sender: str, kind: str, text: str, case: str | None = None, *,
                      audit: bool = True, user: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -265,8 +326,9 @@ class Monitor:
         text = (text or "").strip()
         if kind not in MSG_KINDS.get(sender, ()):
             raise ValueError(f"{sender} 메시지 종류는 {', '.join(MSG_KINDS.get(sender, ()))} 중 하나입니다.")
-        if not 2 <= len(text) <= 500:
-            raise ValueError("메시지는 2자 이상 500자 이하로 써 주세요.")
+        limit = 2000 if kind == "release" else 500          # 공개 승인은 고른 값을 모두 적는다
+        if not 2 <= len(text) <= limit:
+            raise ValueError(f"메시지는 2자 이상 {limit}자 이하로 써 주세요.")
         if case is not None and not _CASE_REF.fullmatch(case):
             raise ValueError(f"사례 표시가 올바르지 않습니다: {case}")
         actor = actor_label(user, ACTOR if sender == "security" else CLINICIAN)
@@ -285,10 +347,11 @@ class Monitor:
         return m
 
     def thread(self, s: Any) -> dict[str, Any]:
+        """관제 화면의 메시지 목록 (공개 승인 메시지의 값은 지운다. 값은 사유를 남긴 열람의 상세에서 본다)."""
         if getattr(s, "archived", False):
-            return dict(messages=copy.deepcopy(s.messages), row=self._archived_row(s))
+            return dict(messages=mask_messages(s.messages), row=self._archived_row(s))
         with self.eng.lock:
-            return dict(messages=copy.deepcopy(s.messages), row=self.row(s))
+            return dict(messages=mask_messages(s.messages), row=self.row(s))
 
 
 def mask(view: dict[str, Any]) -> dict[str, Any]:
@@ -319,4 +382,7 @@ def mask(view: dict[str, Any]) -> dict[str, Any]:
                 for it in p["items"]:
                     if it["action"] != "allow":
                         it["raw_value"] = None
+    for ap in v.get("approvals") or []:                 # 승인해 공개한 값도 열람 전에는 지운다 (의료진에게는 나갔다)
+        for it in ap["items"]:
+            it["value"] = None
     return v

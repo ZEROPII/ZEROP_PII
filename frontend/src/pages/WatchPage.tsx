@@ -12,7 +12,7 @@ import { EmptyState, ErrorState, LoadingState } from '../components/common/Statu
 import { DisclosureHistoryPanel } from '../components/disclosure/DisclosureHistoryPanel';
 import { ClueGraph } from '../components/graph/ClueGraph';
 import { ProtectionBadge } from '../components/layout/ProtectionBadge';
-import { RiskPanel } from '../components/risk/RiskPanel';
+import { WatchRiskPanel } from '../components/monitor/WatchRiskPanel';
 import { entryValue } from '../lib/caseNote';
 import { ATTR_LABEL } from '../lib/clinicianCopy';
 import type { ClueFact } from '../lib/clueGraph';
@@ -38,7 +38,9 @@ function WhatIfBox({ caseId, sessionId, label, version }: { caseId: CaseId; sess
   const suggestions = useSuggestions(caseId, version);
   const a = pf.assessment && pf.assessment.caseId === caseId && pf.assessment.question === q.trim() ? pf.assessment : null;
 
-  let result: ReactNode = <span className="text-ink-3">질문을 넣으면 그대로 답했을 때의 후보 수와 방어 규칙이 할 일을 셉니다.</span>;
+  let result: ReactNode = (
+    <span className="text-ink-3">질문을 넣으면 사례 기록대로 답한다고 보고 후보 수와 방어 규칙이 할 일을 셉니다. 대상 AI는 부르지 않습니다.</span>
+  );
   if (pf.status === 'checking') result = <span className="text-ink-3">후보 수를 세는 중</span>;
   else if (pf.status === 'error') result = <span className="text-danger-text">미리 세지 못했습니다.</span>;
   else if (a?.supported === false) result = <span className="text-ink-3">{a.message ?? '이 서버는 미리 세기를 지원하지 않습니다.'}</span>;
@@ -54,7 +56,7 @@ function WhatIfBox({ caseId, sessionId, label, version }: { caseId: CaseId; sess
     result = (
       <span className="inline-flex gap-1.5 text-safe-text">
         <StatusIcon tone="safe" className="mt-1 h-2.5 w-2.5 shrink-0" />
-        그대로 답해도 후보 {a.projectedK.toLocaleString()}명입니다 (기준 통과).
+        기록대로 답하면 후보 {a.projectedK.toLocaleString()}명입니다 (기준 통과).
       </span>
     );
 
@@ -337,7 +339,7 @@ function WatchBody({ sid: sidProp, item }: { sid: string | null; item: WatchItem
       )}
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto p-3 md:px-6 md:pb-6 lg:grid-cols-[288px_minmax(380px,1fr)_minmax(320px,380px)] lg:overflow-hidden">
         <aside aria-label="재식별 위험" className="scroll-thin lg:min-h-0 lg:overflow-y-auto">
-          <RiskPanel />
+          <WatchRiskPanel sid={sid} />
         </aside>
         <section aria-label="의료진 대화" className="flex min-h-[520px] flex-col lg:min-h-0">
           <TranscriptPanel />

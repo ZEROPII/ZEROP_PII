@@ -132,7 +132,15 @@ export function PatientBanner() {
           </span>
           진료 중 환자
         </span>
-        {patient.status === 'error' ? (
+        {state.noConversation ? (
+          <span className="flex min-w-0 flex-1 items-center gap-3 text-xs text-ink-3">
+            열린 환자가 없습니다.
+            <NavLink to="/emr" className="btn-ghost btn-sm ml-auto h-7 gap-1 text-ink-2">
+              <ClipboardList className="h-3.5 w-3.5" aria-hidden />
+              외래 진료 목록
+            </NavLink>
+          </span>
+        ) : patient.status === 'error' ? (
           <span className="text-xs text-danger-text">
             환자 정보를 불러오지 못했습니다.{' '}
             <button type="button" className="font-semibold underline" onClick={actions.reloadAll}>

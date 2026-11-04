@@ -33,7 +33,7 @@ export function useBackendInfo(): BackendInfo | null {
           setInfo({
             kind: 'medicloak',
             label: llm?.label ?? '운영 서버',
-            detail: `MediCloak 운영 서버 · 의료진 대화의 대상 AI: ${llm?.label ?? '알 수 없음'} · 보내기 전 확인과 레드팀은 결정적 응답기`,
+            detail: `MediCloak 운영 서버 · 대상 AI: ${llm?.label ?? '알 수 없음'} (의료진 대화 · 레드팀 점검). 입력칸의 '보내기 전 확인'만 기록으로 추정합니다.`,
             monitor: true,
             llmLive: !!llm?.live,
           });

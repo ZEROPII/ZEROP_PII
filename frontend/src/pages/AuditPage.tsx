@@ -11,7 +11,10 @@ const ACTION_KO: Record<string, string> = {
   reveal: '원문 열람',
   reviewed: '검토 완료',
   ask_clinician: '의료진에게 확인 요청',
-  add_rule: '질문 패턴을 규칙에 추가',
+  add_rule: '규칙 걸기',
+  remove_rule: '규칙 풀기',
+  approve_release: '가린 값 공개 승인',
+  redteam_cancel: '레드팀 점검 멈춤',
   clinic_start: '의료진 새 대화 시작',
   redteam_start: '레드팀 점검 시작',
   access_request: '의료진 세부 정보 요청',
@@ -26,13 +29,30 @@ const ACTION_KO: Record<string, string> = {
 };
 
 const PURPOSE_KO: Record<string, string> = { PRESCRIPTION: '처방', TREATMENT_PROCEDURE: '시술·치료', COURSE_CARE: '경과·관리' };
+const RELEASE_KO: Record<string, string> = {
+  RAW: '그대로',
+  REWRITTEN: '고쳐 쓴 답',
+  REWRITTEN_FALLBACK: '값만 바꾼 답',
+  REFUSAL: '거절 문장',
+  REFUSAL_EXTRACTION_FAILED: '거절 문장 (추출 실패)',
+};
+const ATTR_KO: Record<string, string> = { AGE: '나이', SEX: '성별', REGION: '거주 지역', PERIOD: '시기', DX: '진단', PROC: '시술', MED: '처방 약', PLAN: '관리 계획' };
 
 /** 사유와 메모 칸: 질문 기록은 본문 대신 어느 사례에 무엇을 보호했는지만 */
 function detailOf(a: AuditEntry): string | null {
   if (a.action === 'clinic_question') {
-    const parts = [a.case ? caseLabel(a.case) : null, a.protected ? `보호 ${a.protected}건` : '보호한 값 없음', a.release ? `공개 방식 ${a.release}` : null];
+    const parts = [a.case ? caseLabel(a.case) : null, a.protected ? `보호 ${a.protected}건` : '보호한 값 없음', a.release ? `내보낸 답 ${RELEASE_KO[a.release] ?? a.release}` : null];
     return parts.filter(Boolean).join(' · ');
   }
+  if (a.action === 'add_rule' || a.action === 'remove_rule') {
+    const what = `${a.case ? caseLabel(a.case) : ''} ${ATTR_KO[a.attribute ?? ''] ?? a.attribute ?? ''}`.trim();
+    return [what, a.note].filter(Boolean).join(' · ') || null;
+  }
+  if (a.action === 'approve_release') {
+    const items = (a.items ?? []).map((x) => `${caseLabel(x.case)} ${ATTR_KO[x.attribute] ?? x.attribute}`).join(', ');
+    return [items, a.reason ? `사유: ${a.reason}` : null].filter(Boolean).join(' · ');
+  }
+  if (a.action === 'redteam_start') return [a.job, a.llm === 'live' ? '실제 LLM' : '결정적 응답기', a.per_type ? `유형마다 ${a.per_type}명` : '전체'].filter(Boolean).join(' · ');
   if (a.action === 'emr_launch') return a.purpose ? `${PURPOSE_KO[a.purpose] ?? a.purpose} 참고` : null;
   if (a.action.startsWith('login') || a.action === 'logout') return a.client ? `접속 주소 ${a.client}` : null;
   return null;

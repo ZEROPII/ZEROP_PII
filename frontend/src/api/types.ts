@@ -55,8 +55,15 @@ export class ApiError extends Error {
   constructor(
     message: string,
     readonly status?: number,
+    /** 서버가 머리글(X-MediCloak-State)로 알린 상태. 예: 'no-conversation' = 운영 모드에서 아직 연 환자가 없음 */
+    readonly state?: string,
   ) {
     super(message);
     this.name = 'ApiError';
   }
+}
+
+/** 운영 모드: 의료진이 아직 EMR에서 환자를 열지 않아 진료 지원 AI 대화가 없다. */
+export function isNoConversation(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 409 && error.state === 'no-conversation';
 }

@@ -1,7 +1,21 @@
 // 보안 담당자 관제 API. 데모 백엔드(python -m webdemo)에만 있다.
 // Mock 모드나 api_server(실제 LLM)에서는 쓸 수 없다는 오류를 돌려주고, 화면이 그 사유를 보여 준다.
 
-import type { AuditEntry, MonitorDetail, MonitorOverview, MonitorPolicy, MonitorRow, PocResult, RedTeamJob, ReviewAction, ThreadResult, WatchItem } from '../types/monitor';
+import type {
+  Approval,
+  AuditEntry,
+  HiddenItem,
+  MonitorDetail,
+  MonitorOverview,
+  MonitorPolicy,
+  MonitorRow,
+  Narrowing,
+  PocResult,
+  RedTeamJob,
+  ReviewAction,
+  ThreadResult,
+  WatchItem,
+} from '../types/monitor';
 import { apiMode } from './index';
 import { API_BASE, notifyUnauthorized } from './session';
 import { ApiError } from './types';
@@ -23,7 +37,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === 'AbortError') throw error;
-    throw new ApiError('서버에 연결할 수 없습니다. 데모 서버가 켜져 있는지 확인하세요.');
+    throw new ApiError('서버에 연결할 수 없습니다. 서버가 켜져 있는지 확인하세요.');
   }
   if (res.status === 401) notifyUnauthorized();
   if (res.status === 404 && path.startsWith('/monitor/overview')) throw new ApiError(MONITOR_UNAVAILABLE, 404);
@@ -62,7 +76,27 @@ export const monitorApi = {
   /** 의료진 대화 목록 (지난 대화 포함). 고른 대화는 /api/watch/{대화}/… 계약으로 본다 */
   watchList: (signal?: AbortSignal) => request<WatchItem[]>('/watch', { signal }),
   poc: (signal?: AbortSignal) => request<PocSummary>('/poc', { signal }),
-  startRedTeam: (per_type: number | null, fuzzer: string) =>
-    request<RedTeamJob>('/redteam', { method: 'POST', body: JSON.stringify({ per_type, fuzzer, profile: 'staged' }) }),
+  /** llm: live(서버의 실제 LLM) · oracle(결정적 응답기) · auto(실제 LLM이 있으면 live) */
+  startRedTeam: (per_type: number | null, fuzzer: string, llm: 'auto' | 'live' | 'oracle' = 'auto') =>
+    request<RedTeamJob>('/redteam', { method: 'POST', body: JSON.stringify({ per_type, fuzzer, profile: 'staged', llm }) }),
+  cancelRedTeam: (id: string) => request<RedTeamJob>(`/redteam/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
+  jobs: (signal?: AbortSignal) => request<RedTeamJob[]>('/redteam', { signal }),
   job: (id: string, signal?: AbortSignal) => request<RedTeamJob>(`/redteam/${encodeURIComponent(id)}`, { signal }),
+  /** 사례 하나에서 후보가 줄어든 과정 (보안 담당자 API, 숫자 그대로) */
+  narrowing: (sid: string, caseId: string, signal?: AbortSignal) =>
+    request<Narrowing>(`/watch/${encodeURIComponent(sid)}/cases/${encodeURIComponent(caseId)}/narrowing`, { signal }),
+  /** 가리거나 넓힌 값 목록 (값 없음). 승인 공개를 고를 때 */
+  hidden: (sid: string, signal?: AbortSignal) => request<HiddenItem[]>(`/monitor/sessions/${encodeURIComponent(sid)}/hidden`, { signal }),
+  approve: (sid: string, items: string[], reason: string) =>
+    request<{ approval: Approval; detail: MonitorDetail }>(`/monitor/sessions/${encodeURIComponent(sid)}/approve`, {
+      method: 'POST',
+      body: JSON.stringify({ items, reason }),
+    }),
+  addRule: (sid: string, caseRef: string, attribute: string, note?: string) =>
+    request<MonitorDetail>(`/monitor/sessions/${encodeURIComponent(sid)}/rules`, {
+      method: 'POST',
+      body: JSON.stringify({ case: caseRef, attribute, note: note || null }),
+    }),
+  removeRule: (sid: string, ruleId: string) =>
+    request<MonitorDetail>(`/monitor/sessions/${encodeURIComponent(sid)}/rules/${encodeURIComponent(ruleId)}`, { method: 'DELETE' }),
 };

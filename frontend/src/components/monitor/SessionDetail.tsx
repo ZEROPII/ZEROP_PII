@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronUp, Eye, Loader2, MailQuestion, MessageSquareText, Network, Send, Stethoscope } from 'lucide-react';
+import { ChevronDown, ChevronUp, Loader2, MailQuestion, MessageSquareText, Network, Send, ShieldCheck, Stethoscope } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ClueFact } from '../../lib/clueGraph';
 import { caseLabel, clockTime, relativeTime } from '../../lib/time';
@@ -8,7 +8,7 @@ import { StatusChip } from '../common/StatusChip';
 import { ClueGraph } from '../graph/ClueGraph';
 import { AnswerTerms } from '../terminology/AnswerTerms';
 import { TermText } from '../terminology/TermText';
-import { CrowdLens } from '../viz/CrowdLens';
+import { ApprovalsList, ApprovePanel, CountsSection, RulesSection } from './ReviewTools';
 
 const TONE = { danger: 'danger', caution: 'caution', safe: 'safe' } as const;
 const ATTR_KO: Record<string, string> = { AGE: '나이', SEX: '성별', REGION: '거주지', PERIOD: '시점', DX: '진단', PROC: '시술', MED: '약', PLAN: '관리 계획' };
@@ -39,21 +39,29 @@ const CHANGE = { suppress: { tone: 'danger', label: '가림' }, generalize: { to
 
 type Group = { kind: 'turn'; turn: TurnView } | { kind: 'fold'; turns: TurnView[] };
 
-function lastK(series: [number, number][] | undefined): number | null {
-  return series && series.length ? series[series.length - 1][1] : null;
+function summarize(d: MonitorDetail): string {
+  const base = summarizeTurns(d);
+  const aps = d.approvals ?? [];
+  if (!aps.length) return base;
+  const n = aps.reduce((s, ap) => s + ap.items.length, 0);
+  return `${base} 그 뒤 보안 담당자가 세부 정보 요청을 승인해 값 ${n}개를 공개했고, 지금 ${caseLabel(d.row.focus_case)} 후보는 ${d.row.k_now ?? '–'}명입니다.`;
 }
 
-function summarize(d: MonitorDetail): string {
+function summarizeTurns(d: MonitorDetail): string {
   const r = d.row;
   const focus = caseLabel(r.focus_case);
   const turns = d.arms[d.live_arm].turns;
+  // 방어 규칙이 지킨 후보 수: 첫 승인 공개 전 마지막 턴 기록 (승인 공개 뒤의 턴은 공개된 값이 더해진 수다)
+  const firstAp = Math.min(...(d.approvals ?? []).flatMap((ap) => ap.items.map((x) => x.after_turn ?? Infinity)));
+  const upto = turns.filter((t) => t.turn <= firstAp);
+  const kTurns = (r.focus_case ? upto[upto.length - 1]?.cases?.[r.focus_case]?.k : null) ?? r.k_now;
   const hits = turns.filter((t) =>
     t.change_notes.some((n) => n.case === r.focus_case && n.changes.some((c) => (r.status === 'danger' ? c.change === 'suppress' : true))),
   ).length;
   if (r.status === 'danger')
-    return `${focus} 환자를 좁히는 질문에 값을 가린 답이 ${hits}번 있었습니다. 그대로 답했다면 후보가 ${r.k_if_raw}명으로 줄어 환자가 특정될 수 있었습니다. 방어 규칙이 값을 가려 후보 ${r.k_now}명을 지켰습니다.`;
+    return `${focus} 환자를 좁히는 질문에 값을 가린 답이 ${hits}번 있었습니다. 그대로 답했다면 후보가 ${r.k_if_raw}명으로 줄어 환자가 특정될 수 있었습니다. 방어 규칙이 값을 가려 후보 ${kTurns}명을 지켰습니다.`;
   if (r.status === 'caution')
-    return `${focus} 답에서 넓은 범주로 바꾼 값이 ${hits}번 있었습니다. 그대로였다면 후보가 ${r.k_if_raw}명이었고, 지금은 ${r.k_now}명입니다.`;
+    return `${focus} 답에서 넓은 범주로 바꾼 값이 ${hits}번 있었습니다. 그대로였다면 후보가 ${r.k_if_raw}명이었고, 답한 뒤에는 ${kTurns}명입니다.`;
   return `모든 답을 그대로 보냈습니다. 후보가 기준 ${d.k_req}명보다 많게 유지되었습니다.`;
 }
 
@@ -79,7 +87,7 @@ function Thread({ messages }: { messages: ThreadMessage[] }) {
             </p>
             <p
               className={`mt-1 whitespace-pre-wrap break-words rounded-control px-3 py-2 text-[13px] leading-5 text-ink ${
-                clin ? (m.kind === 'access_request' ? 'border border-iris bg-surface' : 'bg-surface-2') : 'bg-iris-tint'
+                clin ? (m.kind === 'access_request' ? 'border border-iris bg-surface' : 'bg-surface-2') : m.kind === 'release' ? 'border border-caution bg-caution-tint' : 'bg-iris-tint'
               }`}
             >
               {m.text}
@@ -97,11 +105,15 @@ interface Props {
   onReview(action: ReviewAction): void;
   /** 의료진에게 답장(reply) 또는 확인 요청(check_request) */
   onMessage(kind: 'reply' | 'check_request', text: string, caseRef: string | null): Promise<boolean>;
+  /** 규칙 · 공개 승인 뒤 서버가 돌려준 상세로 바꾼다 */
+  onDetail(d: MonitorDetail): void;
   busy: boolean;
 }
 
-export function SessionDetail({ detail: d, onReveal, onReview, onMessage, busy }: Props) {
+export function SessionDetail({ detail: d, onReveal, onReview, onMessage, onDetail, busy }: Props) {
   const [open, setOpen] = useState<Set<number>>(new Set());
+  const [rulesOpen, setRulesOpen] = useState(false);
+  const [approveOpen, setApproveOpen] = useState(false);
   const [answers, setAnswers] = useState<Set<number>>(new Set());
   const [composer, setComposer] = useState<Composer | null>(null);
   const [graphOpen, setGraphOpen] = useState(false);
@@ -116,6 +128,8 @@ export function SessionDetail({ detail: d, onReveal, onReview, onMessage, busy }
   useEffect(() => {
     setComposer(null);
     setGraphOpen(false);
+    setRulesOpen(false);
+    setApproveOpen(false);
   }, [d.id]);
   useEffect(() => {
     if (composer) composerRef.current?.focus();
@@ -164,9 +178,6 @@ export function SessionDetail({ detail: d, onReveal, onReview, onMessage, busy }
     return out.map((g) => (g.kind === 'fold' && g.turns.length === 1 ? { kind: 'turn', turn: g.turns[0] } : g));
   }, [c1.turns]);
 
-  const c0k = focus ? lastK(d.arms.C0?.k_series[focus]) : null;
-  const c1sk = focus ? lastK(d.arms.C1S?.k_series[focus]) : null;
-  const focusPatient = d.retrieval.find((x) => x.ref === focus)?.patient;
 
   function turnBlock(t: TurnView) {
     const hit = t.change_notes.some((n) => n.changes.some((c) => c.change === 'suppress'));
@@ -279,11 +290,18 @@ export function SessionDetail({ detail: d, onReveal, onReview, onMessage, busy }
               {pending.case && <span className="ml-1 text-ink-2">({caseLabel(pending.case)})</span>}
               <span className="mt-0.5 block text-xs text-ink-2">아래 메시지를 읽고 답장해 주세요. 답장은 의료진 화면의 보호 담당자 메시지에 바로 뜹니다.</span>
             </span>
+            {pending.kind === 'access_request' && (
+              <button type="button" className="btn-secondary btn-sm" aria-expanded={approveOpen} onClick={() => setApproveOpen((v) => !v)}>
+                <ShieldCheck className="h-3.5 w-3.5" aria-hidden />
+                값 공개 승인
+              </button>
+            )}
             <button type="button" className="btn-primary btn-sm" onClick={() => setComposer({ kind: 'reply', text: '' })}>
               답장하기
             </button>
           </div>
         )}
+        {approveOpen && pending && !archived && <ApprovePanel d={d} caseRef={pending.case} onCancel={() => setApproveOpen(false)} onDetail={onDetail} />}
         {r.awaiting_clinician && !pending && <p className="mt-2 text-xs text-ink-3">의료진에게 확인 요청을 보냈고 답을 기다리는 중입니다.</p>}
       </header>
 
@@ -333,50 +351,9 @@ export function SessionDetail({ detail: d, onReveal, onReview, onMessage, busy }
           </section>
         )}
 
-        <div className="grid grid-cols-[140px_1fr] items-center gap-5 border-b border-line px-5 py-4">
-          <CrowdLens k={r.k_now ?? d.p_ref} size={140} threshold={d.k_req} ghost={r.status !== 'safe' ? r.k_if_raw : null} label={`${caseLabel(focus)} 후보 ${r.k_now}명`} />
-          <div className="min-w-0">
-            <p className="num text-[48px] font-extrabold leading-none tracking-[-0.04em]">
-              {r.k_now ?? '–'}
-              <small className="ml-0.5 text-lg font-bold tracking-normal">명</small>
-            </p>
-            <p className="mt-1.5 text-[13px] text-ink-2">{caseLabel(focus)}과 조건이 같은 환자</p>
-            <dl className="mt-3 grid grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-[13px]">
-              {r.k_if_raw != null && r.status !== 'safe' && (
-                <>
-                  <dt className="text-ink-3">가리지 않았다면</dt>
-                  <dd className="font-semibold text-danger-text">{r.k_if_raw}명</dd>
-                </>
-              )}
-              {(c0k != null || c1sk != null) && (
-                <>
-                  <dt className="text-ink-3">다른 방식이었다면</dt>
-                  <dd className="text-ink-2">
-                    {c0k != null && `방어 없음 ${c0k}명`}
-                    {c0k != null && c1sk != null && ', '}
-                    {c1sk != null && `턴별 방어 ${c1sk}명`}
-                  </dd>
-                </>
-              )}
-              <dt className="text-ink-3">기준</dt>
-              <dd>{d.k_req}명 아래로 줄지 않게</dd>
-              <dt className="text-ink-3">환자</dt>
-              <dd className="flex items-center gap-2">
-                {d.revealed ? (
-                  <span className="font-mono text-xs">{focusPatient ?? '–'}</span>
-                ) : (
-                  <>
-                    <span className="redact" style={{ width: 88 }} aria-label="가려진 환자 번호" />
-                    <button type="button" onClick={onReveal} className="btn-ghost btn-sm h-6 px-1.5">
-                      <Eye className="h-3.5 w-3.5" aria-hidden />
-                      사유 적고 보기
-                    </button>
-                  </>
-                )}
-              </dd>
-            </dl>
-          </div>
-        </div>
+        <CountsSection d={d} onReveal={onReveal} />
+        <RulesSection d={d} open={rulesOpen} onOpen={setRulesOpen} onDetail={onDetail} />
+        <ApprovalsList d={d} />
 
         <section aria-label="단서 그래프" className="border-b border-line">
           <button
@@ -439,9 +416,12 @@ export function SessionDetail({ detail: d, onReveal, onReview, onMessage, busy }
           </button>
         )}
         <span className="flex-1" />
-        <button type="button" className="btn-ghost" disabled={busy} onClick={() => onReview('add_rule')}>
-          질문 패턴을 규칙에 추가
-        </button>
+        {!archived && (
+          <button type="button" className="btn-ghost" disabled={busy} aria-expanded={rulesOpen} onClick={() => setRulesOpen((v) => !v)}>
+            <ShieldCheck className="h-4 w-4" aria-hidden />
+            이 대화에 규칙 걸기
+          </button>
+        )}
       </footer>
     </div>
   );

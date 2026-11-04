@@ -7,6 +7,7 @@ import os
 import stat
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -17,12 +18,12 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from core.config import Settings  # noqa: E402
 from core.llm_client import LLMClient  # noqa: E402
-from medical.config import MedicalConfig  # noqa: E402
+from medical.config import ROOT, MedicalConfig  # noqa: E402
 from medical.llm import ClientRoleLLM  # noqa: E402
 from tests.medicloak.fake_anthropic import FakeAnthropic  # noqa: E402
 from webdemo.backend import emr, redact  # noqa: E402
 from webdemo.backend.app import Product, create_app  # noqa: E402
-from webdemo.backend.auth import COOKIE, ensure_demo_accounts, hash_password, token_hash, verify_password  # noqa: E402
+from webdemo.backend.auth import COOKIE, add_user, ensure_initial_accounts, hash_password, token_hash, verify_password  # noqa: E402
 from webdemo.backend.engine import Engine  # noqa: E402
 from webdemo.backend.persist import Persist  # noqa: E402
 from webdemo.backend.store import Store  # noqa: E402
@@ -44,12 +45,12 @@ def world(tmp_path_factory):
     w = tmp_path_factory.mktemp("medicloak")
     store = Store(w / "mc.db")
     emr.load_csv(store, log=lambda s: None)
-    ensure_demo_accounts(store, PW, w / "accounts.txt")
+    ensure_initial_accounts(store, PW, w / "accounts.txt")
     paths = emr.export_csv(store, w / "snap", log=lambda s: None)
     fake = FakeAnthropic()
     eng = Engine(w / "engine", log=lambda s: None, paths=paths, live_llm=fake_llm(fake), live_label="실제 LLM (fake-model-1)",
                  first_id=Persist(store, None).next_id())
-    app = create_app(eng, simulations=False, product=Product(store=store))
+    app = create_app(eng, simulations=True, product=Product(store=store))          # 운영 모드는 시뮬레이션 대화를 만들지 않는다
     base = TestClient(app)
     base.__enter__()                    # lifespan 한 번 (다른 클라이언트는 쿠키만 따로)
     yield dict(dir=w, store=store, fake=fake, eng=eng, app=app, paths=paths)
@@ -78,6 +79,12 @@ def current_conv(sec: TestClient, owner: str) -> str:
 
 
 # ── 로그인 · 역할 ──────────────────────────────────────────
+
+def test_product_mode_has_no_simulation_conversations(world):
+    sec = login(world, "privacy1")
+    o = sec.get("/api/monitor/overview").json()
+    assert o["simulations"] == "idle" and all(x["source"] == "clinic" for x in o["sessions"])
+
 
 def test_login_cookie_and_role_separation(world):
     anon = TestClient(world["app"])
@@ -212,6 +219,26 @@ def test_db_snapshot_matches_source_csv(world):
     assert world["eng"].ctx["staged"].p_ref == 461
 
 
+def test_no_conversation_until_patient_is_opened(world):
+    """운영 모드는 기본 환자를 저절로 열지 않는다. EMR에서 열기 전에는 409(no-conversation)이고 LLM을 부르지 않는다."""
+    from webdemo.backend.auth import add_user
+    add_user(world["store"], "doctor_new", "새의사", "clinician", "내과", PW)
+    fake: FakeAnthropic = world["fake"]
+    n0 = len(fake.calls)
+    doc = login(world, "doctor_new")
+    for path in ("/api/workspace", "/api/patient-context", "/api/risk-states", "/api/protection-policy"):
+        r = doc.get(path)
+        assert r.status_code == 409 and r.headers.get("X-MediCloak-State") == "no-conversation", path
+    assert doc.get("/api/clinic/messages").json() == []
+    assert doc.post("/api/cases/case-1/messages", json=dict(sessionId="x", question=Q_DRUG, clientMessageId="z")).status_code == 409
+    assert len(fake.calls) == n0                                             # 로그인 · 화면 요청만으로는 LLM을 부르지 않는다
+    _, sid = launch(doc, "T0014")
+    assert len(fake.calls) > n0                                              # 환자를 열면 첫 답(턴 0)을 실제 LLM 경로로 만든다
+    assert doc.get("/api/workspace").status_code == 200
+    cases = doc.get("/api/cases", params=dict(patientContextId=doc.get("/api/patient-context").json()["contextId"])).json()
+    assert [c["diagnosis"] for c in cases][:1] == ["Acute bronchitis"] and "loratadine" in cases[0]["description"]
+
+
 def test_worklist_and_launch(world):
     doc = login(world, "doctor1")
     wl = doc.get("/api/emr/worklist").json()
@@ -331,10 +358,10 @@ def test_llm_error_returns_502_and_keeps_state(world, tmp_path):
     bad = FakeAnthropic(fail_status=401)
     eng = world["eng"]
     good = eng.live_llm.inner
+    doc = login(world, "doctor2")
+    _, sid = launch(doc, "T0024")                         # 첫 답(턴 0)도 실제 LLM 경로라 정상 LLM으로 먼저 연다
     eng.live_llm.inner = fake_llm(bad)                    # 같은 엔진에서 키 오류만 흉내 낸다
     try:
-        doc = login(world, "doctor2")
-        _, sid = launch(doc, "T0024")
         before = doc.get("/api/cases/case-1/session").json()
         r = doc.post("/api/cases/case-1/messages", json=dict(sessionId=sid, question=Q_DRUG, clientMessageId="e1"))
         assert r.status_code == 502 and "LLMHTTPError" in r.json()["detail"] and KEY not in r.text
@@ -343,6 +370,12 @@ def test_llm_error_returns_502_and_keeps_state(world, tmp_path):
         w = current_conv(sec, "박준호")
         assert sec.get(f"/api/monitor/sessions/{w}").json()["turn"] == 0
         assert len(bad.calls) == 1                        # 401은 다시 시도하지 않는다
+        # 새 환자를 열 때(턴 0) 실패해도 502이고, 지금 대화는 그대로 남는다
+        wl = doc.get("/api/emr/worklist").json()
+        row = next(x for x in wl if any(p["trialId"] == "T0036" for p in x["purposes"]))
+        r2 = doc.post("/api/emr/launch", json=dict(fhirId=row["fhirId"], purpose=row["purposes"][0]["purpose"]))
+        assert r2.status_code == 502 and KEY not in r2.text
+        assert current_conv(sec, "박준호") == w and doc.get("/api/cases/case-1/session").json() == before
     finally:
         eng.live_llm.inner = good
 
@@ -399,6 +432,187 @@ def test_llm_wait_does_not_block_other_requests(world):
 
 # ── 영속화 · 다시 켜기 ────────────────────────────────────
 
+def test_review_rules_and_approval_change_the_conversation(world):
+    """보안 담당자 검토가 대화에 반영된다: 승인하면 가린 값이 그 의료진에게만 나가고 State에 더해지며, 규칙은 다음 답부터 그 단서를 가린다."""
+    add_user(world["store"], "doctor_rv", "검토의사", "clinician", "내과", PW)
+    doc = login(world, "doctor_rv")
+    _, sid = launch(doc, "T0014")
+    body = doc.post("/api/cases/case-1/messages", json=dict(sessionId=sid, question=Q_DRUG, clientMessageId="r1")).json()
+    assert "2004-06-16" not in json.dumps(body, ensure_ascii=False)
+    doc.post("/api/clinic/messages", json=dict(kind="access_request", text="시작 시기가 약 조정에 필요합니다.", caseId="case-1"))
+    sec = login(world, "privacy1")
+    w = current_conv(sec, "검토의사")
+    # 후보가 줄어든 과정: 기준 집단 → 진단 → 약, 가린 시작일은 '그대로면 1명'
+    n = sec.get(f"/api/watch/{w}/cases/case-1/narrowing").json()
+    assert [s["kAfter"] for s in n["steps"]] == [189, 6] and n["population"] == 461 and n["k"] == 6
+    assert [(h["attribute"], h["kIfRaw"]) for h in n["hidden"]] == [("PERIOD", 1)]
+    # 보안 담당자 화면에는 다시 확인한 기록이 있고, 의료진 화면 API에는 없다
+    wp = sec.get(f"/api/watch/{w}/cases/case-1/session").json()["messages"][-1]["protection"]
+    assert wp["checks"] and wp["checks"][0]["ok"] and wp["transformations"][-1]["kIfRaw"] == 1
+    cp = doc.get("/api/cases/case-1/session").json()["messages"][-1]["protection"]
+    assert "checks" not in cp and all("kIfRaw" not in tt for tt in cp["transformations"]) and not redact.leaked_numbers(cp)
+    # 공개 승인
+    hidden = sec.get(f"/api/monitor/sessions/{w}/hidden").json()
+    item = next(x for x in hidden if x["case"] == "사례1" and x["attribute"] == "PERIOD")
+    assert "value" not in item and "raw_value" not in json.dumps(hidden)
+    assert sec.post(f"/api/monitor/sessions/{w}/approve", json=dict(items=[item["id"]], reason="짧음")).status_code == 422
+    assert sec.post(f"/api/monitor/sessions/{w}/messages", json=dict(kind="release", text="몰래 보내는 값 2004-06-16")).status_code == 422
+    r = sec.post(f"/api/monitor/sessions/{w}/approve", json=dict(items=[item["id"]], reason="처방 시작 시기가 약 조정 판단에 필요함"))
+    assert r.status_code == 200, r.text
+    ap = r.json()["approval"]
+    assert ap["k_after"] == {"사례1": 1} and ap["items"][0]["value"] is None   # 승인 응답에도 값은 없다 (열람 뒤 상세에서만)
+    d = r.json()["detail"]
+    assert d["approvals"][0]["items"][0]["value"] is None                    # 관제 상세는 열람 전에 값을 지운다
+    assert d["row"]["k_now"] == 1 and "사례1" in d["row"]["violated"]
+    assert "2004-06-16" not in json.dumps(d, ensure_ascii=False)
+    rel = [m for m in d["messages"] if m["kind"] == "release"]
+    assert rel and rel[0]["masked"] and "2004-06-16" not in rel[0]["text"]
+    th = sec.get(f"/api/monitor/sessions/{w}/messages").json()               # 메시지 목록은 열람과 관계없이 늘 지운다
+    assert "2004-06-16" not in json.dumps(th, ensure_ascii=False) and th["messages"][-1]["masked"]
+    rv = sec.post(f"/api/monitor/sessions/{w}/reveal", json=dict(reason="공개 승인한 값 확인")).json()
+    assert rv["approvals"][0]["items"][0]["value"] == "2004-06-16"
+    assert any(m["kind"] == "release" and "2004-06-16" in m["text"] and not m.get("masked") for m in rv["messages"])
+    assert sec.post(f"/api/monitor/sessions/{w}/approve", json=dict(items=[item["id"]], reason="같은 값을 다시 공개")).status_code == 400
+    # 의료진: 메시지로 값을 받고, 사례 노트에 승인 표시, 숫자는 여전히 없음
+    msgs = doc.get("/api/clinic/messages").json()
+    assert msgs[-1]["kind"] == "release" and "2004-06-16" in msgs[-1]["text"]
+    ents = doc.get("/api/cases/case-1/disclosures").json()["entries"]
+    assert any(e.get("approved") and e["value"] == "2004-06-16" for e in ents)
+    assert doc.get("/api/risk-states").json()[0]["disclosureAllowed"] is False and not redact.leaked_numbers(doc.get("/api/risk-states").json())
+    n2 = sec.get(f"/api/watch/{w}/cases/case-1/narrowing").json()
+    assert n2["steps"][-1]["approved"] and n2["steps"][-1]["kAfter"] == 1 and n2["steps"][-1]["afterTurn"] == 1
+    assert n2["hidden"][0]["released"] is True
+    # 규칙: 사례1 약은 늘 가림 → 다음 답에서 약이 빠진다 (이미 나간 답은 그대로)
+    bad = sec.post(f"/api/monitor/sessions/{w}/rules", json=dict(case="사례9", attribute="MED"))
+    assert bad.status_code == 400
+    d = sec.post(f"/api/monitor/sessions/{w}/rules", json=dict(case="사례1", attribute="MED", note="약 이름 반복 질문")).json()
+    rule = d["rules"][0]
+    assert rule["attribute"] == "MED" and rule["from_turn"] == 2 and rule["by"].startswith("이하늘")
+    b2 = doc.post("/api/cases/case-1/messages", json=dict(sessionId=sid, question="사례1에서 쓴 약 이름을 다시 알려 주세요", clientMessageId="r2")).json()
+    text = "".join(x["text"] for x in b2["assistantMessage"]["segments"])
+    assert "loratadine" not in text
+    tf = b2["assistantMessage"]["protection"]["transformations"]
+    assert any(x["attribute"] == "MED" and x["action"] == "suppress" for x in tf)
+    wtf = sec.get(f"/api/watch/{w}/cases/case-1/session").json()["messages"][-1]["protection"]["transformations"]
+    assert any(x["attribute"] == "MED" and x["rule"] for x in wtf)
+    d = sec.delete(f"/api/monitor/sessions/{w}/rules/{rule['id']}").json()
+    assert d["rules"] == []
+    actions = [a["action"] for a in sec.get("/api/monitor/audit").json()[:6]]
+    assert {"approve_release", "add_rule", "remove_rule"} <= set(actions)
+    # 지난 대화로 남아도 규칙 · 승인 기록과 후보가 줄어든 과정을 읽을 수 있다 (스냅숏)
+    snap = world["store"].conversation(w)
+    assert snap["security"]["approvals"][0]["items"][0]["value"] == "2004-06-16"
+    assert snap["clinic"]["per_case"]["case-1"]["narrowing"]["steps"][-1]["approved"]
+
+
+
+def test_review_only_reaches_the_current_conversation(world):
+    """의료진이 다른 환자를 열면 지난 대화에는 다음 질문이 없다: 그 대화에 공개 승인 · 규칙을 걸면 409로 막는다."""
+    add_user(world["store"], "doctor_nc", "전환의사", "clinician", "내과", PW)
+    doc = login(world, "doctor_nc")
+    _, sid = launch(doc, "T0014")
+    doc.post("/api/cases/case-1/messages", json=dict(sessionId=sid, question=Q_DRUG, clientMessageId="n1"))
+    sec = login(world, "privacy1")
+    w1 = current_conv(sec, "전환의사")
+    item = next(x for x in sec.get(f"/api/monitor/sessions/{w1}/hidden").json() if x["attribute"] == "PERIOD")
+    launch(doc, "T0010")
+    assert current_conv(sec, "전환의사") != w1
+    r = sec.post(f"/api/monitor/sessions/{w1}/approve", json=dict(items=[item["id"]], reason="지난 대화의 값 공개 시도"))
+    assert r.status_code == 409 and "다른 환자" in r.json()["detail"]
+    assert sec.post(f"/api/monitor/sessions/{w1}/rules", json=dict(case="사례1", attribute="MED")).status_code == 409
+    assert sec.get(f"/api/monitor/sessions/{w1}").json()["approvals"] == []
+
+
+def test_rewrite_without_case_labels_or_with_the_raw_value_fails_the_recheck(world):
+    """재작성기가 '사례N' 표기를 떨어뜨리면 다시 뽑아도 사례를 못 찾아 확인이 그냥 통과하던 문제:
+    원래 값이 글자 그대로 남거나 사례 표기가 없으면 통과시키지 않고, 값만 바꾼 답을 낸다."""
+    fake: FakeAnthropic = world["fake"]
+    add_user(world["store"], "doctor_rw", "재작성의사", "clinician", "내과", PW)
+    doc = login(world, "doctor_rw")
+    _, sid = launch(doc, "T0014")
+    sec = login(world, "privacy1")
+    w = current_conv(sec, "재작성의사")
+    try:
+        fake.drop_labels, fake.drop_date = True, False             # 표기를 떨어뜨리고 시작일은 그대로 둔다
+        b1 = doc.post("/api/cases/case-1/messages", json=dict(sessionId=sid, question=Q_DRUG, clientMessageId="w1")).json()
+        fake.drop_date = True                                      # 표기만 떨어뜨린다 (시작일은 뺌)
+        b2 = doc.post("/api/cases/case-1/messages", json=dict(sessionId=sid, question=Q_DRUG, clientMessageId="w2")).json()
+    finally:
+        fake.drop_labels, fake.drop_date = False, True
+    for b in (b1, b2):
+        assert b["assistantMessage"]["protection"]["releaseMode"] == "REWRITTEN_FALLBACK"
+        assert "2004-06-16" not in json.dumps(b, ensure_ascii=False)
+    answers = [m for m in sec.get(f"/api/watch/{w}/cases/case-1/session").json()["messages"] if m.get("protection")][-2:]
+    failed = [{x["reason"] for c in m["protection"]["checks"] if not c["ok"] for x in c["cases"] if x["reason"]} for m in answers]
+    assert {"RAW_VALUE_LEFT", "NO_CASE_FOUND"} <= failed[0] and failed[1] == {"NO_CASE_FOUND"}
+    assert all(m["protection"]["checks"][-1]["ok"] for m in answers)
+
+def test_live_redteam_runs_on_real_llm_path_and_is_kept(world, tmp_path):
+    """레드팀 점검이 서버의 실제 LLM 경로(가짜 HTTP)로 돌고, 호출 수를 따로 세고, 끝나면 DB에 남는다. 멈춤도 된다."""
+    sec = login(world, "privacy1")
+    fake: FakeAnthropic = world["fake"]
+    n0 = len(fake.calls)
+    fake.drop_labels = True              # 재작성기가 사례 표기를 떨어뜨린다: 레드팀도 의료진 대화와 같은 다시 확인을 거치는지 본다
+    try:
+        j = sec.post("/api/redteam", json=dict(per_type=1, fuzzer="feedback")).json()
+        assert j["live"] is True and j["trials"] == 3 and j["total"] == 9
+        deadline = time.time() + 240
+        while time.time() < deadline:
+            j = sec.get(f"/api/redteam/{j['id']}").json()
+            assert j["status"] != "done" or j["result"] is not None          # 끝났다고 알릴 때는 결과가 이미 있다
+            if j["status"] not in ("queued", "running"):
+                break
+            time.sleep(0.1)
+    finally:
+        fake.drop_labels = False
+    assert j["status"] == "done", j.get("error")
+    out = Path(j["out"]) if Path(j["out"]).is_absolute() else ROOT / j["out"]
+    recs = [json.loads(x) for x in (out / "턴기록.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
+    reasons = {c.get("reason") for r in recs for a in r.get("release_attempts") or [] for c in a.get("checks") or []}
+    assert "NO_CASE_FOUND" in reasons and "rewriter" in fake.roles()[n0:]
+    assert j["usage"]["calls"] > 0 and len(fake.calls) - n0 >= j["usage"]["calls"]       # 이 실행의 호출만 센다
+    assert set(j["result"]["arms"]) == {"C0", "C1", "C1S"}
+    assert world["eng"].live_usage()["calls"] < len(fake.calls)                           # 의료진 대화 호출 수와 섞이지 않는다
+    stored = {x["id"]: x for x in world["store"].runs()}
+    assert stored[j["id"]]["status"] == "done" and stored[j["id"]]["result"]["arms"]["C1"]["n"] == 3
+    listed = sec.get("/api/redteam").json()
+    assert listed[0]["id"] == j["id"] and listed[0]["result"] is None
+    # 멈춤: 끝낸 trial까지만 남긴다
+    j2 = sec.post("/api/redteam", json=dict(per_type=2, fuzzer="uniform")).json()
+    assert sec.post(f"/api/redteam/{j2['id']}/cancel").status_code == 200
+    deadline = time.time() + 120
+    while time.time() < deadline:
+        j2 = sec.get(f"/api/redteam/{j2['id']}").json()
+        if j2["status"] not in ("queued", "running"):
+            break
+        time.sleep(0.2)
+    assert j2["status"] == "cancelled" and j2["done"] < j2["total"]
+    assert sec.post(f"/api/redteam/{j2['id']}/cancel").status_code == 409
+    doc = login(world, "doctor1")
+    assert doc.post("/api/redteam", json=dict(per_type=1)).status_code == 403
+
+
+
+def test_redteam_with_every_llm_call_failing_ends_as_error(world):
+    """LLM 호출이 모두 실패한 질의 환자는 '깨끗함'으로 세지 않는다. 처음 세 명이 모두 실패하면 결과 없이 오류로 끝난다."""
+    eng = world["eng"]
+    good = eng.live_llm.inner
+    eng.live_llm.inner = fake_llm(FakeAnthropic(fail_status=401))
+    try:
+        sec = login(world, "privacy1")
+        j = sec.post("/api/redteam", json=dict(per_type=1, fuzzer="uniform")).json()
+        deadline = time.time() + 120
+        while time.time() < deadline:
+            j = sec.get(f"/api/redteam/{j['id']}").json()
+            if j["status"] not in ("queued", "running"):
+                break
+            time.sleep(0.1)
+    finally:
+        eng.live_llm.inner = good
+    assert j["status"] == "error" and j["result"] is None and j["kept"] == 0 and j["llm_error_trials"] == 3
+    assert "check-llm" in j["error"] and KEY not in json.dumps(j)
+    assert {x["id"]: x for x in world["store"].runs()}[j["id"]]["status"] == "error"
+
 def test_restart_keeps_records_read_only(world):
     st, eng0 = world["store"], world["eng"]
     eng0.wait_compare(30)
@@ -418,6 +632,10 @@ def test_restart_keeps_records_read_only(world):
         sid = sorted(old_ids)[0]
         d = sec.get(f"/api/monitor/sessions/{sid}").json()
         assert d["archived"] and not d["revealed"] and d["arms"]["C1"]["turns"][-1]["raw"] is None
+        # 지난 대화에는 규칙 · 공개 승인을 걸거나 지울 수 없다 (500이 아니라 409)
+        assert sec.post(f"/api/monitor/sessions/{sid}/rules", json=dict(case="사례1", attribute="MED")).status_code == 409
+        assert sec.delete(f"/api/monitor/sessions/{sid}/rules/R1").status_code == 409
+        assert sec.post(f"/api/monitor/sessions/{sid}/approve", json=dict(items=["1:사례1:0"], reason="지난 대화 값 공개")).status_code == 409
         assert sec.get(f"/api/watch/{sid}/risk-states").json()[0]["k"] is not None          # 숫자 그대로 (스냅숏)
         assert sec.post(f"/api/monitor/sessions/{sid}/messages", json=dict(kind="reply", text="지난 대화 답장")).status_code == 409
         rv = sec.post(f"/api/monitor/sessions/{sid}/review", json=dict(action="reviewed", note="다시 켠 뒤 확인"))
@@ -437,6 +655,32 @@ def test_restart_keeps_records_read_only(world):
 
 # ── 숫자 지우기 · 명령줄 ──────────────────────────────────
 
+
+def test_turn0_llm_replays_per_arm_and_resends_retries():
+    """첫 답(턴 0): 세 갈래가 같은 실제 LLM 답을 쓰되(갈래마다 처음부터 다시 꺼냄), 한 갈래 안에서 같은 요청을 다시 보내면 새로 부른다."""
+    from webdemo.backend.live import Turn0LLM
+
+    class Live:
+        def __init__(self):
+            self.n = 0
+
+        def complete(self, role, system, messages, **kw):
+            self.n += 1
+            return f"live{self.n}"
+
+    class Det:
+        def complete(self, role, system, messages, **kw):
+            return "det"
+
+    live = Live()
+    t = Turn0LLM(live, Det())
+    ask = lambda role="target": t.complete(role, "sys", [dict(role="user", content="q")])
+    t.next_arm()
+    assert [ask(), ask()] == ["live1", "live2"]          # 같은 갈래 안의 다시 묻기(재시도)는 캐시가 아니라 새 호출
+    t.next_arm()
+    assert [ask(), ask(), ask()] == ["live1", "live2", "live3"]
+    assert ask("mutator") == "det" and live.n == 3       # 질문 만들기 역할은 결정적 응답기
+
 def test_redact_unit():
     r = redact.risk(dict(caseId="case-1", k=2, riskLevel="danger", statusLabel="위험", disclosureAllowed=False, policyDecision="restrict",
                          version=3, updatedAt="t"))
@@ -454,11 +698,15 @@ def test_cli_init_users_and_check_llm(tmp_path, capsys):
     from medicloak.cli import main
     from webdemo.backend.live import check_llm, make_live_llm
     db = tmp_path / "x" / "mc.db"
-    main(["--db", str(db), "init", "--demo-password", "abcd-efgh-1234"])
+    main(["--db", str(db), "init", "--initial-password", "abcd-efgh-1234"])
     out = capsys.readouterr().out
-    acc = db.parent / "demo_accounts.txt"
-    assert "doctor1" in out and "privacy1" in out and acc.exists()
-    assert stat.S_IMODE(os.stat(acc).st_mode) == 0o600
+    acc = db.parent / "initial_accounts.txt"
+    assert "doctor1" in out and "privacy1" in out and acc.exists() and "abcd-efgh-1234" in acc.read_text(encoding="utf-8")
+    assert stat.S_IMODE(os.stat(acc).st_mode) == 0o600 and "데모" not in out + acc.read_text(encoding="utf-8")
+    db2 = tmp_path / "y" / "mc.db"                                        # 예전 옵션 이름도 받는다
+    main(["--db", str(db2), "init", "--demo-password", "ijkl-mnop-5678"])
+    capsys.readouterr()
+    assert "ijkl-mnop-5678" in (db2.parent / "initial_accounts.txt").read_text(encoding="utf-8")
     main(["--db", str(db), "init"])                                       # 두 번째는 그대로 둔다
     assert "이미 들어 있습니다" in capsys.readouterr().out
     main(["--db", str(db), "users"])

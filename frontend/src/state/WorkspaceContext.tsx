@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, type ReactNode } from 'react';
 import { api as defaultApi, type ClinicalCaseApi } from '../api';
+import { isNoConversation } from '../api/types';
 import type { CaseId, ChatMessage } from '../types/domain';
 import { initialWorkspaceState, workspaceReducer, type WorkspaceState } from './workspaceReducer';
 
@@ -75,19 +76,19 @@ export function WorkspaceProvider({ children, api = defaultApi }: { children: Re
     dispatch({ type: 'resource/loading', key: 'environment' });
     api.getWorkspaceEnvironment().then(
       (data) => dispatch({ type: 'resource/success', key: 'environment', data }),
-      (error) => dispatch({ type: 'resource/error', key: 'environment', error: errorMessage(error) }),
+      (error) => dispatch(isNoConversation(error) ? { type: 'workspace/none' } : { type: 'resource/error', key: 'environment', error: errorMessage(error) }),
     );
 
     dispatch({ type: 'resource/loading', key: 'policy' });
     api.getProtectionPolicy().then(
       (data) => dispatch({ type: 'resource/success', key: 'policy', data }),
-      (error) => dispatch({ type: 'resource/error', key: 'policy', error: errorMessage(error) }),
+      (error) => dispatch(isNoConversation(error) ? { type: 'workspace/none' } : { type: 'resource/error', key: 'policy', error: errorMessage(error) }),
     );
 
     dispatch({ type: 'resource/loading', key: 'riskStates' });
     api.listRiskStates().then(
       (list) => dispatch({ type: 'resource/success', key: 'riskStates', data: Object.fromEntries(list.map((r) => [r.caseId, r])) }),
-      (error) => dispatch({ type: 'resource/error', key: 'riskStates', error: errorMessage(error) }),
+      (error) => dispatch(isNoConversation(error) ? { type: 'workspace/none' } : { type: 'resource/error', key: 'riskStates', error: errorMessage(error) }),
     );
 
     dispatch({ type: 'resource/loading', key: 'patient' });
@@ -109,6 +110,10 @@ export function WorkspaceProvider({ children, api = defaultApi }: { children: Re
         );
       },
       (error) => {
+        if (isNoConversation(error)) {
+          dispatch({ type: 'workspace/none' });
+          return;
+        }
         dispatch({ type: 'resource/error', key: 'patient', error: errorMessage(error) });
         dispatch({ type: 'resource/error', key: 'cases', error: '환자 맥락을 불러오지 못해 사례를 검색할 수 없습니다.' });
       },

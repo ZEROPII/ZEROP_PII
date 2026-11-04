@@ -32,13 +32,17 @@ def _safe_desc(action: str, value: str | None) -> str:
 
 
 def transformation(t: dict[str, Any]) -> dict[str, Any]:
-    return dict(t, levelDescription=_safe_desc(t["action"], t.get("disclosedValue")))
+    out = dict(t, levelDescription=_safe_desc(t["action"], t.get("disclosedValue")))
+    out.pop("kIfRaw", None)
+    return out
 
 
 def protection(p: dict[str, Any] | None) -> dict[str, Any] | None:
     if p is None:
         return None
-    return dict(p, kBefore=None, kAfter=None, explanation=None, transformations=[transformation(t) for t in p.get("transformations", [])])
+    out = dict(p, kBefore=None, kAfter=None, explanation=None, transformations=[transformation(t) for t in p.get("transformations", [])])
+    out.pop("checks", None)                 # 고친 답을 다시 확인한 기록(후보 수 · 필요한 수)은 보안 담당자 화면에서만
+    return out
 
 
 def message(m: dict[str, Any]) -> dict[str, Any]:
@@ -82,7 +86,7 @@ def send_result(r: dict[str, Any]) -> dict[str, Any]:
 
 
 # 의료진 응답에 남으면 안 되는 키 (테스트와 점검 스크립트가 쓴다)
-NUMBER_KEYS = ("k", "kBefore", "kAfter", "currentK", "projectedK", "minK", "suppressK", "populationSize")
+NUMBER_KEYS = ("k", "kBefore", "kAfter", "currentK", "projectedK", "minK", "suppressK", "populationSize", "kIfRaw", "need")
 
 
 def leaked_numbers(obj: Any, path: str = "") -> list[str]:

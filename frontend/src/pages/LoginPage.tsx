@@ -62,7 +62,7 @@ export function LoginPage() {
             ))}
           </dl>
         </div>
-        <p className="text-xs leading-5 text-ink-3">Synthea 합성 환자 576명으로 만든 가상 EMR 위에서 돕니다. 실제 환자 정보는 없습니다.</p>
+        <p className="text-xs leading-5 text-ink-3">연결된 EMR: MediCloak 가상 EMR (Synthea 합성 환자 576명, 실제 환자 정보 없음)</p>
       </section>
 
       <section aria-label="로그인" className="flex items-center justify-center px-6 py-10">
@@ -105,10 +105,7 @@ export function LoginPage() {
             {busy ? <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> : <LogIn className="h-4 w-4" aria-hidden />}
             로그인
           </button>
-          <p className="mt-6 text-xs leading-5 text-ink-3">
-            처음 켠 서버의 데모 계정(의료진 doctor1 · doctor2, 보안 담당자 privacy1)과 비밀번호는 서버 폴더의{' '}
-            <code className="rounded bg-surface-2 px-1 py-px font-mono text-[11px]">runs/medicloak/demo_accounts.txt</code>에 있습니다.
-          </p>
+          <p className="mt-6 text-xs leading-5 text-ink-3">계정이 없거나 비밀번호를 잊었으면 병원 시스템 관리자에게 문의하세요.</p>
         </form>
       </section>
     </div>

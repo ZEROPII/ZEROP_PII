@@ -2,7 +2,7 @@ import { MailQuestion } from 'lucide-react';
 import { relativeTime, caseLabel } from '../../lib/time';
 import type { MonitorRow } from '../../types/monitor';
 import { StatusChip, StatusIcon } from '../common/StatusChip';
-import { MiniCrowd } from '../viz/CrowdLens';
+import { RangeMini } from '../viz/Instruments';
 
 const TONE = { danger: 'danger', caution: 'caution', safe: 'safe' } as const;
 
@@ -11,9 +11,11 @@ interface Props {
   selected: string | null;
   onSelect(id: string): void;
   kReq: number;
+  /** 기준 집단 크기 (로그 눈금의 오른쪽 끝) */
+  pRef?: number;
 }
 
-export function QueueTable({ rows, selected, onSelect, kReq }: Props) {
+export function QueueTable({ rows, selected, onSelect, kReq, pRef = 461 }: Props) {
   return (
     <table className="w-full border-collapse text-[13px]">
       <thead>
@@ -73,17 +75,20 @@ export function QueueTable({ rows, selected, onSelect, kReq }: Props) {
               </td>
               <td className="border-b border-line px-3 py-3 text-right align-middle">
                 {r.k_now != null ? (
-                  <span className="num inline-flex items-center gap-2 whitespace-nowrap" title={r.focus_case ? `${caseLabel(r.focus_case)} 기준` : undefined}>
-                    {r.k_if_raw != null && (
+                  <span
+                    className="num inline-flex items-center gap-2 whitespace-nowrap"
+                    title={`${r.focus_case ? `${caseLabel(r.focus_case)} 기준. ` : ''}${r.k_if_raw != null && r.k_if_raw !== r.k_now ? `그대로 답했다면 ${r.k_if_raw}명, ` : ''}지금 ${r.k_now}명 (기준 ${kReq}명)`}
+                  >
+                    {r.k_if_raw != null && r.k_if_raw !== r.k_now && (
                       <>
-                        <span className={`font-semibold ${r.k_if_raw < kReq ? 'text-danger-text' : 'text-ink-3'}`}>{r.k_if_raw}명</span>
+                        <span className={`font-semibold ${r.k_if_raw < kReq ? 'text-danger-text' : 'text-ink-3'}`}>{r.k_if_raw}</span>
                         <span className="text-ink-3" aria-label="에서">→</span>
                       </>
                     )}
+                    <span className="font-bold text-ink">{r.k_now.toLocaleString()}명</span>
                     <span className="hidden sm:inline-flex">
-                      <MiniCrowd k={Math.min(r.k_now, 8)} />
+                      <RangeMini raw={r.k_if_raw} now={r.k_now} max={pRef} g={kReq} width={84} />
                     </span>
-                    <span className="font-bold text-ink">{r.k_now > 999 ? '999+' : r.k_now}명</span>
                   </span>
                 ) : (
                   <span className="text-ink-3">–</span>
