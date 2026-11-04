@@ -114,4 +114,13 @@ Mock이 알아듣는 질문 (키워드 규칙, `mockData.ts`의 `QI_PATTERNS`·`
    http 모드에서 사전 위험 평가(preflight)는 연구 모듈에 해당 기능이 없어 `supported: false`로 오고, 입력창 아래에 미지원으로 표시된다.
    사례 목록에는 검색 순위·유사도만 오고 사례 진단명은 오지 않는다 (Defender를 거치지 않은 공개가 되므로).
 4. 백엔드 명세가 다르면 `httpApi.ts`(필요하면 응답 변환 함수)만 고친다. UI 컴포넌트는 `ClinicalCaseApi`만 쓰므로 바꿀 필요가 없다.
+
+### MediCloak 운영 모드 (`python -m medicloak`)
+
+같은 빌드(`npm run build:demo`)가 데모 서버와 운영 서버를 모두 연다. 화면은 켤 때 `/api/auth/me`로 서버 종류를 가른다: 404면 로그인 없는 데모(화면 전환 단추), 401이면 로그인 화면, 200이면 로그인한 계정의 역할이 화면을 정한다(`src/state/AuthContext.tsx`, `components/layout/AppLayout.tsx`). 어느 요청이든 401이 오면 로그인 화면으로 돌아간다(`src/api/session.ts`).
+
+- 의료진 화면 API는 후보 수 · 기준값을 null로 보낸다(타입 `number | null`). 의료진 화면은 원래 숫자를 그리지 않았다.
+- 보안 담당자 '의료진 대화'(`/watch`)는 대화를 골라 `createHttpApi('/api/watch/{대화}')`로 같은 계약을 숫자와 함께 받는다(안쪽 `WorkspaceProvider`). 의료진 화면 상태(`WorkspaceProvider`)는 의료진 틀 안에서만 만든다.
+- 보호 정책(`/policy`)은 `/api/monitor/policy`에서 받는다.
+- 외래 진료 목록(`/emr`, 운영 모드 의료진만): `src/api/emrApi.ts`가 `/api/emr/worklist` · `/api/emr/launch`와 FHIR(`/fhir/Condition?patient=` 등)를 부른다. 개발 서버도 `/fhir`를 8000번으로 넘긴다(`vite.config.ts`).
 5. 백엔드 쪽 대응 관계: `PrivacyAction`은 `medical/defense.py`의 allow · generalize · suppress, `ProtectionPolicy.minK/suppressK`는 `generalize_threshold/suppress_threshold`, `arm`은 C0 · C1 · C1S.

@@ -15,7 +15,8 @@ interface Props {
 }
 
 export function RiskBar({ risk, threshold, max }: Props) {
-  const width = Math.max(logPosition(risk.k, max), 2);
+  // 후보 수는 보안 담당자 API에서만 온다. 없으면(의료진 화면 API 응답) 막대를 채우지 않는다
+  const width = risk.k == null ? 0 : Math.max(logPosition(risk.k, max), 2);
   const marker = logPosition(threshold, max);
   return (
     <div
@@ -23,8 +24,8 @@ export function RiskBar({ risk, threshold, max }: Props) {
       role="meter"
       aria-valuemin={1}
       aria-valuemax={max}
-      aria-valuenow={risk.k}
-      aria-valuetext={`후보 ${risk.k}명, ${risk.statusLabel}, 기준 ${threshold}명`}
+      aria-valuenow={risk.k ?? undefined}
+      aria-valuetext={risk.k == null ? risk.statusLabel : `후보 ${risk.k}명, ${risk.statusLabel}, 기준 ${threshold}명`}
     >
       <div className={`h-full rounded-full transition-[width] duration-500 ease-zp ${RISK_TONE[risk.riskLevel].bar}`} style={{ width: `${width}%` }} />
       <span className="absolute -top-1 h-4 w-0.5 rounded bg-ink" style={{ left: `calc(${marker}% - 1px)` }} title={`기준 ${threshold}명`} aria-hidden />

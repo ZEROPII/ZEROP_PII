@@ -1,14 +1,29 @@
+import { useCallback, useEffect, useState } from 'react';
+import { apiMode } from '../api';
+import { MOCK_POLICY } from '../api/mock/mockData';
+import { MONITOR_UNAVAILABLE, monitorApi } from '../api/monitorApi';
 import { ActionBadge } from '../components/common/ActionBadge';
 import { Card, CardHeader } from '../components/common/Card';
 import { MockBadge } from '../components/common/MockBadge';
 import { ErrorState, LoadingState } from '../components/common/StatusViews';
-import { useWorkspace } from '../state/WorkspaceContext';
+import type { ProtectionPolicy } from '../types/domain';
+import type { MonitorPolicy } from '../types/monitor';
 
 const ARM_DESCRIPTION = {
   C0: '방어 없음: 대상 AI 답을 그대로 내보냅니다. 비교용이며 실제 서비스에 쓰면 안 됩니다.',
   C1: '누적 방어: 대화 전체에서 나온 단서를 사례마다 모아 판정합니다. 의료진 화면은 이 방식으로 답합니다.',
   C1S: '턴별 방어: 매 턴 새로 판정하고 앞선 답은 기억하지 않습니다. 단서를 하나씩 모으는 질문에 약한지 보는 대조군입니다.',
 } as const;
+
+const ROLE_KO: Record<string, string> = { target: '대상 AI', extractor: '추출기', rewriter: '재작성기' };
+
+function usageText(u: NonNullable<MonitorPolicy['llmUsage']>): string {
+  const roles = Object.entries(u.by_role);
+  if (!roles.length) return '아직 호출 없음';
+  const tin = roles.reduce((s, [, v]) => s + v.input_tokens, 0);
+  const tout = roles.reduce((s, [, v]) => s + v.output_tokens, 0);
+  return `${roles.map(([r, v]) => `${ROLE_KO[r] ?? r} ${v.calls}회`).join(' · ')} (입력 ${tin.toLocaleString()} · 출력 ${tout.toLocaleString()} 토큰)`;
+}
 
 const TERMS: [string, string][] = [
   ['후보 수', '답에 나온 단서와 조건이 같은 환자 수. 같은 진료 사건의 진단, 나이, 날짜를 한 사람이 함께 만족해야 후보로 셉니다.'],
@@ -18,11 +33,19 @@ const TERMS: [string, string][] = [
   ['레드팀 점검', '공격 질문을 자동으로 보내 방어 규칙을 시험하는 일.'],
 ];
 
-/** 보호 정책: 백엔드가 알려 준 현재 정책 값과 화면에서 쓰는 말 (이 화면에서 바꾸지 않음). */
+/**
+ * 보호 정책: 백엔드가 알려 준 현재 정책 값과 화면에서 쓰는 말 (이 화면에서 바꾸지 않음).
+ * 기준값은 의료진 화면 API에서 지워지므로 보안 담당자 API(/api/monitor/policy)에서 받는다.
+ */
 export function PolicyPage() {
-  const { state, actions } = useWorkspace();
-  const { policy } = state;
-  const p = policy.data;
+  const [p, setP] = useState<(ProtectionPolicy & Partial<MonitorPolicy>) | null>(apiMode === 'http' ? null : MOCK_POLICY);
+  const [error, setError] = useState<string | null>(null);
+  const load = useCallback(() => {
+    if (apiMode !== 'http') return;
+    setError(null);
+    monitorApi.policy().then(setP, (e) => setError(e instanceof Error ? e.message : MONITOR_UNAVAILABLE));
+  }, []);
+  useEffect(load, [load]);
 
   const rows: [string, string][] = p
     ? [
@@ -32,7 +55,14 @@ export function PolicyPage() {
         ['그대로 답함', `새 단서를 모두 더해도 후보가 ${p.minK}명보다 많을 때`],
         ['넓혀서 답함', `그 외에, 원래 값으로 후보가 ${p.suppressK}명보다 많으면 후보가 ${p.minK}명을 넘는 가장 가까운 상위 범주로`],
         ['가림', `원래 값으로 후보가 ${p.suppressK}명 이하일 때`],
-        ['기준 집단', `${p.populationSize.toLocaleString()}명 (위험 막대 로그 눈금의 끝)`],
+        ['기준 집단', `${(p.populationSize ?? 0).toLocaleString()}명 (위험 막대 로그 눈금의 끝)`],
+        ...(p.auth !== undefined
+          ? ([
+              ['비교 갈래', p.compare ? '방어 없음(C0)은 바로, 턴별 방어(C1S)는 의료진 답을 보낸 뒤 계산' : '계산하지 않음 (--no-compare)'],
+              ['서버', `${p.auth ? '로그인 · 역할 분리' : '로그인 없는 데모'} · ${p.persist ? '기록을 DB에 남김' : '기록은 메모리에만 (다시 켜면 지워짐)'}`],
+              ...(p.llmUsage ? ([['LLM 호출', `서버를 켠 뒤 ${usageText(p.llmUsage)}`]] as [string, string][]) : []),
+            ] as [string, string][])
+          : []),
       ]
     : [];
 
@@ -40,8 +70,8 @@ export function PolicyPage() {
     <div className="scroll-thin mx-auto h-full max-w-3xl space-y-3 overflow-y-auto p-4 md:p-6">
       <Card>
         <CardHeader title="지금 적용 중인 보호 정책" aside={<MockBadge source={p?.source} />} />
-        {policy.status === 'error' ? (
-          <ErrorState message={policy.error ?? '보호 정책을 불러오지 못했습니다.'} onRetry={actions.reloadAll} />
+        {error ? (
+          <ErrorState message={error} onRetry={load} />
         ) : !p ? (
           <LoadingState />
         ) : (

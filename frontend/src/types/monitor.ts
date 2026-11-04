@@ -3,6 +3,8 @@
 // 이름은 백엔드(webdemo/backend/monitor.py · engine.py)의 JSON 키를 그대로 쓴다.
 // 원 응답·가린 원래 값·환자 번호는 열람 사유를 남긴 뒤(revealed=true)에만 채워져 온다.
 
+import type { ProtectionPolicy } from './domain';
+
 export type ArmKey = 'C0' | 'C1' | 'C1S';
 export type MonitorStatus = 'danger' | 'caution' | 'safe';
 export type ReviewAction = 'reviewed' | 'ask_clinician' | 'add_rule';
@@ -45,6 +47,41 @@ export interface MonitorRow {
   awaiting_clinician: boolean;
   /** 답할 차례인 요청이 가리키는 사례 ('사례1') */
   request_case: string | null;
+  /** 의료진 대화: 계정 이름 (운영 모드) */
+  owner?: string | null;
+  /** 서버를 다시 켜기 전 대화 (DB 스냅숏, 읽기 · 검토 표시만) */
+  archived?: boolean;
+  /** oracle: 결정적 응답기 · live: 서버를 켤 때 정한 LLM */
+  llm_mode?: 'oracle' | 'live';
+}
+
+/** 의료진 대화 목록 한 줄 (/api/watch) */
+export interface WatchItem {
+  id: string;
+  trialId: string;
+  owner: string | null;
+  qtypeLabel: string;
+  turns: number;
+  lastActive: number;
+  created: number;
+  status: MonitorStatus;
+  statusLabel: string;
+  archived: boolean;
+  /** 그 의료진이 지금 보고 있는 대화 */
+  current: boolean;
+  pendingRequest: boolean;
+  llmMode: 'oracle' | 'live' | null;
+}
+
+/** /api/monitor/policy: 보호 정책과 서버 설정 */
+export interface MonitorPolicy extends ProtectionPolicy {
+  kReq: number;
+  llmLive: boolean;
+  compare: boolean;
+  auth: boolean;
+  persist: boolean;
+  /** 서버를 켠 뒤 의료진 대화 LLM 호출 (역할별 호출 수 · 토큰). LLM이 없으면 null */
+  llmUsage?: { label: string; calls: number; by_role: Record<string, { calls: number; input_tokens: number; output_tokens: number }> } | null;
 }
 
 export interface ThreadMessage {
@@ -148,6 +185,8 @@ export interface MonitorDetail {
   revealed: boolean;
   live_arm: ArmKey;
   messages: ThreadMessage[];
+  /** 서버를 다시 켜기 전 대화 (메시지는 보낼 수 없다) */
+  archived?: boolean;
 }
 
 export interface AuditEntry {
@@ -162,6 +201,16 @@ export interface AuditEntry {
   job?: string;
   /** 메시지 기록만: 가리킨 사례 ('사례1') */
   case?: string | null;
+  /** 운영 모드: 계정 번호 */
+  user_id?: number;
+  /** 의료진 질문(clinic_question): 대화 턴 · 공개 방식 · 보호한 값 수 */
+  turn?: number | null;
+  release?: string | null;
+  protected?: number;
+  /** EMR 열기(emr_launch): 진료 목적 */
+  purpose?: string;
+  /** 로그인 기록: 접속 주소 */
+  client?: string;
 }
 
 export interface Proportion {

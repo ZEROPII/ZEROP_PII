@@ -4,7 +4,8 @@ import { useNavigate } from 'react-router-dom';
 import { monitorApi } from '../../api/monitorApi';
 import { terminologyApi } from '../../api/terminologyApi';
 import { useTerms } from '../../state/TermContext';
-import { useWorkspace } from '../../state/WorkspaceContext';
+import { useOptionalWorkspace } from '../../state/WorkspaceContext';
+import { useAuth } from '../../state/AuthContext';
 import type { TermSummary } from '../../types/terminology';
 import type { MonitorRow } from '../../types/monitor';
 import { NAV, type Role } from './nav';
@@ -24,8 +25,9 @@ interface Item {
  */
 export function CommandPalette({ role, onClose }: { role: Role; onClose(): void }) {
   const navigate = useNavigate();
-  const { state, actions } = useWorkspace();
-  const cases = state.cases.data;
+  const ws = useOptionalWorkspace();
+  const cases = ws?.state.cases.data;
+  const product = useAuth().status === 'user';
   const [q, setQ] = useState('');
   const [active, setActive] = useState(0);
   const [rows, setRows] = useState<MonitorRow[]>([]);
@@ -56,13 +58,15 @@ export function CommandPalette({ role, onClose }: { role: Role; onClose(): void 
   }, [role]);
 
   const items = useMemo<Item[]>(() => {
-    const pages: Item[] = NAV[role].map((n) => ({ id: `page:${n.to}`, label: n.title, hint: '화면', icon: n.icon, run: () => navigate(n.to) }));
+    const pages: Item[] = NAV[role]
+      .filter((n) => product || !n.productOnly)
+      .map((n) => ({ id: `page:${n.to}`, label: n.title, hint: '화면', icon: n.icon, run: () => navigate(n.to) }));
     const convs: Item[] =
       role === 'security'
         ? rows.map((r) => ({
             id: `conv:${r.id}`,
-            label: `${r.trial_id} ${r.status_label}`,
-            hint: `${r.source_label} ${r.turns}턴`,
+            label: `${r.trial_id} ${r.owner ? `${r.owner} ` : ''}${r.status_label}`,
+            hint: `${r.archived ? '지난 대화' : r.source_label} ${r.turns}턴`,
             icon: MessagesSquare,
             run: () => navigate(`/monitor?s=${encodeURIComponent(r.id)}`),
           }))
@@ -72,7 +76,7 @@ export function CommandPalette({ role, onClose }: { role: Role; onClose(): void 
             hint: '사례 열기',
             icon: FileText,
             run: () => {
-              actions.selectCase(c.caseId);
+              ws?.actions.selectCase(c.caseId);
               navigate('/');
             },
           }));
@@ -88,7 +92,7 @@ export function CommandPalette({ role, onClose }: { role: Role; onClose(): void 
     }));
     const lookup: Item = { id: 'term-search', label: `'${q.trim()}' 의료 용어 패널에서 찾기`, hint: '의료 용어', icon: BookOpen, run: () => openSearch(q.trim()) };
     return [...all.filter((i) => `${i.label} ${i.hint}`.toLowerCase().includes(t)), ...termItems, lookup];
-  }, [q, rows, terms, navigate, openTerm, openSearch, role, cases, actions]);
+  }, [q, rows, terms, navigate, openTerm, openSearch, role, cases, ws, product]);
 
   useEffect(() => setActive(0), [q]);
 

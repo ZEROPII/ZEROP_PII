@@ -12,6 +12,29 @@ import { CrowdLens } from '../viz/CrowdLens';
 
 const TONE = { danger: 'danger', caution: 'caution', safe: 'safe' } as const;
 const ATTR_KO: Record<string, string> = { AGE: '나이', SEX: '성별', REGION: '거주지', PERIOD: '시점', DX: '진단', PROC: '시술', MED: '약', PLAN: '관리 계획' };
+/** 판정 항목(decisions.items.attribute)은 한글 이름으로 온다 → 단서 코드 */
+const ATTR_CODE: Record<string, string> = Object.fromEntries(Object.entries(ATTR_KO).map(([k, v]) => [v, k]));
+
+/** 실제 LLM 답은 '사례N · 항목: 값' 줄 모양이 아니므로, 단서는 Defender 판정 항목에서 읽는다. */
+function decisionFacts(t: TurnView): ClueFact[] {
+  return (t.decisions ?? []).flatMap((p) =>
+    p.items.map((it) => ({
+      caseRef: p.case,
+      caseLabel: caseLabel(p.case),
+      attribute: ATTR_CODE[it.attribute] ?? it.attribute,
+      attributeLabel: it.attribute,
+      value: it.action === 'suppress' ? null : it.action === 'generalize' ? it.to_label : it.raw_value,
+      action: it.action,
+      turn: t.turn,
+    })),
+  );
+}
+
+/** 메시지 보낸 사람: 운영 모드는 계정 이름, 데모는 역할 */
+function senderName(m: ThreadMessage): string {
+  if (m.actor && !m.actor.includes('(데모)')) return m.actor.split(' (')[0];
+  return m.sender === 'clinician' ? '의료진' : '보안 담당자';
+}
 const CHANGE = { suppress: { tone: 'danger', label: '가림' }, generalize: { tone: 'caution', label: '일반화' } } as const;
 
 type Group = { kind: 'turn'; turn: TurnView } | { kind: 'fold'; turns: TurnView[] };
@@ -49,7 +72,7 @@ function Thread({ messages }: { messages: ThreadMessage[] }) {
           <li key={m.id} className={clin ? 'mr-8' : 'ml-8'}>
             <p className={`flex flex-wrap items-center gap-x-1.5 text-[11px] text-ink-3 ${clin ? '' : 'justify-end'}`}>
               {clin && <Stethoscope className="h-3 w-3" aria-hidden />}
-              <span className="font-semibold text-ink-2">{clin ? '의료진' : '보안 담당자'}</span>
+              <span className="font-semibold text-ink-2">{senderName(m)}</span>
               <span>{m.kind_label}</span>
               {m.case && <span>{caseLabel(m.case)}</span>}
               <span className="num">{clockTime(m.at)}</span>
@@ -100,8 +123,8 @@ export function SessionDetail({ detail: d, onReveal, onReview, onMessage, busy }
 
   const facts = useMemo<ClueFact[]>(
     () =>
-      c1.turns.flatMap((t) =>
-        t.lines
+      c1.turns.flatMap((t) => {
+        const fromLines: ClueFact[] = t.lines
           .filter((l) => l.case && l.attribute)
           .map((l) => ({
             caseRef: l.case!,
@@ -111,10 +134,12 @@ export function SessionDetail({ detail: d, onReveal, onReview, onMessage, busy }
             value: l.change === 'suppress' || l.value == null || l.value === '(비공개)' ? null : l.value,
             action: l.change ?? 'allow',
             turn: t.turn,
-          })),
-      ),
+          }));
+        return fromLines.length ? fromLines : decisionFacts(t);
+      }),
     [c1.turns],
   );
+  const archived = !!d.archived || !!r.archived;
 
   async function sendComposer() {
     if (!composer || composer.text.trim().length < 2) return;
@@ -145,13 +170,21 @@ export function SessionDetail({ detail: d, onReveal, onReview, onMessage, busy }
 
   function turnBlock(t: TurnView) {
     const hit = t.change_notes.some((n) => n.changes.some((c) => c.change === 'suppress'));
-    const attrs = [...new Set(t.lines.filter((l) => l.case).map((l) => ATTR_KO[l.attribute ?? ''] ?? l.attribute))].filter(Boolean);
-    const rawChanged = d.revealed
+    const lineAttrs = t.lines.filter((l) => l.case).map((l) => ATTR_KO[l.attribute ?? ''] ?? l.attribute);
+    const attrs = [...new Set(lineAttrs.length ? lineAttrs : (t.decisions ?? []).flatMap((p) => p.items.map((it) => it.attribute)))].filter(Boolean);
+    const rawFromLines = d.revealed
       ? t.lines.flatMap((l, i) => {
           const raw = t.raw_lines?.[i];
           return l.change && raw?.case ? [`${caseLabel(raw.case)} ${raw.field}: ${raw.value ?? ''}`] : [];
         })
       : [];
+    // 실제 LLM 답: 열람 뒤에는 가리거나 넓힌 항목의 원래 값을 판정 항목에서 보여 준다
+    const rawChanged =
+      rawFromLines.length || !d.revealed
+        ? rawFromLines
+        : (t.decisions ?? []).flatMap((p) =>
+            p.items.filter((it) => it.action !== 'allow' && it.raw_value).map((it) => `${caseLabel(p.case)} ${it.attribute}: ${it.raw_value}`),
+          );
     const m = mentions[c1.turns.indexOf(t)];
     const shown = answers.has(t.turn);
     return (
@@ -226,12 +259,19 @@ export function SessionDetail({ detail: d, onReveal, onReview, onMessage, busy }
           <span className="font-mono text-[15px] font-medium">{d.trial_id}</span>
           <StatusChip tone={TONE[r.status]}>{r.status_label}</StatusChip>
           <span className="text-xs text-ink-3">
-            {d.source_label} {r.turns}턴 {relativeTime(r.last_active)}
+            {d.source_label}
+            {r.owner ? ` · ${r.owner}` : ''} {r.turns}턴 {relativeTime(r.last_active)}
           </span>
+          {r.llm_mode === 'live' && <StatusChip tone="plain">실제 LLM 대화</StatusChip>}
           {r.review && <StatusChip tone="plain">{r.review.label}</StatusChip>}
         </div>
+        {archived && (
+          <p className="mt-2 rounded-control bg-surface-2 px-3 py-2 text-xs leading-5 text-ink-2">
+            서버를 다시 켜기 전 대화입니다. 기록과 판정은 DB에 남은 그대로 볼 수 있고, 원문 열람 · 검토 표시는 되지만 메시지는 보낼 수 없습니다.
+          </p>
+        )}
         <p className="mt-3 max-w-[40em] text-[15px] leading-relaxed">{summarize(d)}</p>
-        {pending && (
+        {pending && !archived && (
           <div className="mt-3 flex flex-wrap items-start gap-x-3 gap-y-2 rounded-control border border-iris bg-iris-tint px-3 py-2.5 text-[13px]">
             <MailQuestion className="mt-0.5 h-4 w-4 shrink-0 text-iris-text" aria-hidden />
             <span className="min-w-0 flex-1">
@@ -285,7 +325,7 @@ export function SessionDetail({ detail: d, onReveal, onReview, onMessage, busy }
                   </button>
                 </div>
               </form>
-            ) : (
+            ) : archived ? null : (
               <button type="button" className="btn-ghost btn-sm mt-2" onClick={() => setComposer({ kind: 'reply', text: '' })}>
                 <Send className="h-3.5 w-3.5" aria-hidden /> 답장 쓰기
               </button>
@@ -387,15 +427,17 @@ export function SessionDetail({ detail: d, onReveal, onReview, onMessage, busy }
         <button type="button" className="btn-primary" disabled={busy} onClick={() => onReview('reviewed')}>
           검토 완료
         </button>
-        <button
-          type="button"
-          className="btn-secondary"
-          disabled={busy}
-          aria-expanded={composer?.kind === 'check_request'}
-          onClick={() => setComposer({ kind: 'check_request', text: CHECK_DEFAULT })}
-        >
-          의료진에게 확인 요청
-        </button>
+        {!archived && (
+          <button
+            type="button"
+            className="btn-secondary"
+            disabled={busy}
+            aria-expanded={composer?.kind === 'check_request'}
+            onClick={() => setComposer({ kind: 'check_request', text: CHECK_DEFAULT })}
+          >
+            의료진에게 확인 요청
+          </button>
+        )}
         <span className="flex-1" />
         <button type="button" className="btn-ghost" disabled={busy} onClick={() => onReview('add_rule')}>
           질문 패턴을 규칙에 추가

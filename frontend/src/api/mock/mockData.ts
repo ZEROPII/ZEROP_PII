@@ -12,7 +12,10 @@ export const MOCK_ENVIRONMENT: WorkspaceEnvironment = {
   locationLabel: '순환기내과 외래 진료실',
 };
 
-export const MOCK_POLICY: ProtectionPolicy = {
+/** Mock은 숫자가 늘 있는 보안 담당자 API 모양으로 만든다 (의료진 화면은 숫자를 그리지 않는다). */
+export type FullPolicy = ProtectionPolicy & { minK: number; suppressK: number; populationSize: number };
+
+export const MOCK_POLICY: FullPolicy = {
   modeLabel: '보호 모드',
   arm: 'C1',
   stateModeLabel: '누적 State 판정',

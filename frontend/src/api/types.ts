@@ -5,6 +5,7 @@ import type {
   CaseId,
   CaseRiskState,
   CaseSummary,
+  ClinicHistoryItem,
   ClinicMessage,
   ConversationSession,
   DisclosureHistory,
@@ -46,6 +47,8 @@ export interface ClinicalCaseApi {
   listClinicMessages?(signal?: AbortSignal): Promise<ClinicMessage[] | null>;
   /** 세부 정보 요청 또는 확인 요청에 대한 답장. 보낸 뒤의 전체 메시지 목록을 돌려준다. */
   postClinicMessage?(request: PostClinicMessageRequest): Promise<ClinicMessage[]>;
+  /** 이 의료진의 대화 목록 (지금 대화 · 지난 대화). 지원하지 않는 백엔드는 빈 목록. */
+  listHistory?(signal?: AbortSignal): Promise<ClinicHistoryItem[]>;
 }
 
 export class ApiError extends Error {

@@ -5,10 +5,11 @@ import { useTheme } from '../../hooks/useTheme';
 import { useTerms } from '../../state/TermContext';
 import { LogoMark } from '../brand/Logo';
 import { ROLE_HOME, ROLE_LABEL, type Role } from './nav';
+import { UserMenu } from './UserMenu';
 
 const THEME_LABEL = { system: '시스템 설정을 따름', light: '라이트', dark: '다크' } as const;
 
-export function TopBar({ role, title, onOpenPalette }: { role: Role; title: string; onOpenPalette(): void }) {
+export function TopBar({ role, product, title, onOpenPalette }: { role: Role; product: boolean; title: string; onOpenPalette(): void }) {
   const navigate = useNavigate();
   const backend = useBackendInfo();
   const { theme, cycle } = useTheme();
@@ -29,24 +30,28 @@ export function TopBar({ role, title, onOpenPalette }: { role: Role; title: stri
       {backend && (
         <span className="hidden items-center gap-1.5 text-xs text-ink-2 lg:inline-flex" title={backend.detail}>
           <i className={`block h-[7px] w-[7px] rounded-full ${live ? 'bg-safe' : 'bg-danger'}`} style={{ boxShadow: `0 0 0 3px var(--zp-${live ? 'safe' : 'danger'}-tint)` }} />
-          {backend.kind === 'webdemo' ? '방어 규칙 작동 중' : backend.label}
+          {backend.kind === 'webdemo' ? '방어 규칙 작동 중' : backend.kind === 'medicloak' ? `방어 규칙 작동 중 · 대상 AI ${backend.label}` : backend.label}
         </span>
       )}
 
-      <div role="group" aria-label="화면 전환" className="ml-auto flex rounded-control bg-surface-2 p-1">
-        {(['clinician', 'security'] as Role[]).map((r) => (
-          <button
-            key={r}
-            type="button"
-            aria-pressed={role === r}
-            onClick={() => navigate(ROLE_HOME[r])}
-            className={`h-7 whitespace-nowrap rounded-[7px] px-2.5 text-[13px] font-semibold transition-colors sm:px-3 ${role === r ? 'bg-surface text-ink shadow-sm' : 'text-ink-3 hover:text-ink'}`}
-          >
-            <span className="sm:hidden">{r === 'security' ? '보안' : '의료진'}</span>
-            <span className="hidden sm:inline">{ROLE_LABEL[r]}</span>
-          </button>
-        ))}
-      </div>
+      {product ? (
+        <span className="ml-auto" />
+      ) : (
+        <div role="group" aria-label="화면 전환" className="ml-auto flex rounded-control bg-surface-2 p-1">
+          {(['clinician', 'security'] as Role[]).map((r) => (
+            <button
+              key={r}
+              type="button"
+              aria-pressed={role === r}
+              onClick={() => navigate(ROLE_HOME[r])}
+              className={`h-7 whitespace-nowrap rounded-[7px] px-2.5 text-[13px] font-semibold transition-colors sm:px-3 ${role === r ? 'bg-surface text-ink shadow-sm' : 'text-ink-3 hover:text-ink'}`}
+            >
+              <span className="sm:hidden">{r === 'security' ? '보안' : '의료진'}</span>
+              <span className="hidden sm:inline">{ROLE_LABEL[r]}</span>
+            </button>
+          ))}
+        </div>
+      )}
 
       <button
         type="button"
@@ -74,6 +79,7 @@ export function TopBar({ role, title, onOpenPalette }: { role: Role; title: stri
       <button type="button" onClick={cycle} className="btn-ghost h-9 w-9 px-0" aria-label={`테마: ${THEME_LABEL[theme]} (눌러서 바꾸기)`} title={`테마: ${THEME_LABEL[theme]}`}>
         <ThemeIcon className="h-4 w-4" aria-hidden />
       </button>
+      {product && <UserMenu tone="console" />}
     </header>
   );
 }

@@ -1,5 +1,7 @@
-import { ChevronDown, ChevronUp, RefreshCw, UserRound } from 'lucide-react';
+import { ChevronDown, ChevronUp, ClipboardList, RefreshCw, UserRound } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
+import { NavLink } from 'react-router-dom';
+import { useAuth } from '../../state/AuthContext';
 import { useWorkspace } from '../../state/WorkspaceContext';
 import type { PatientOption } from '../../types/domain';
 import { MockBadge } from '../common/MockBadge';
@@ -106,6 +108,7 @@ function DemoPatientSwitcher() {
  */
 export function PatientBanner() {
   const { state, actions } = useWorkspace();
+  const product = useAuth().status === 'user';
   const { patient } = state;
   const [expanded, setExpanded] = useState(false);
   const p = patient.data;
@@ -160,7 +163,14 @@ export function PatientBanner() {
             </button>
             <span className="ml-auto flex shrink-0 items-center gap-1">
               <MockBadge source={p.source} />
-              <DemoPatientSwitcher />
+              {product ? (
+                <NavLink to="/emr" className="btn-ghost btn-sm h-7 gap-1 text-ink-2">
+                  <ClipboardList className="h-3.5 w-3.5" aria-hidden />
+                  <span className="hidden sm:inline">다른 환자</span>
+                </NavLink>
+              ) : (
+                <DemoPatientSwitcher />
+              )}
             </span>
           </>
         )}

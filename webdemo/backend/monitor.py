@@ -12,6 +12,11 @@
 #   마지막 메시지를 의료진이 보냈으면 보안 담당자가 답할 차례다 → 검토 필요 목록 맨 위로 올린다.
 #   '의료진에게 확인 요청' 검토 표시는 확인 요청 메시지를 함께 보낸다 (의료진 화면에 도착하고, 의료진이 답할 수 있다).
 #   메시지는 원래 값을 담지 않는다. 의료진이 무엇이 필요한지 쓰고, 보안 담당자가 처리 결과를 답한다.
+#
+# DB(store)가 있으면 (python -m medicloak)
+#   감사 기록 · 메시지는 쓰는 즉시 DB에 넣고, 번호(A0001 · M0001)는 DB의 마지막 번호 다음부터 잇는다.
+#   서버를 다시 켜기 전의 의료진 대화는 ArchivedSession으로 목록 · 상세에 남는다 (읽기와 검토 표시만, 메시지는 보낼 수 없음).
+#   누가 했는지(actor)는 로그인한 계정 이름으로 남긴다.
 
 from __future__ import annotations
 
@@ -21,8 +26,10 @@ import itertools
 import re
 import threading
 import time
-from typing import Any
+from typing import Any, Callable
 
+from webdemo.backend.auth import actor_label
+from webdemo.backend.clinic import Conflict
 from webdemo.backend.engine import ARM_KO, Engine, Session
 
 LIVE_ARM = "C1"
@@ -32,6 +39,7 @@ REVIEW_KO = dict(reviewed="검토 완료", ask_clinician="의료진에게 확인
 ACTOR = "보안 담당자 (데모)"
 CLINICIAN = "의료진 (데모)"
 SIM_TRIALS = ("T0010", "T0015", "T0036", "T0024", "T0016", "T0005")
+AUDIT_LIMIT = 2000
 
 MSG_KINDS = dict(clinician=("access_request", "reply"), security=("check_request", "reply"))
 MSG_KIND_KO = dict(access_request="세부 정보 요청", check_request="확인 요청", reply="답장")
@@ -40,23 +48,67 @@ MSG_AUDIT = {("clinician", "access_request"): "access_request", ("clinician", "r
              ("security", "check_request"): "ask_clinician", ("security", "reply"): "security_reply"}
 CHECK_DEFAULT = "이 대화에서 같은 사례의 세부 정보를 여러 번 물으셨습니다. 진료에 필요한 내용이었는지 알려 주세요."
 FLAG_KO = dict(access_request="의료진 세부 정보 요청", reply="의료진 답장 도착")
+ARCHIVED_PENDING = "답하지 못한 요청 (지난 대화)"
 _CASE_REF = re.compile(r"사례\d+")
 
 
+class ArchivedSession:
+    """DB에 남은 지난 의료진 대화 (서버를 다시 켜기 전). 관제 화면에서 읽기 · 열람 · 검토 표시만 된다."""
+
+    archived = True
+    source = "clinic"
+
+    def __init__(self, conv: dict[str, Any], messages: list[dict[str, Any]]) -> None:
+        self.db = conv
+        self.id = conv["conv_id"]
+        self.trial_id = conv["trial_id"]
+        self.review = conv.get("review")
+        self.messages = messages
+        self.last_active = conv.get("last_active") or 0
+        self.created = conv.get("started_at") or 0
+        self.turn = conv.get("turns") or 0
+        self.owner = dict(user_id=conv.get("user_id"), label=conv.get("owner_label")) if conv.get("owner_label") else None
+
+
 class Monitor:
-    def __init__(self, eng: Engine) -> None:
+    def __init__(self, eng: Engine, store: Any = None, *, on_session_change: Callable[[Session], None] | None = None) -> None:
         self.eng = eng
+        self.store = store
+        self.on_session_change = on_session_change
         self.audit: list[dict[str, Any]] = []
-        self._ids = itertools.count(1)
-        self._mids = itertools.count(1)
+        self._ids = itertools.count((store.max_seq("audit") if store else 0) + 1)
+        self._mids = itertools.count((store.max_seq("thread_message") if store else 0) + 1)
+        self._seq_lock = threading.Lock()
         self.sim_status = "idle"
 
     # ── 감사 기록 ──
-    def log(self, action: str, session: Session | None = None, **kw: Any) -> dict[str, Any]:
-        e = dict(id=f"A{next(self._ids):04d}", at=time.time(), actor=kw.pop("actor", ACTOR), action=action,
+    def log(self, action: str, session: Any = None, *, user: dict[str, Any] | None = None, actor: str | None = None,
+            **kw: Any) -> dict[str, Any]:
+        with self._seq_lock:
+            n = next(self._ids)
+        e = dict(id=f"A{n:04d}", at=time.time(), actor=actor_label(user, actor or ACTOR), action=action,
                  session=session.id if session else None, trial=session.trial_id if session else None, **kw)
+        if user:
+            e["user_id"] = user["user_id"]
         self.audit.append(e)
+        if len(self.audit) > AUDIT_LIMIT:
+            del self.audit[: len(self.audit) - AUDIT_LIMIT]
+        if self.store is not None:
+            self.store.add_audit(e, n)
         return e
+
+    def audit_entries(self) -> list[dict[str, Any]]:
+        """오래된 것부터 (API는 뒤집어 최근 것부터 보낸다)."""
+        if self.store is not None:
+            return self.store.audit_entries(AUDIT_LIMIT)
+        return list(self.audit)
+
+    def _changed(self, s: Any) -> None:
+        if self.on_session_change is not None and not getattr(s, "archived", False):
+            try:
+                self.on_session_change(s)
+            except Exception as exc:
+                print(f"[medicloak] 대화 {s.id} 저장 실패: {type(exc).__name__}: {exc}")
 
     # ── 시작할 때 돌리는 시뮬레이션 대화 ──
     def seed_simulations(self, trials: tuple[str, ...] = SIM_TRIALS, turns: int = 6) -> threading.Thread:
@@ -81,7 +133,9 @@ class Monitor:
         return t
 
     # ── 대화 하나 요약 ──
-    def row(self, s: Session) -> dict[str, Any]:
+    def row(self, s: Any) -> dict[str, Any]:
+        if getattr(s, "archived", False):
+            return self._archived_row(s)
         recs = [r for r in s.logs[LIVE_ARM] if r.get("turn") is not None]
         sup = gen = 0
         sup_by_case: collections.Counter = collections.Counter()
@@ -107,7 +161,7 @@ class Monitor:
         k_req = s.cfg.k_req
         violated = sorted(ref for ref, k in k_now.items() if 1 <= k < k_req)
         repeated = [ref for ref, n in sup_by_case.items() if n >= 2]
-        last_q = next((r["query_text"] for r in reversed(recs) if r["turn"] > 0), None)
+        last_q = next((r.get("user_question") or r["query_text"] for r in reversed(recs) if r["turn"] > 0), None)
         last_msg = s.messages[-1] if s.messages else None
         pending = bool(last_msg and last_msg["sender"] == "clinician")          # 보안 담당자가 답할 차례
         awaiting = bool(last_msg and last_msg["sender"] == "security" and last_msg["kind"] == "check_request")
@@ -120,13 +174,38 @@ class Monitor:
                     last_question=last_q, last_active=s.last_active, created=s.created,
                     review=s.review, needs_review=(bool(repeated) and not s.review) or pending,
                     messages=len(s.messages), pending_request=pending, awaiting_clinician=awaiting,
-                    request_case=last_msg.get("case") if pending else None)
+                    request_case=last_msg.get("case") if pending else None,
+                    owner=s.owner["label"] if getattr(s, "owner", None) else None, archived=False,
+                    llm_mode=getattr(s, "llm_mode", "oracle"))
+
+    def _archived_row(self, a: ArchivedSession) -> dict[str, Any]:
+        base = dict(a.db.get("row") or {})
+        was_pending = bool(base.get("pending_request"))
+        return dict(base, id=a.id, review=a.review, archived=True, pending_request=False, awaiting_clinician=False, request_case=None,
+                    needs_review=bool(base.get("needs_review")) and not a.review,
+                    flag=ARCHIVED_PENDING if was_pending and not a.review else base.get("flag") if not was_pending else None,
+                    owner=a.owner["label"] if a.owner else base.get("owner"))
+
+    def archived(self, sid: str) -> ArchivedSession | None:
+        if self.store is None or sid in self.eng.sessions:
+            return None
+        c = self.store.conversation(sid)
+        if c is None or not c.get("row"):
+            return None
+        return ArchivedSession(c, self.store.messages_of(sid))
 
     def overview(self) -> dict[str, Any]:
         with self.eng.lock:
+            live_ids = set(self.eng.sessions)
             rows = [self.row(s) for s in self.eng.sessions.values()]
+        if self.store is not None:
+            for c in self.store.conversations("clinic"):
+                r = c.get("row")
+                if c["conv_id"] in live_ids or not r or (not r.get("turns") and not r.get("messages")):
+                    continue                       # 질문 없이 끝난 빈 대화는 목록에 올리지 않는다
+                rows.append(self._archived_row(ArchivedSession(c, [])))
         rank = dict(danger=0, caution=1, safe=2)
-        rows.sort(key=lambda r: (not r["pending_request"], not r["needs_review"], rank[r["status"]], -r["last_active"]))
+        rows.sort(key=lambda r: (not r["pending_request"], not r["needs_review"], r.get("archived", False), rank[r["status"]], -r["last_active"]))
         kpi = dict(sessions=len(rows), suppressed=sum(r["suppressed"] for r in rows), generalized=sum(r["generalized"] for r in rows),
                    identified=sum(len(r["violated"]) for r in rows), needs_review=sum(r["needs_review"] for r in rows),
                    blocked_sessions=sum(r["status"] == "danger" for r in rows), requests=sum(r["pending_request"] for r in rows))
@@ -135,37 +214,54 @@ class Monitor:
                     generalize_threshold=self.eng.cfg.generalize_threshold)
 
     # ── 상세 ──
-    def detail(self, s: Session, reveal: bool = False) -> dict[str, Any]:
-        with self.eng.lock:
-            v = s.security_view()
-            row = self.row(s)
+    def detail(self, s: Any, reveal: bool = False) -> dict[str, Any]:
+        if getattr(s, "archived", False):
+            v = copy.deepcopy(s.db.get("security") or {})
+            row = self._archived_row(s)
             msgs = copy.deepcopy(s.messages)
+        else:
+            with self.eng.lock:
+                v = s.security_view()
+                row = self.row(s)
+                msgs = copy.deepcopy(s.messages)
         if not reveal:
             v = mask(v)
-        return dict(v, row=row, revealed=reveal, source_label=SOURCE_KO.get(s.source, s.source), live_arm=LIVE_ARM, messages=msgs)
+        return dict(v, row=row, revealed=reveal, source_label=SOURCE_KO.get(s.source, s.source), live_arm=LIVE_ARM, messages=msgs,
+                    archived=bool(getattr(s, "archived", False)))
 
-    def reveal(self, s: Session, reason: str) -> dict[str, Any]:
-        self.log("reveal", s, reason=reason)
+    def reveal(self, s: Any, reason: str, user: dict[str, Any] | None = None) -> dict[str, Any]:
+        self.log("reveal", s, user=user, reason=reason)
         return self.detail(s, reveal=True)
 
-    def review(self, s: Session, action: str, note: str | None) -> dict[str, Any]:
+    def review(self, s: Any, action: str, note: str | None, user: dict[str, Any] | None = None) -> dict[str, Any]:
+        archived = getattr(s, "archived", False)
         check = None
         if action == "ask_clinician":                    # 표시만 하지 않고 의료진 화면에 확인 요청을 보낸다
+            if archived:
+                raise Conflict("지난 대화의 의료진에게는 확인 요청을 보낼 수 없습니다. '검토 완료'로 표시하세요.")
             check = (note or "").strip() or CHECK_DEFAULT
             if len(check) < 2:                           # 상태를 바꾸기 전에 검사한다 (표시 · 감사 기록만 남고 메시지가 없는 일이 없게)
                 raise ValueError("확인 요청은 2자 이상 써 주세요.")
-        s.review = dict(action=action, label=REVIEW_KO[action], at=time.time(), actor=ACTOR, note=note)
-        self.log(action, s, note=note)
+        s.review = dict(action=action, label=REVIEW_KO[action], at=time.time(), actor=actor_label(user, ACTOR), note=note)
+        self.log(action, s, user=user, note=note)
+        if archived:
+            if self.store is not None:
+                self.store.save_conversation(s.id, review_json=s.review)
+            return self._archived_row(s)
         if check is not None:
             with self.eng.lock:
                 case = self.row(s)["focus_case"]
-            self.post_message(s, "security", "check_request", check, case, audit=False)
+            self.post_message(s, "security", "check_request", check, case, audit=False, user=user)
+        else:
+            self._changed(s)
         with self.eng.lock:
             return self.row(s)
 
     # ── 의료진 ↔ 보안 담당자 메시지 ──
-    def post_message(self, s: Session, sender: str, kind: str, text: str, case: str | None = None, *,
-                     audit: bool = True) -> dict[str, Any]:
+    def post_message(self, s: Any, sender: str, kind: str, text: str, case: str | None = None, *,
+                     audit: bool = True, user: dict[str, Any] | None = None) -> dict[str, Any]:
+        if getattr(s, "archived", False):
+            raise Conflict("지난 대화라 메시지를 보낼 수 없습니다 (서버를 다시 켜기 전 대화는 읽기만 합니다).")
         text = (text or "").strip()
         if kind not in MSG_KINDS.get(sender, ()):
             raise ValueError(f"{sender} 메시지 종류는 {', '.join(MSG_KINDS.get(sender, ()))} 중 하나입니다.")
@@ -173,17 +269,24 @@ class Monitor:
             raise ValueError("메시지는 2자 이상 500자 이하로 써 주세요.")
         if case is not None and not _CASE_REF.fullmatch(case):
             raise ValueError(f"사례 표시가 올바르지 않습니다: {case}")
-        actor = ACTOR if sender == "security" else CLINICIAN
-        m = dict(id=f"M{next(self._mids):04d}", at=time.time(), sender=sender, kind=kind, kind_label=MSG_KIND_KO[kind],
+        actor = actor_label(user, ACTOR if sender == "security" else CLINICIAN)
+        with self._seq_lock:
+            n = next(self._mids)
+        m = dict(id=f"M{n:04d}", at=time.time(), sender=sender, kind=kind, kind_label=MSG_KIND_KO[kind],
                  case=case, text=text, actor=actor)
         with self.eng.lock:
             s.messages.append(m)
             s.last_active = m["at"]
+        if self.store is not None:
+            self.store.add_message(s.id, m, n, user["user_id"] if user else None)
         if audit:
-            self.log(MSG_AUDIT[(sender, kind)], s, actor=actor, note=text, case=case)
+            self.log(MSG_AUDIT[(sender, kind)], s, user=user, actor=ACTOR if sender == "security" else CLINICIAN, note=text, case=case)
+        self._changed(s)
         return m
 
-    def thread(self, s: Session) -> dict[str, Any]:
+    def thread(self, s: Any) -> dict[str, Any]:
+        if getattr(s, "archived", False):
+            return dict(messages=copy.deepcopy(s.messages), row=self._archived_row(s))
         with self.eng.lock:
             return dict(messages=copy.deepcopy(s.messages), row=self.row(s))
 
@@ -194,7 +297,7 @@ def mask(view: dict[str, Any]) -> dict[str, Any]:
     v["patient"] = None
     for r in v.get("retrieval", []):
         r["patient"] = None
-    for name, a in v["arms"].items():
+    for name, a in (v.get("arms") or {}).items():
         for val in a.get("validation", {}).values():
             val["patient"] = None
         for t in a["turns"]:
@@ -204,10 +307,14 @@ def mask(view: dict[str, Any]) -> dict[str, Any]:
                 for ln in t.get("lines", []) + t.get("raw_lines", []):
                     if "case" in ln:
                         ln["value"] = None
+                    elif "text" in ln:                  # 실제 LLM 답은 '사례N · 항목: 값' 줄 모양이 아니라 글 그대로다
+                        ln["text"] = None
             changed = {(ln.get("case"), ln.get("field")) for ln in t.get("lines", []) if ln.get("change")}
             for ln in t.get("raw_lines", []):
                 if (ln.get("case"), ln.get("field")) in changed:
                     ln["value"] = None
+                elif name == LIVE_ARM and "text" in ln and "case" not in ln:
+                    ln["text"] = None                   # 원 응답 줄 (글 그대로인 줄에는 가린 값이 섞여 있을 수 있다)
             for p in t.get("decisions", []):
                 for it in p["items"]:
                     if it["action"] != "allow":

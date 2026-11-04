@@ -1,13 +1,17 @@
 // 실제 백엔드 HTTP 구현.
 //
-// 백엔드는 저장소 루트의 api_server/ (python -m api_server, 경로 접두사 /api). 아래 경로와 응답 모양이 그대로 맞는다.
+// 백엔드는 python -m medicloak · python -m webdemo · python -m api_server (경로 접두사 /api). 아래 경로와 응답 모양이 그대로 맞는다.
+// 보안 담당자 '의료진 대화' 화면은 같은 구현을 /api/watch/{대화} 접두사로 만들어 쓴다 (숫자가 그대로 있는 읽기 전용 계약).
 // UI 코드는 ClinicalCaseApi만 사용한다.
 // 인증은 쿠키 세션(credentials: 'include')을 전제로 해 토큰을 브라우저 저장소·로그에 두지 않는다.
 
-import type { CaseId, ClinicMessage, PatientOption, SendQuestionRequest, SuggestedQuestion } from '../types/domain';
+import type { CaseId, ClinicHistoryItem, ClinicMessage, PatientOption, SendQuestionRequest, SuggestedQuestion } from '../types/domain';
+import { notifyUnauthorized } from './session';
 import { ApiError, type ClinicalCaseApi } from './types';
 
 const STATUS_MESSAGE: Record<number, string> = {
+  401: '로그인이 끝났습니다. 다시 로그인하세요.',
+  403: '이 계정으로는 쓸 수 없는 기능입니다.',
   404: '요청한 사례나 대화를 찾지 못했습니다. 화면을 새로 불러오세요.',
   409: '대화가 새로 시작되어 이 화면의 내용이 오래되었습니다. 화면을 새로 불러오세요.',
   422: '질문을 보낼 수 없습니다. 내용을 확인한 뒤 다시 보내세요.',
@@ -29,6 +33,7 @@ export function createHttpApi(baseUrl: string): ClinicalCaseApi {
       if (error instanceof DOMException && error.name === 'AbortError') throw error;
       throw new ApiError('서버에 연결할 수 없습니다.');
     }
+    if (response.status === 401) notifyUnauthorized();
     if (!response.ok) {
       // 본문에 의료 데이터가 들어 있을 수 있으므로 상태 코드에 맞춘 고정 문구만 보여 준다.
       throw new ApiError(STATUS_MESSAGE[response.status] ?? `요청이 실패했습니다 (HTTP ${response.status}).`, response.status);
@@ -80,6 +85,11 @@ export function createHttpApi(baseUrl: string): ClinicalCaseApi {
       request<ClinicMessage[]>('/clinic/messages', {
         method: 'POST',
         body: JSON.stringify({ kind: req.kind, text: req.text, caseId: req.caseId ?? null }),
+      }),
+    listHistory: (signal) =>
+      request<ClinicHistoryItem[]>('/clinic/history', { signal }).catch((error) => {
+        if (error instanceof ApiError && error.status === 404) return [];
+        throw error;
       }),
   };
 }

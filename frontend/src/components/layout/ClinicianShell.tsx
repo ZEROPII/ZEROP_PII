@@ -9,6 +9,7 @@ import { useWorkspace } from '../../state/WorkspaceContext';
 import { LogoMark } from '../brand/Logo';
 import { PatientBanner } from '../clinic/PatientBanner';
 import { NAV, ROLE_HOME, ROLE_LABEL, type Role } from './nav';
+import { UserMenu } from './UserMenu';
 
 const THEME_LABEL = { system: '시스템 설정을 따름', light: '라이트', dark: '다크' } as const;
 
@@ -38,9 +39,9 @@ function ChromeButton({ label, onClick, pressed, children, badge }: { label: str
  * 의료진 화면 틀: 병원 EMR 안에 들어간 진료 지원 AI처럼 보이게 한다. MediCloak은 그 AI 앞에서 답을 거르는 보호 계층이라
  * 이름은 머리줄의 'MediCloak 보호 적용' 표시로만 드러낸다.
  * 어두운 앱 머리줄(메뉴 · 찾기 · 용어 · 보호 담당자 메시지 · 보호 적용 표시) → 환자 띠 → 본문.
- * 데모용 화면 전환(의료진 | 보안 담당자)은 머리줄 오른쪽 끝에 따로 둔다.
+ * 데모용 화면 전환(의료진 | 보안 담당자)은 머리줄 오른쪽 끝에 따로 둔다. 운영 모드(product)에서는 그 자리에 계정 메뉴가 온다.
  */
-export function ClinicianShell({ role, onOpenPalette }: { role: Role; onOpenPalette(): void }) {
+export function ClinicianShell({ role, product, onOpenPalette }: { role: Role; product: boolean; onOpenPalette(): void }) {
   const navigate = useNavigate();
   const { theme, cycle } = useTheme();
   const ThemeIcon = theme === 'dark' ? Moon : theme === 'light' ? Sun : Monitor;
@@ -48,7 +49,7 @@ export function ClinicianShell({ role, onOpenPalette }: { role: Role; onOpenPale
   const msgs = useClinicMessages();
   const { state } = useWorkspace();
   const off = state.policy.data?.arm === 'C0';
-  const items = NAV.clinician;
+  const items = NAV.clinician.filter((i) => product || !i.productOnly);
 
   return (
     <div className="flex h-dvh flex-col bg-page text-ink">
@@ -119,23 +120,27 @@ export function ClinicianShell({ role, onOpenPalette }: { role: Role; onOpenPale
             {off ? <ShieldAlert className="h-3.5 w-3.5" aria-hidden /> : <ShieldCheck className="h-3.5 w-3.5" aria-hidden />}
             {off ? 'MediCloak 보호 꺼짐 (비교용)' : 'MediCloak 보호 적용'}
           </NavLink>
-          <div role="group" aria-label="데모 화면 전환" className="ml-1 flex items-center rounded-[8px] border border-emr-chrome-line p-0.5">
-            <span className="hidden px-1.5 text-[10.5px] text-emr-chrome-muted lg:inline">데모</span>
-            {(['clinician', 'security'] as Role[]).map((r) => (
-              <button
-                key={r}
-                type="button"
-                aria-pressed={role === r}
-                onClick={() => navigate(ROLE_HOME[r])}
-                className={`h-6 whitespace-nowrap rounded-[6px] px-2 text-xs font-semibold ${
-                  role === r ? 'bg-emr-chrome-hover text-white' : 'text-emr-chrome-muted hover:text-emr-chrome-text'
-                }`}
-              >
-                <span className="sm:hidden">{r === 'security' ? '보안' : '의료진'}</span>
-                <span className="hidden sm:inline">{ROLE_LABEL[r]}</span>
-              </button>
-            ))}
-          </div>
+          {product ? (
+            <UserMenu tone="chrome" />
+          ) : (
+            <div role="group" aria-label="데모 화면 전환" className="ml-1 flex items-center rounded-[8px] border border-emr-chrome-line p-0.5">
+              <span className="hidden px-1.5 text-[10.5px] text-emr-chrome-muted lg:inline">데모</span>
+              {(['clinician', 'security'] as Role[]).map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  aria-pressed={role === r}
+                  onClick={() => navigate(ROLE_HOME[r])}
+                  className={`h-6 whitespace-nowrap rounded-[6px] px-2 text-xs font-semibold ${
+                    role === r ? 'bg-emr-chrome-hover text-white' : 'text-emr-chrome-muted hover:text-emr-chrome-text'
+                  }`}
+                >
+                  <span className="sm:hidden">{r === 'security' ? '보안' : '의료진'}</span>
+                  <span className="hidden sm:inline">{ROLE_LABEL[r]}</span>
+                </button>
+              ))}
+            </div>
+          )}
           <ChromeButton label={`테마: ${THEME_LABEL[theme]} (눌러서 바꾸기)`} onClick={cycle}>
             <ThemeIcon className="h-4 w-4" aria-hidden />
           </ChromeButton>

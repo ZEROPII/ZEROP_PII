@@ -13,6 +13,8 @@ export interface WorkspaceActions {
   discardMessage(caseId: CaseId, messageId: string): void;
   /** 새 대화로 다시 시작 (trialId를 주면 그 질의 환자로). 백엔드가 지원할 때만. */
   restart(trialId?: string): Promise<void>;
+  /** 서버 쪽에서 대화가 바뀐 뒤(EMR에서 다른 환자를 엶) 화면 상태를 비우고 처음부터 다시 받는다. */
+  resetAndReload(): void;
   /**
    * 열어 둔 대화·공개 이력·후보 수를 로딩 표시 없이 새로 받는다 (보안 담당자 '의료진 대화' 화면이 주기적으로 부른다).
    * 그 사이 의료진이 새 대화를 시작했으면 처음부터 다시 불러온다.
@@ -168,6 +170,11 @@ export function WorkspaceProvider({ children, api = defaultApi }: { children: Re
     [api, reloadAll],
   );
 
+  const resetAndReload = useCallback(() => {
+    dispatch({ type: 'workspace/reset' });
+    reloadAll();
+  }, [reloadAll]);
+
   const refreshLive = useCallback(async () => {
     const before = stateRef.current;
     try {
@@ -209,8 +216,8 @@ export function WorkspaceProvider({ children, api = defaultApi }: { children: Re
   }, [state.selectedCaseId, loadSession, loadDisclosures]);
 
   const actions = useMemo<WorkspaceActions>(
-    () => ({ reloadAll, selectCase, loadSession, loadDisclosures, sendQuestion, retryMessage, discardMessage, restart, refreshLive }),
-    [reloadAll, selectCase, loadSession, loadDisclosures, sendQuestion, retryMessage, discardMessage, restart, refreshLive],
+    () => ({ reloadAll, selectCase, loadSession, loadDisclosures, sendQuestion, retryMessage, discardMessage, restart, resetAndReload, refreshLive }),
+    [reloadAll, selectCase, loadSession, loadDisclosures, sendQuestion, retryMessage, discardMessage, restart, resetAndReload, refreshLive],
   );
 
   const value = useMemo(() => ({ state, actions, api }), [state, actions, api]);
@@ -221,6 +228,11 @@ export function useWorkspace(): WorkspaceContextValue {
   const ctx = useContext(WorkspaceContext);
   if (!ctx) throw new Error('useWorkspace는 WorkspaceProvider 안에서만 쓸 수 있습니다.');
   return ctx;
+}
+
+/** 제공자 밖에서도 부를 수 있는 판 (명령 찾기처럼 두 역할 화면 모두에 뜨는 부품). 밖이면 null. */
+export function useOptionalWorkspace(): WorkspaceContextValue | null {
+  return useContext(WorkspaceContext);
 }
 
 /** 선택된 사례에 묶인 데이터만 모아 준다. */

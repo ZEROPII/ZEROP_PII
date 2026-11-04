@@ -5,7 +5,9 @@ MediCloak은 의료 LLM의 답이 화면에 나가기 전에, 앞선 대화와 �
 - **의료진 화면**: 병원 EMR 안에 들어간 진료 지원 AI 형태입니다(팀원 `frontend/` Clinical Case Finder를 바탕으로 다시 구성). 후보 수 같은 재식별 위험 숫자는 보이지 않고, 가린 값은 '비공개', 넓힌 값은 '범위'로만 표시합니다. 필요하면 개인정보 보호 담당자에게 세부 정보를 요청할 수 있습니다.
 - **보안 담당자 화면(MediCloak 관제)**: 같은 대화를 숫자와 함께 봅니다. 방어 규칙이 무엇을 왜 가렸는지, 가리지 않았다면 후보가 몇 명이었을지, 단서가 사례들에 어떻게 이어지는지 보여 주고, 의료진 요청에 답합니다.
 
-API 키가 필요 없습니다. 대상 AI는 질문받은 단서를 검색 문서의 기록값으로 답하는 결정적 응답기(`medical/simulate.py`의 `OracleRoleLLM`)이고 LLM을 부르지 않습니다. 실제 LLM으로 돌리려면 팀원 `api_server/`(`python -m api_server`, `.env` 필요)를 쓰면 되고, 같은 화면이 의료진 부분만 그대로 붙습니다.
+이 데모(`python -m webdemo`)는 API 키가 필요 없습니다. 대상 AI는 질문받은 단서를 검색 문서의 기록값으로 답하는 결정적 응답기(`medical/simulate.py`의 `OracleRoleLLM`)이고 LLM을 부르지 않습니다.
+
+로그인 · 역할 분리 · DB(가상 EMR · 기록) · `.env`의 실제 LLM으로 돌리려면 같은 서버 코드를 **운영 모드 `python -m medicloak`**로 켭니다 ([medicloak/README.md](../medicloak/README.md), ADR-0021). 화면도 같습니다.
 
 ## 실행 (맥 기준)
 
@@ -71,7 +73,9 @@ frontend/                      팀원 Clinical Case Finder (React·TS·Vite·Tai
   .env.demo                    npm run dev:demo / build:demo 설정 (VITE_API_MODE=http, /api)
 webdemo/
   backend/engine.py            세션(질의 환자 1명 × 세 조건 C0·C1·C1S), 질문 후보, 미리 세기, 레드팀 작업
-  backend/clinic.py            의료진 화면 계약 (api_server와 같은 경로·응답 모양)
+  backend/clinic.py            의료진 화면 계약 (api_server와 같은 경로·응답 모양). 대화(ClinicConversation) · 의료진 한 명(ClinicDesk) · 계정별(DeskRegistry)
+  backend/redact.py            의료진 화면 API에서 위험 숫자 지우기
+  backend/store.py · emr.py · fhir.py · auth.py · live.py · persist.py   운영 모드(python -m medicloak) 전용: DB · 가상 EMR · 로그인 · 실제 LLM · 기록
   backend/intent.py            의료진이 쓴 문장 → 묻는 단서 → Seed (결정적 응답기용 규칙)
   backend/monitor.py           관제 목록·상세·원문 열람·검토·감사 기록, 의료진 ↔ 보안 담당자 메시지, 시뮬레이션 대화
   backend/app.py               FastAPI, frontend/dist 내보내기
@@ -83,9 +87,11 @@ tests/test_webdemo.py
 
 | 경로 | 내용 |
 | --- | --- |
-| `GET /api/workspace` · `/protection-policy` · `/patient-context` · `/cases?patientContextId=` · `/risk-states` | 의료진 화면 (api_server와 같음) |
-| `GET /api/cases/{id}/session` · `/disclosures` · `/policy-decision` | 〃 |
-| `POST /api/cases/{id}/messages` · `/preflight` | 질문 보내기, 보내기 전 미리 세기 (데모에서는 `supported: true`) |
+| `GET /api/workspace` · `/protection-policy` · `/patient-context` · `/cases?patientContextId=` · `/risk-states` | 의료진 화면 (api_server와 같은 경로). 후보 수 · 기준값 필드는 null (`backend/redact.py`) |
+| `GET /api/cases/{id}/session` · `/disclosures` | 〃 (숫자가 든 설명 문장도 지움). `/policy-decision`은 403 |
+| `POST /api/cases/{id}/messages` · `/preflight` | 질문 보내기, 보내기 전 확인 (`plannedAction`만, 후보 수 없음) |
+| `GET /api/watch` · `GET /api/watch/{대화}/…` | 보안 담당자: 의료진 대화 목록, 그 대화의 의료진 화면 계약을 숫자 그대로 (읽기 전용, `/preflight`는 질문 미리 세기) |
+| `GET /api/clinic/history` · `GET /api/monitor/policy` | 의료진 대화 목록(이 화면 · 계정) · 판정 기준과 서버 설정 |
 | `GET /api/cases/{id}/suggestions` · `GET /api/clinic/patients` · `POST /api/session/reset {trialId}` | 예시 질문, 질의 환자 목록, 새 대화 |
 | `GET /api/clinic/messages` · `POST /api/clinic/messages {kind, text, caseId}` | 의료진 ↔ 보호 담당자 메시지 (kind: access_request 세부 정보 요청 · reply 답장) |
 | `GET /api/monitor/overview` · `GET /api/monitor/sessions/{sid}` | 관제 목록과 상세 (원래 값은 지워서 보냄) |
@@ -104,6 +110,6 @@ tests/test_webdemo.py
 
 - **대상 AI가 결정적 응답기입니다.** 거절하거나 틀리게 답하는 경우가 없습니다. 숫자는 이 응답기 가정 아래의 값입니다.
 - **합성 데이터입니다.** Synthea 576명(저장소 461명, 질의 환자 풀 115명)이며 모두 Massachusetts 거주자입니다. 후보 1명은 합성 기준 집단 안에서 유일하다는 뜻까지만입니다.
-- **한 사람이 쓰는 로컬 데모입니다.** 대화, 메시지, 감사 기록은 서버 메모리에만 있어 서버를 끄면 지워집니다. 로그인과 권한 분리는 없고, 의료진/보안 담당자 전환은 화면 전환일 뿐입니다.
-- **의료진 화면은 숫자를 화면에서만 숨깁니다.** 의료진 화면 API(`/api/cases/…`, `/api/risk-states`)는 아직 후보 수를 담아 보냅니다. 역할별로 응답을 나누는 일은 ADR-0020의 남은 일입니다.
+- **한 사람이 쓰는 로컬 데모입니다.** 대화, 메시지, 감사 기록은 서버 메모리에만 있어 서버를 끄면 지워집니다. 로그인과 권한 분리는 없고, 의료진/보안 담당자 전환은 화면 전환일 뿐입니다. 로그인 · 의료진별 대화 · DB 기록은 운영 모드(`python -m medicloak`)에 있습니다.
+- **의료진 화면 API에는 위험 숫자가 없습니다.** 후보 수 · 기준값은 서버가 지워서 보내고(ADR-0021), 보안 담당자 화면은 `/api/watch/{대화}`로 숫자를 받습니다.
 - 관제 화면의 '레드팀 시뮬레이션' 대화는 서버를 켤 때 퍼저가 만든 공격 대화입니다(T0010, T0015, T0036, T0024, T0016, T0005 각 6턴). 실제 의료진 대화가 아닙니다.

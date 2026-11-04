@@ -1,4 +1,4 @@
-import { BarChart3, BookOpen, History, ListChecks, MessagesSquare, Radar, ShieldCheck, Stethoscope, type LucideIcon } from 'lucide-react';
+import { BarChart3, BookOpen, ClipboardList, History, ListChecks, MessagesSquare, Radar, ShieldCheck, Stethoscope, type LucideIcon } from 'lucide-react';
 
 export type Role = 'clinician' | 'security';
 
@@ -8,6 +8,8 @@ export interface NavItem {
   title: string;
   icon: LucideIcon;
   end?: boolean;
+  /** 운영 모드(로그인 · 가상 EMR)에서만 보인다 */
+  productOnly?: boolean;
 }
 
 /**
@@ -16,6 +18,7 @@ export interface NavItem {
  */
 export const NAV: Record<Role, NavItem[]> = {
   clinician: [
+    { to: '/emr', label: '외래 목록', title: '외래 진료 목록', icon: ClipboardList, productOnly: true },
     { to: '/', label: '사례 조회', title: '유사 사례 조회', icon: Stethoscope, end: true },
     { to: '/history', label: '조회 기록', title: '조회 기록', icon: History },
     { to: '/guide', label: '보호 안내', title: '개인정보 보호 안내', icon: ShieldCheck },
@@ -31,10 +34,12 @@ export const NAV: Record<Role, NavItem[]> = {
 };
 
 export const ROLE_HOME: Record<Role, string> = { clinician: '/', security: '/monitor' };
+/** 운영 모드에서 로그인 직후 · 다른 역할 주소로 왔을 때 (의료진은 EMR 외래 목록부터) */
+export const PRODUCT_HOME: Record<Role, string> = { clinician: '/emr', security: '/monitor' };
 export const ROLE_LABEL: Record<Role, string> = { clinician: '의료진', security: '보안 담당자' };
 
 export function roleOfPath(path: string): Role | null {
-  if (path === '/' || path.startsWith('/history') || path.startsWith('/guide')) return 'clinician';
+  if (path === '/' || path.startsWith('/history') || path.startsWith('/guide') || path.startsWith('/emr')) return 'clinician';
   if (['/monitor', '/watch', '/report', '/audit', '/terms', '/policy'].some((p) => path.startsWith(p))) return 'security';
   return null;
 }

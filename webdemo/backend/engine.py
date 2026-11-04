@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import collections
 import itertools
+import queue
 import random
 import re
 import threading
@@ -28,7 +29,7 @@ from typing import Any, Callable
 from medical.adaptive import FeedbackSelector
 from medical.attack import applicable_ops, choose_seed, fill_seed, realize
 from medical.bundle.seed_select import target
-from medical.config import ROOT, MedicalConfig
+from medical.config import ROOT, MedicalConfig, MedicalPaths
 from medical.data import MedicalData
 from medical.experiment import build_context, run_experiment
 from medical.prompts import REFUSAL_TEXT
@@ -37,6 +38,7 @@ from medical.session import ARMS, ArmRun, Context, extract, make_prefix
 from medical.simulate import SUPPRESSED, OracleRoleLLM, plan_all
 from medical.tracking import known_cases_json, view_of
 from medical.validate import validate_case
+from webdemo.backend.live import ORACLE_LABEL, LiveLLM, background_calls
 
 PROFILES = ("staged", "full")
 FUZZERS = ("uniform", "feedback")
@@ -49,6 +51,8 @@ ARM_KO = dict(C0="방어 없음", C1="누적 State Defender", C1S="턴마다 빈
 PROFILE_KO = dict(staged="단계 공개형", full="전면 공개형")
 FUZZER_KO = dict(uniform="균등 선택", feedback="k 피드백 선택")
 _LINE = re.compile(r"^(사례\d+) · (.+?): (.+)$")
+_MENTIONS_CASE = re.compile(r"사례\s*\d")
+LLM_MODES = ("oracle", "live")        # 세션의 대상 AI: oracle 결정적 응답기 · live 서버가 켤 때 정한 LLM(실제 모델 또는 배선 확인용 가짜)
 
 
 class DemoError(ValueError):
@@ -88,23 +92,40 @@ def diff_answer(raw: str, released: str) -> list[dict[str, Any]]:
 # ── 엔진 ────────────────────────────────────────────────────
 
 class Engine:
-    """프로세스에 하나. 데이터·문서·kcalc를 한 번 올리고 세션과 레드팀 작업을 관리한다."""
+    """
+    프로세스에 하나. 데이터·문서·kcalc를 한 번 올리고 세션과 레드팀 작업을 관리한다.
 
-    def __init__(self, workdir: Path | None = None, log: Callable[[str], None] = print) -> None:
+    paths    : 노드표 · 사건연결표 경로. MediCloak 운영 모드에서는 DB에서 내보낸 스냅숏(emr.export_csv)을 준다.
+    live_llm : 의료진 대화에 쓸 LLM (medical.llm.ClientRoleLLM = .env의 실제 모델, 또는 배선 확인용 MockRoleLLM).
+               문서 · 턴 0 사례 검색 답 · 보내기 전 추정 · 레드팀 · 시뮬레이션은 언제나 결정적 응답기를 쓴다 (호출 비용 0, 재현 가능).
+    first_id : 세션 · 작업 번호 시작값 (DB에 지난 대화가 있으면 그 다음 번호부터).
+    """
+
+    def __init__(self, workdir: Path | None = None, log: Callable[[str], None] = print, *, paths: MedicalPaths | None = None,
+                 live_llm: Any = None, live_label: str | None = None, first_id: int = 1, llm_concurrency: int = 1) -> None:
         t0 = time.time()
+        self.lock = threading.RLock()                                # kcalc 캐시·응답기 상태를 세션끼리 나눠 쓰므로 한 번에 한 요청
         self.workdir = Path(workdir or ROOT / "runs" / "webdemo")
         self.cfg = MedicalConfig(mode="exploration")                  # 데모 대화는 위반에 닿아도 멈추지 않는다
-        self.data = MedicalData()
+        self.paths = paths or MedicalPaths()
+        self.data = MedicalData(self.paths)
         self.llm = {p: OracleRoleLLM(data=self.data, profile=p) for p in PROFILES}
-        base, self.split = build_context(self.cfg, self.llm["staged"], self.workdir / "engine", data=self.data)
+        base, self.split = build_context(self.cfg, self.llm["staged"], self.workdir / "engine", data=self.data, paths=self.paths)
         self.ctx: dict[str, Context] = {"staged": base, "full": replace(base, llm=self.llm["full"])}
+        # 의료진 대화 LLM은 네트워크 호출 동안 엔진 잠금을 푸는 포장(LiveLLM)을 씌운다 (live.py)
+        self.live_llm = LiveLLM(live_llm, self.lock, concurrency=llm_concurrency) if live_llm is not None else None
+        self.live_ctx: Context | None = replace(base, llm=self.live_llm) if self.live_llm is not None else None
+        self.live_label = live_label or (ORACLE_LABEL if live_llm is None else "LLM")
         self.seed_by_id = {s["seed_id"]: s for s in base.seeds}
         self.plan = plan_all(None, self.cfg.seed)(self.data, self.split, self.cfg)     # POC와 같은 trial 번호 (T0001…)
         self.trial_of = {tid: (pid, qt) for tid, pid, qt, _ in self.plan}
         self.sessions: dict[str, Session] = {}
         self.jobs: dict[str, RedTeamJob] = {}
-        self._ids = itertools.count(1)
-        self.lock = threading.RLock()                                # kcalc 캐시·응답기 상태를 세션끼리 나눠 쓰므로 한 번에 한 요청
+        self._ids = itertools.count(first_id)
+        # 실제 LLM 대화의 비교 갈래(C1S) 계산: 의료진 답을 보낸 뒤 한 줄로 차례로 (재작성 호출이 더 들 수 있어서)
+        self._compare_q: queue.Queue = queue.Queue()
+        self._compare_thread: threading.Thread | None = None
+        self.on_compare_done: Callable[[Any], None] | None = None
         log(f"[webdemo] 엔진 준비 {time.time() - t0:.1f}초 · 기준 집단 {base.p_ref}명 · 질의 trial {len(self.plan)}개 · Seed {len(base.seeds)}행")
 
     # ── 기본 정보 ──
@@ -127,14 +148,16 @@ class Engine:
 
     # ── 세션 ──
     def new_session(self, trial_id: str, profile: str = "staged", fuzzer: str = "uniform", *, source: str = "manual",
-                    budget: int | None = None) -> "Session":
+                    budget: int | None = None, llm_mode: str = "oracle") -> "Session":
         if trial_id not in self.trial_of:
             raise DemoError(f"없는 trial입니다: {trial_id}")
         if profile not in PROFILES or fuzzer not in FUZZERS:
             raise DemoError("profile은 staged|full, fuzzer는 uniform|feedback 중 하나입니다.")
+        if llm_mode not in LLM_MODES or (llm_mode == "live" and self.live_ctx is None):
+            raise DemoError("이 서버에는 의료진 대화용 LLM이 설정되어 있지 않습니다.")
         with self.lock:
             sid = f"S{next(self._ids):04d}"
-            s = Session(self, sid, trial_id, profile, fuzzer, source=source, budget=budget)
+            s = Session(self, sid, trial_id, profile, fuzzer, source=source, budget=budget, llm_mode=llm_mode)
             self.sessions[sid] = s
             self._trim_usage()
             return s
@@ -147,6 +170,60 @@ class Engine:
     def _trim_usage(self) -> None:
         for l in self.llm.values():
             del l.usage[:]             # 호출 기록은 데모에서 쓰지 않는다 (메모리만 늘어남)
+        usage = getattr(self.live_llm, "usage", None)
+        if usage is not None and len(usage) > 2000:
+            del usage[:-1000]          # 실제 LLM 호출 기록은 /api/health 집계용으로 최근 것만 둔다
+
+    # ── 비교 갈래 뒤 계산 ──
+    def queue_compare(self, s: "Session", arm: str, turn: int, query: str, shared: tuple, meta: dict[str, Any]) -> None:
+        with self.lock:
+            s.compare_pending += 1
+        self._compare_q.put((s, arm, turn, query, shared, meta))
+        with self.lock:
+            if self._compare_thread is None:
+                self._compare_thread = threading.Thread(target=self._compare_worker, daemon=True, name="medicloak-compare")
+                self._compare_thread.start()
+
+    def _compare_worker(self) -> None:
+        background_calls()                 # 이 스레드의 LLM 호출은 의료진 질문에 자리를 양보한다
+        while True:
+            s, arm, turn, query, shared, meta = self._compare_q.get()
+            try:
+                with self.lock:
+                    step = next((x for x in s.steps if x["turn"] == turn), None)
+                    s._compare_turn(arm, turn, query, shared, meta, step["arms"] if step else {})
+                    s.compare_pending -= 1
+                cb = self.on_compare_done
+                if cb is not None:
+                    try:
+                        cb(s)
+                    except Exception as exc:
+                        print(f"[medicloak] 비교 갈래 저장 실패 ({s.id}): {type(exc).__name__}: {exc}")
+            finally:
+                self._compare_q.task_done()
+
+    def compare_pending(self) -> int:
+        return self._compare_q.unfinished_tasks
+
+    def wait_compare(self, timeout: float = 30.0) -> bool:
+        """뒤에서 계산 중인 비교 갈래가 끝날 때까지 기다린다 (테스트 · 점검용). 끝났으면 True."""
+        end = time.time() + timeout
+        while self._compare_q.unfinished_tasks and time.time() < end:
+            time.sleep(0.02)
+        return not self._compare_q.unfinished_tasks
+
+    def live_usage(self) -> dict[str, Any] | None:
+        """의료진 대화 LLM의 역할별 호출 수와 토큰 (점검용, 키 · 본문 없음)."""
+        usage = getattr(self.live_llm, "usage", None)
+        if usage is None:
+            return None
+        by: dict[str, dict[str, int]] = {}
+        for u in usage:
+            b = by.setdefault(u["role"], dict(calls=0, input_tokens=0, output_tokens=0))
+            b["calls"] += 1
+            b["input_tokens"] += int(u.get("input_tokens") or 0)
+            b["output_tokens"] += int(u.get("output_tokens") or 0)
+        return dict(label=self.live_label, by_role=by, calls=sum(b["calls"] for b in by.values()))
 
     # ── 레드팀 ──
     def start_job(self, profile: str, fuzzer: str, per_type: int | None) -> "RedTeamJob":
@@ -168,7 +245,7 @@ class Engine:
 
 class Session:
     def __init__(self, eng: Engine, sid: str, trial_id: str, profile: str, fuzzer: str, *, source: str = "manual",
-                 budget: int | None = None) -> None:
+                 budget: int | None = None, llm_mode: str = "oracle") -> None:
         self.eng, self.id, self.trial_id, self.profile, self.fuzzer = eng, sid, trial_id, profile, fuzzer
         self.ctx = eng.ctx[profile]
         self.cfg = self.ctx.cfg
@@ -188,6 +265,15 @@ class Session:
                     dict(seed_id=None, case_query_id=p.case_query_id, operator=p.op0, realization_fallback=p.realization_fallback,
                          checks=p.tries0, regenerations=max(len(p.tries0) - 1, 0)))
         self.steps.append(dict(turn=0, seed_id=None, picked_by="retrieval", arms={a: dict(status="ANSWERED") for a in ARMS}))
+        # 턴 0(사례 검색 답)은 기록에서 만든 결정적 요약을 방어 게이트에 통과시킨 것이다. 그 뒤 의료진 질문부터 live LLM이 답한다.
+        # 세션의 self.ctx(결정적)는 보내기 전 추정 · 질문 후보에 계속 쓰고, 갈래(ArmRun)만 live 문맥으로 바꾼다.
+        self.llm_mode = llm_mode
+        self.owner: dict[str, Any] | None = None             # 의료진 대화: 계정 (user_id, username, label)
+        self.launch: dict[str, Any] | None = None            # EMR에서 연 대화: {fhirId, purpose}
+        self.compare_pending = 0                             # 뒤에서 계산할 비교 갈래 턴 수 (실제 LLM 대화)
+        if llm_mode == "live":
+            for r in self.runs.values():
+                r.ctx = eng.live_ctx
         self.turn = 0
         self.rng = random.Random(f"{self.cfg.seed}-{trial_id}-follow")          # POC run()과 같은 난수열
         self.used: set[str] = set()
@@ -381,6 +467,50 @@ class Session:
         self.eng._trim_usage()
         return dict(turn=turn, seed_id=seed["seed_id"], picked_by=picked_by, arms=self.steps[-1]["arms"])
 
+    def ask_text(self, case: str, text: str, primary: str = "C1", compare: bool = True) -> dict[str, Any]:
+        """
+        live LLM 세션: 의료진이 쓴 문장을 Seed 없이 그대로 보낸다 (api_server와 같은 방식).
+        문장에 '사례N'이 없으면 고른 사례를 가리키도록 '사례N에 대한 질문: '을 붙인다 (화면에는 원문).
+        화면 갈래(primary, C1)만 LLM에 묻고, 비교 갈래(C0 · C1S)는 같은 원 응답과 추출 결과를 함께 써서 방어만 다르게 한다
+        (ADR-0009 --paired와 같음). LLM 오류는 State를 바꾸기 전에 나므로 그대로 올린다.
+        """
+        if self.llm_mode != "live":
+            raise DemoError("결정적 응답기 세션은 ask(seed, …)로 묻습니다.")
+        if self.turn >= self.budget:
+            raise DemoError(f"이 대화의 질문 예산 {self.budget}턴을 다 썼습니다. 새 환자로 다시 시작하세요.")
+        turn = self.turn + 1
+        query = text if _MENTIONS_CASE.search(text) else f"{case}에 대한 질문: {text}"
+        meta = dict(seed_id=None, picked_by="clinician", source="clinic", case=case, user_question=text, free_text=True)
+        rec = self.runs[primary]._turn(turn, query, None, None, None, 0, meta)
+        arms = {primary: dict(status="ANSWERED")}
+        shared = (rec["raw_response_text"], rec["raw_observations"], rec["extraction_ok"], rec["extraction_tries"])
+        later = []
+        for a in ARMS:
+            if a == primary:
+                continue
+            if not compare:
+                arms[a] = dict(status="SKIPPED", note="비교 갈래 계산을 끈 서버입니다.")
+            elif a == "C0":                                  # 방어 없음: 같은 원 응답을 그대로 공개 → LLM 호출 없이 바로
+                self._compare_turn(a, turn, query, shared, meta, arms)
+            else:                                            # C1S: 재작성 · 확인 추출 호출이 들 수 있어 의료진 답을 보낸 뒤 계산
+                arms[a] = dict(status="QUEUED", note="의료진 답을 보낸 뒤 계산합니다.")
+                later.append(a)
+        self.turn = turn
+        self.steps.append(dict(turn=turn, seed_id=None, picked_by="clinician", operator=None, case=case, arms=arms))
+        self.last_active = time.time()
+        for a in later:
+            self.eng.queue_compare(self, a, turn, query, shared, meta)
+        self.eng._trim_usage()
+        return rec
+
+    def _compare_turn(self, a: str, turn: int, query: str, shared: tuple, meta: dict[str, Any], arms: dict[str, Any]) -> None:
+        """비교 갈래 한 턴: 화면 갈래의 원 응답 · 추출 결과를 그대로 쓰고 방어만 그 갈래 방식으로 (ADR-0009 --paired)."""
+        try:
+            self.runs[a]._turn(turn, query, *shared, dict(meta, shared_raw=True))
+            arms[a] = dict(status="ANSWERED")
+        except Exception as exc:                     # 비교 갈래 실패는 의료진 답에 영향을 주지 않는다
+            arms[a] = dict(status="ERROR", note=f"비교 갈래 계산 실패 ({type(exc).__name__})")
+
     def ask(self, seed: dict[str, Any], case: str, text: str, primary: str = "C1") -> dict[str, Any] | None:
         """의료진이 쓴 질문 한 건. 질문 뜻에 맞는 Seed를 받아 그 사례 기준으로 세 조건에 보낸다. 화면 조건에서 못 물으면 None."""
         if self.turn >= self.budget:
@@ -439,6 +569,14 @@ class Session:
         for ln in lines:
             if ln.get("change"):
                 changed[ln["case"]][(ATTR_KO.get(ln["attribute"], ln["attribute"]), ln["change"])] += 1
+        if not changed:
+            # 실제 LLM 답은 '사례N · 항목: 값' 줄 모양이 아니라 줄 비교로는 바뀐 곳을 못 찾는다 → Defender 판정에서 읽는다
+            refusal = rec["release_mode"].startswith("REFUSAL")
+            for p in rec.get("release_plans") or []:
+                for d in p["decisions"]:
+                    act = "suppress" if refusal else d["action"]
+                    if act != "allow":
+                        changed[p["ref"]][(ATTR_KO.get(d["attribute"], d["attribute"]), act)] += 1
         notes = [dict(case=ref, changes=[dict(attribute=a, change=c) for (a, c) in cnt], k_if_raw=cand.get(ref),
                       k_now=(rec.get("cases") or {}).get(ref, {}).get("k")) for ref, cnt in changed.items()]
         v = dict(turn=rec["turn"], question=rec["query_text"], mode=rec["release_mode"],
@@ -462,7 +600,8 @@ class Session:
         return dict(id=self.id, trial_id=self.trial_id, patient=self.patient_id[:8], qtype=self.qtype, qtype_label=QTYPE_KO[self.qtype],
                     profile=self.profile, profile_label=PROFILE_KO[self.profile], fuzzer=self.fuzzer, fuzzer_label=FUZZER_KO[self.fuzzer],
                     turn=self.turn, budget=self.budget, k_req=self.cfg.k_req, p_ref=self.ctx.p_ref, source=self.source,
-                    created=self.created, last_active=self.last_active, review=self.review,
+                    created=self.created, last_active=self.last_active, review=self.review, llm_mode=self.llm_mode,
+                    owner=self.owner["label"] if self.owner else None,
                     panel=[dict(label=lab, value=self.prefix.binding["panel"][k]) for k, lab in PANEL_LABEL])
 
     def clinician_view(self, arm: str = "C1") -> dict[str, Any]:

@@ -27,7 +27,7 @@ export function RiskPanel() {
         <EmptyState message="표시할 사례가 없습니다." />
       ) : (
         <>
-          {selected && (
+          {selected && selected.k != null && (
             <div className="flex items-center gap-4 border-b border-line px-4 py-4">
               <CrowdLens k={selected.k} size={112} threshold={threshold} tone={RISK_TONE[selected.riskLevel].tone === 'safe' ? 'brand' : RISK_TONE[selected.riskLevel].tone} />
               <div className="min-w-0">

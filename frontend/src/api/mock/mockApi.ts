@@ -56,9 +56,11 @@ interface CaseStore {
   session: ConversationSession;
   history: DisclosureHistoryEntry[];
   disclosed: Partial<Record<QiAttribute, DisclosedQi>>;
-  risk: CaseRiskState;
+  risk: KnownRisk;
   lastDecision: PrivacyAction;
 }
+
+type KnownRisk = CaseRiskState & { k: number };
 
 interface DefenseOutcome {
   attribute: QiAttribute;
@@ -97,7 +99,7 @@ export function createMockApi(options: MockApiOptions = {}): ClinicalCaseApi {
     return MOCK_CASES.find((c) => c.caseId === caseId)?.label ?? caseId;
   }
 
-  function deriveRisk(caseId: CaseId, k: number, decision: PrivacyAction, version: number): CaseRiskState {
+  function deriveRisk(caseId: CaseId, k: number, decision: PrivacyAction, version: number): KnownRisk {
     let riskLevel: CaseRiskState['riskLevel'];
     let statusLabel: string;
     let policyDecision: PolicyDecisionState = decision;

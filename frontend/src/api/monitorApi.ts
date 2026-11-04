@@ -1,14 +1,15 @@
 // 보안 담당자 관제 API. 데모 백엔드(python -m webdemo)에만 있다.
 // Mock 모드나 api_server(실제 LLM)에서는 쓸 수 없다는 오류를 돌려주고, 화면이 그 사유를 보여 준다.
 
-import type { AuditEntry, MonitorDetail, MonitorOverview, MonitorRow, PocResult, RedTeamJob, ReviewAction, ThreadResult } from '../types/monitor';
+import type { AuditEntry, MonitorDetail, MonitorOverview, MonitorPolicy, MonitorRow, PocResult, RedTeamJob, ReviewAction, ThreadResult, WatchItem } from '../types/monitor';
 import { apiMode } from './index';
+import { API_BASE, notifyUnauthorized } from './session';
 import { ApiError } from './types';
 
 export const MONITOR_UNAVAILABLE = '관제 화면은 데모 서버(python -m webdemo)에 연결했을 때만 볼 수 있습니다.';
 
 function base(): string {
-  return (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/+$/, '');
+  return API_BASE;
 }
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -24,6 +25,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     if (error instanceof DOMException && error.name === 'AbortError') throw error;
     throw new ApiError('서버에 연결할 수 없습니다. 데모 서버가 켜져 있는지 확인하세요.');
   }
+  if (res.status === 401) notifyUnauthorized();
   if (res.status === 404 && path.startsWith('/monitor/overview')) throw new ApiError(MONITOR_UNAVAILABLE, 404);
   if (!res.ok) {
     let detail = '';
@@ -55,6 +57,10 @@ export const monitorApi = {
     }),
   thread: (sid: string, signal?: AbortSignal) => request<ThreadResult>(`/monitor/sessions/${encodeURIComponent(sid)}/messages`, { signal }),
   audit: (signal?: AbortSignal) => request<AuditEntry[]>('/monitor/audit', { signal }),
+  /** 지금 적용 중인 보호 정책 (기준값 포함). 보안 담당자 API */
+  policy: (signal?: AbortSignal) => request<MonitorPolicy>('/monitor/policy', { signal }),
+  /** 의료진 대화 목록 (지난 대화 포함). 고른 대화는 /api/watch/{대화}/… 계약으로 본다 */
+  watchList: (signal?: AbortSignal) => request<WatchItem[]>('/watch', { signal }),
   poc: (signal?: AbortSignal) => request<PocSummary>('/poc', { signal }),
   startRedTeam: (per_type: number | null, fuzzer: string) =>
     request<RedTeamJob>('/redteam', { method: 'POST', body: JSON.stringify({ per_type, fuzzer, profile: 'staged' }) }),

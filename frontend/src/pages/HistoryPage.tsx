@@ -1,15 +1,60 @@
 import { ChevronRight, Lock, MessageSquareText } from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { EmptyState, ErrorState, LoadingState } from '../components/common/StatusViews';
 import { formatTime } from '../lib/format';
+import { useAuth } from '../state/AuthContext';
 import { useClinicMessages } from '../state/ClinicMessages';
 import { useWorkspace } from '../state/WorkspaceContext';
+import type { ClinicHistoryItem } from '../types/domain';
+
+function when(epochSec: number): string {
+  return new Date(epochSec * 1000).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false });
+}
+
+/** 이 계정의 대화 목록. 지난 대화는 읽기 전용 기록으로 남아 보안 담당자가 볼 수 있다. */
+function PastConversations() {
+  const { api, state } = useWorkspace();
+  const [items, setItems] = useState<ClinicHistoryItem[] | null>(null);
+  const version = state.patient.data?.contextId;
+  useEffect(() => {
+    if (!api.listHistory) return;
+    const ctl = new AbortController();
+    api.listHistory(ctl.signal).then(setItems, () => setItems([]));
+    return () => ctl.abort();
+  }, [api, version]);
+  const past = (items ?? []).filter((x) => !x.current && x.questions > 0);
+  if (!api.listHistory || !past.length) return null;
+  return (
+    <section className="panel overflow-hidden">
+      <header className="flex items-baseline justify-between gap-3 border-b border-line px-4 py-3">
+        <h2 className="text-[15px] font-bold text-ink">지난 진료</h2>
+        <span className="text-xs text-ink-3">읽기 전용 기록</span>
+      </header>
+      <ul>
+        {past.map((x) => (
+          <li key={x.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 border-b border-line px-4 py-3 last:border-b-0">
+            <span className="num w-[7.5em] shrink-0 text-xs text-ink-3">{when(x.startedAt)}</span>
+            <span className="min-w-0 flex-1 text-[13px] text-ink">
+              {x.patient}
+              <span className="ml-2 text-ink-3">{x.purpose}</span>
+            </span>
+            <span className="text-xs text-ink-2">
+              질문 {x.questions}회{x.archived ? ' · 서버를 다시 켜기 전' : ''}
+            </span>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
 
 /** 조회 기록 (의료진): 이번 진료에서 사례별로 물은 질문. 재식별 위험 숫자는 보여 주지 않는다. */
 export function HistoryPage() {
   const { state, actions } = useWorkspace();
   const navigate = useNavigate();
   const msgs = useClinicMessages();
+  const product = useAuth().status === 'user';
   const { cases, sessions, riskStates } = state;
   const open = (caseId: string) => {
     actions.selectCase(caseId);
@@ -77,8 +122,10 @@ export function HistoryPage() {
             </ul>
           )}
         </section>
+        <PastConversations />
         <p className="px-1 text-xs leading-5 text-ink-3">
-          질문과 답, 세부 정보 요청은 MediCloak 감사 기록에 남고 개인정보 보호 담당자가 확인할 수 있습니다. 서버를 다시 켜면 데모 기록은 지워집니다.
+          질문과 답, 세부 정보 요청은 MediCloak 감사 기록에 남고 개인정보 보호 담당자가 확인할 수 있습니다.
+          {product ? ' 기록은 병원 서버의 DB에 남습니다.' : ' 서버를 다시 켜면 데모 기록은 지워집니다.'}
         </p>
       </div>
     </div>

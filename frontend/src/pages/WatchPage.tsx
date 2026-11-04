@@ -1,8 +1,10 @@
 import { ArrowUpRight, Calculator, Gauge, MailQuestion, MessageSquare, Network, ScrollText } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useSearchParams } from 'react-router-dom';
 import { apiMode } from '../api';
-import { monitorApi } from '../api/monitorApi';
+import { createHttpApi } from '../api/httpApi';
+import { MONITOR_UNAVAILABLE, monitorApi } from '../api/monitorApi';
+import { API_BASE } from '../api/session';
 import { ChatMessage } from '../components/chat/ChatMessage';
 import { Card, CardHeader } from '../components/common/Card';
 import { StatusIcon } from '../components/common/StatusChip';
@@ -16,13 +18,14 @@ import { ATTR_LABEL } from '../lib/clinicianCopy';
 import type { ClueFact } from '../lib/clueGraph';
 import { usePreflight } from '../state/usePreflight';
 import { useSuggestions } from '../state/useSuggestions';
-import { useSelectedCase, useWorkspace } from '../state/WorkspaceContext';
+import { relativeTime } from '../lib/time';
+import { useSelectedCase, useWorkspace, WorkspaceProvider } from '../state/WorkspaceContext';
 import type { CaseId } from '../types/domain';
-import type { ThreadResult } from '../types/monitor';
+import type { ThreadResult, WatchItem } from '../types/monitor';
 
 const POLL_MS = 3000;
 
-/** 데모 서버의 환자 맥락 id는 'ws-<대화 번호>:patient'다. 관제 상세로 바로 가는 데 쓴다. */
+/** 데모 서버의 환자 맥락 id는 'ws-<대화 번호>:patient'다. Mock처럼 대화 목록이 없을 때 관제 상세로 가는 데 쓴다. */
 function monitorSessionOf(contextId: string | undefined): string | null {
   const m = contextId ? /^ws-(.+):patient$/.exec(contextId) : null;
   return m ? m[1] : null;
@@ -38,7 +41,7 @@ function WhatIfBox({ caseId, sessionId, label, version }: { caseId: CaseId; sess
   let result: ReactNode = <span className="text-ink-3">질문을 넣으면 그대로 답했을 때의 후보 수와 방어 규칙이 할 일을 셉니다.</span>;
   if (pf.status === 'checking') result = <span className="text-ink-3">후보 수를 세는 중</span>;
   else if (pf.status === 'error') result = <span className="text-danger-text">미리 세지 못했습니다.</span>;
-  else if (a?.supported === false) result = <span className="text-ink-3">이 서버는 미리 세기를 지원하지 않습니다.</span>;
+  else if (a?.supported === false) result = <span className="text-ink-3">{a.message ?? '이 서버는 미리 세기를 지원하지 않습니다.'}</span>;
   else if (a?.understood === false) result = <span className="text-ink-3">묻는 항목을 찾지 못했습니다. 나이, 진단, 약, 시기처럼 물어보세요.</span>;
   else if (a?.requiresWarning)
     result = (
@@ -157,24 +160,109 @@ function TranscriptPanel() {
 
 type SideTab = 'history' | 'graph';
 
+function itemLabel(x: WatchItem): string {
+  return [x.trialId, x.owner, x.qtypeLabel, `질문 ${x.turns}회`, x.current ? '지금 대화' : x.archived ? '지난 대화' : relativeTime(x.lastActive)]
+    .filter(Boolean)
+    .join(' · ');
+}
+
 /**
  * 보안 담당자 '의료진 대화' 화면: 의료진 화면에서 옮겨 온 위험 분석을 모두 모은다.
- *   왼쪽: 후보 렌즈와 사례별 후보 수 막대 / 가운데: 대화와 질문 미리 세기 / 오른쪽: 나간 정보 · 판정 근거, 단서 그래프
- * 의료진이 다른 탭에서 질문해도 3초마다 새로 받는다.
+ * 위에서 의료진 대화를 고르면(의료진마다 따로, 지난 대화 포함), 그 대화의 의료진 화면 계약을 숫자 그대로 받는다 (/api/watch/{대화}).
+ * Mock(서버 없음)에서는 브라우저 안 예시 대화 하나를 본다.
  */
 export function WatchPage() {
+  const [params, setParams] = useSearchParams();
+  const [list, setList] = useState<WatchItem[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (apiMode !== 'http') return;
+    let alive = true;
+    const load = () =>
+      monitorApi.watchList().then(
+        (x) => alive && (setList(x), setError(null)),
+        (e) => alive && setError(e instanceof Error ? e.message : MONITOR_UNAVAILABLE),
+      );
+    void load();
+    const t = window.setInterval(load, 5000);
+    return () => {
+      alive = false;
+      window.clearInterval(t);
+    };
+  }, []);
+
+  const asked = params.get('s');
+  const sid = (asked && list?.some((x) => x.id === asked) ? asked : null) ?? list?.find((x) => x.current)?.id ?? list?.[0]?.id ?? null;
+
+  // 고른 대화를 주소에 적어 둔다. 적지 않으면 5초마다 목록을 다시 받을 때 '가장 최근 대화'가 바뀌어 화면이 다른 대화로 넘어간다
+  useEffect(() => {
+    if (sid && sid !== asked) setParams({ s: sid }, { replace: true });
+  }, [sid, asked, setParams]);
+  const item = list?.find((x) => x.id === sid) ?? null;
+  const api = useMemo(() => (sid ? createHttpApi(`${API_BASE}/watch/${encodeURIComponent(sid)}`) : null), [sid]);
+
+  if (apiMode !== 'http')
+    return (
+      <WorkspaceProvider>
+        <WatchBody sid={null} item={null} />
+      </WorkspaceProvider>
+    );
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 px-4 pt-3 md:px-6">
+        <label htmlFor="watch-pick" className="text-[13px] font-semibold text-ink-2">
+          의료진 대화
+        </label>
+        {list && list.length > 0 && (
+          <select
+            id="watch-pick"
+            value={sid ?? ''}
+            onChange={(e) => setParams({ s: e.target.value }, { replace: true })}
+            className="h-8 max-w-full rounded-control border border-line-input bg-surface px-2 text-[13px] text-ink"
+          >
+            {list.map((x) => (
+              <option key={x.id} value={x.id}>
+                {x.pendingRequest ? '● ' : ''}
+                {itemLabel(x)}
+              </option>
+            ))}
+          </select>
+        )}
+        {item?.archived && <span className="rounded-[5px] bg-surface-2 px-1.5 py-px text-xs font-semibold text-ink-2">서버를 다시 켜기 전 대화 (읽기 전용)</span>}
+      </div>
+      {error ? (
+        <ErrorState message={error} />
+      ) : !list ? (
+        <LoadingState label="의료진 대화 목록을 불러오는 중" />
+      ) : !sid || !api ? (
+        <EmptyState message="아직 의료진 대화가 없습니다. 의료진이 진료 지원 AI를 열면 여기에 나타납니다." />
+      ) : (
+        <WorkspaceProvider key={sid} api={api}>
+          <WatchBody sid={sid} item={item} />
+        </WorkspaceProvider>
+      )}
+    </div>
+  );
+}
+
+/** 고른 의료진 대화 하나 (안쪽 WorkspaceProvider가 /api/watch/{대화} 계약을 쓴다) */
+function WatchBody({ sid: sidProp, item }: { sid: string | null; item: WatchItem | null }) {
   const { state, actions } = useWorkspace();
   const { summary } = useSelectedCase();
   const [tab, setTab] = useState<SideTab>('history');
   const [thread, setThread] = useState<ThreadResult | null>(null);
   const cases = useMemo(() => state.cases.data ?? [], [state.cases.data]);
-  const sid = monitorSessionOf(state.patient.data?.contextId);
+  const sid = sidProp ?? monitorSessionOf(state.patient.data?.contextId);
   const p = state.patient.data;
+  const archived = !!item?.archived;
 
   useEffect(() => {
+    if (archived) return;                      // 지난 대화는 바뀌지 않는다
     const t = window.setInterval(() => void actions.refreshLive(), POLL_MS);
     return () => window.clearInterval(t);
-  }, [actions]);
+  }, [actions, archived]);
 
   // 단서 그래프에는 모든 사례의 공개 이력을 쓴다
   useEffect(() => {
@@ -215,8 +303,8 @@ export function WatchPage() {
   const pending = thread?.row.pending_request ? thread.messages[thread.messages.length - 1] : null;
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 px-4 pt-3 md:px-6">
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1.5 px-4 pt-2 md:px-6">
         <p className="min-w-0 text-[13px] text-ink-2">
           의료진 화면 대화를 숫자와 함께 봅니다.
           {p && (

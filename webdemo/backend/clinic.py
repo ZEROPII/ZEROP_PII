@@ -1,27 +1,39 @@
-# 의료진 화면(frontend/ Clinical Case Finder) 계약을 데모 엔진 위에서 구현한다.
+# 의료진 화면(frontend/ 진료 지원 AI) 계약을 엔진 위에서 구현한다.
 #
-# 경로와 응답 모양은 frontend/src/api/httpApi.ts · api_server/와 같다 (접두사 /api). 다른 점은 대상 AI뿐이다.
-#   api_server : 실제 LLM 대상 AI (.env 필요). 질문 문장을 그대로 읽는다.
-#   webdemo    : 결정적 응답기 (LLM 0회). 질문 문장에서 묻는 단서를 찾아 Seed를 고른다 (webdemo/backend/intent.py).
-# 대화 하나 = 엔진 Session 하나 (세 조건 C0·C1·C1S를 같은 질문으로 나란히 진행). 의료진 화면은 C1(누적 State Defender)만 본다.
-# 나란히 돈 C0·C1S와 원 응답은 보안 담당자 관제 화면(/api/monitor)에서만 보인다.
+# 경로와 응답 모양은 frontend/src/api/httpApi.ts · api_server/와 같다 (접두사 /api).
+#   ClinicConversation : 의료진 대화 하나 = 엔진 Session 하나 (세 조건 C0 · C1 · C1S를 같은 질문으로 나란히 진행).
+#                        의료진 화면은 C1(누적 State Defender)만 본다. C0 · C1S와 원 응답은 관제 화면에서만 보인다.
+#   ArchivedConversation : DB에 남은 지난 대화 (서버를 다시 켠 뒤). 읽기만 한다.
+#   ClinicDesk         : 의료진 한 명의 진료 지원 AI. 지금 대화 하나와 그 전 대화들. 질문과 새 대화 시작을 한 번에 하나씩 받는다.
+#   DeskRegistry       : 계정마다 ClinicDesk 하나 (데모 모드에서는 화면 하나가 쓰는 'demo' 하나).
+#
+# 대상 AI
+#   oracle : 결정적 응답기. 질문 문장에서 묻는 단서를 찾아 Seed를 고른다 (intent.py). LLM 호출 0.
+#   live   : 서버를 켤 때 정한 LLM (.env의 실제 모델 또는 배선 확인용 가짜). 의료진이 쓴 문장을 그대로 보낸다 (Session.ask_text).
+#            턴 0 사례 검색 답과 '보내기 전 확인'은 언제나 결정적 응답기로 만든다 (호출 비용 0).
+#
+# 이 모듈의 응답에는 후보 수(k) · 기준값이 그대로 들어 있다. 의료진 화면 API는 redact.py를 거쳐 숫자를 지우고,
+# 보안 담당자 '의료진 대화' API(/api/watch/{대화})는 그대로 보낸다.
 
 from __future__ import annotations
 
 import collections
+import copy
 import re
+import threading
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Callable
 
 from api_server.engine import segments_of
 from medical.defense import ALLOW, GENERALIZE, SUPPRESS
-from medical.retrieval import PANEL_LABEL
 from webdemo.backend import intent as I
 from webdemo.backend.engine import ATTR_KO, QTYPE_KO, DemoError, Engine, Session, parse_answer
 
 ATTR_LABEL = dict(AGE="나이", SEX="성별", REGION="거주 지역", DX="진단", PROC="시술", PERIOD="시기", MED="처방 약", PLAN="관리 계획")
 STATE_MODE_LABEL = dict(C0="방어 없음", C1="누적 판정 (대화 전체 기억)", C1S="턴별 판정 (매 턴 새로)")
+DEMO_LOCATION = "MediCloak 데모 (Synthea 합성 환자)"
+MAX_QUESTION = 1000                     # 의료진 질문 한 건의 최대 글자 수 (실제 LLM 호출 비용 · 지연 상한)
 _REF = re.compile(r"사례(\d+)")
 
 
@@ -50,29 +62,42 @@ class Slot:
         self.last_action = ALLOW
 
 
-class ClinicDesk:
-    """의료진 화면의 대화 하나 (질의 환자 1명). reset으로 다른 환자를 고르면 새 Session을 만든다 (지난 대화는 관제 화면에 남는다)."""
+def _messages_view(raw: list[dict[str, Any]], case_of_ref: Callable[[str], str | None], label_of: Callable[[str], str]) -> list[dict[str, Any]]:
+    out = []
+    for m in raw:
+        cid = case_of_ref(m["case"]) if m.get("case") else None
+        out.append(dict(messageId=m["id"], createdAt=_iso(m["at"]), sender=m["sender"], kind=m["kind"], kindLabel=m["kind_label"],
+                        caseId=cid, caseLabel=label_of(cid) if cid else None, text=m["text"]))
+    return out
 
-    def __init__(self, eng: Engine, trial_id: str = "T0014", arm: str = "C1", budget: int = 60) -> None:
-        self.eng, self.arm, self.budget = eng, arm, budget
+
+class ClinicConversation:
+    """의료진 대화 하나. 화면의 사례 탭은 대상 AI의 '사례N' 표기와 1:1이다."""
+
+    archived = False
+
+    def __init__(self, eng: Engine, session: Session, arm: str = "C1", *, compare: bool = True,
+                 location_label: str = DEMO_LOCATION) -> None:
+        self.eng, self.session, self.arm, self.compare = eng, session, arm, compare
+        self.location_label = location_label
+        self.id = session.id
         self._seq = 0
-        self.start(trial_id)
+        self.workspace_id = f"ws-{session.id}"
+        self.version = 1
+        self.updated_at = _iso()
+        self.saved_turns: set[tuple[str, int]] = set()          # DB에 이미 넣은 턴 기록 (persist.py)
+        self.save_lock = threading.Lock()                       # 저장 한 번(스냅숏 만들기 + DB 쓰기)을 대화마다 줄 세운다
+        self.slots = {f"case-{i}": Slot(i) for i in range(1, len(session.prefix.docs) + 1)}
+        rec0 = self._records()[0]
+        self.titles: dict[str, dict[str, str]] = collections.defaultdict(dict)
+        for ln in parse_answer(rec0["response_text"]):
+            if "case" in ln:
+                self.titles[ln["case"]][ln["attribute"]] = ln["value"]
+        self._absorb(rec0, None)
 
-    # ── 준비 ──
-    def start(self, trial_id: str) -> None:
-        with self.eng.lock:
-            s = self.eng.new_session(trial_id, source="clinic", budget=self.budget)
-            self.session: Session = s
-            self.workspace_id = f"ws-{s.id}"
-            self.version = 1
-            self.updated_at = _iso()
-            self.slots = {f"case-{i}": Slot(i) for i in range(1, len(s.prefix.docs) + 1)}
-            rec0 = self._records()[0]
-            self.titles: dict[str, dict[str, str]] = collections.defaultdict(dict)
-            for ln in parse_answer(rec0["response_text"]):
-                if "case" in ln:
-                    self.titles[ln["case"]][ln["attribute"]] = ln["value"]
-            self._absorb(rec0, None)
+    @property
+    def live(self) -> bool:
+        return self.session.llm_mode == "live"
 
     def _id(self, p: str) -> str:
         self._seq += 1
@@ -100,6 +125,9 @@ class ClinicDesk:
         cid = f"case-{int(m.group(1))}" if m else None
         return cid if cid in self.slots else None
 
+    def ref_of(self, case_id: str) -> str:
+        return self.slot(case_id).ref
+
     # ── k와 위험 표시 ──
     def k(self, case_id: str) -> int:
         c = self.session.runs[self.arm].cases.get(self.slots[case_id].ref)
@@ -121,13 +149,18 @@ class ClinicDesk:
         return dict(caseId=case_id, k=k, riskLevel=level, statusLabel=label, disclosureAllowed=not restricted,
                     policyDecision="restrict" if restricted else s.last_action, version=self.version, updatedAt=self.updated_at)
 
+    def risk_states(self) -> list[dict[str, Any]]:
+        with self.eng.lock:
+            return [self.risk_state(cid) for cid in self.slots]
+
     # ── 화면 계약 ──
     def environment(self) -> dict[str, Any]:
-        return dict(roleLabel="의료진", locationLabel="MediCloak 데모 (Synthea 합성 환자)")
+        return dict(roleLabel="의료진", locationLabel=self.location_label)
 
     def policy(self) -> dict[str, Any]:
         d = self.session.ctx.defender
-        return dict(modeLabel="데모 응답기 (LLM 없음)", arm=self.arm, stateModeLabel=STATE_MODE_LABEL[self.arm], minK=d.g, suppressK=d.s,
+        mode = self.eng.live_label if self.live else "데모 응답기 (LLM 없음)"
+        return dict(modeLabel=mode, arm=self.arm, stateModeLabel=STATE_MODE_LABEL[self.arm], minK=d.g, suppressK=d.s,
                     populationSize=self.session.ctx.p_ref, source="backend")
 
     def patient_context(self) -> dict[str, Any]:
@@ -158,18 +191,10 @@ class ClinicDesk:
     def disclosures(self, case_id: str) -> dict[str, Any]:
         return dict(caseId=case_id, entries=self.slot(case_id).history)
 
-    # ── 보안 담당자와 주고받은 메시지 (지금 대화 하나) ──
+    # ── 보안 담당자와 주고받은 메시지 (이 대화) ──
     def messages(self) -> list[dict[str, Any]]:
         with self.eng.lock:
-            out = []
-            for m in self.session.messages:
-                cid = self.case_of_ref(m["case"]) if m.get("case") else None
-                out.append(dict(messageId=m["id"], createdAt=_iso(m["at"]), sender=m["sender"], kind=m["kind"], kindLabel=m["kind_label"],
-                                caseId=cid, caseLabel=self.slots[cid].label if cid else None, text=m["text"]))
-            return out
-
-    def ref_of(self, case_id: str) -> str:
-        return self.slot(case_id).ref
+            return _messages_view(self.session.messages, self.case_of_ref, lambda cid: self.slots[cid].label)
 
     def policy_decision(self, case_id: str) -> dict[str, Any]:
         s, d, data = self.slot(case_id), self.session.ctx.defender, self.session.ctx.data
@@ -181,6 +206,8 @@ class ClinicDesk:
                  f"그 외에는 후보가 {d.g}명을 넘는 가장 가까운 상위 범주로 넓혀 답합니다.",
                  "후보 수는 사건 단위로 셉니다 (같은 진료 사건의 진단·나이·날짜를 한 사람이 함께 만족해야 후보).",
                  "사례마다 따로 셉니다. 한 사례에 나온 단서는 다른 사례의 후보 수에 더하지 않습니다."]
+        if self.live:
+            notes.append("대상 AI는 실제 LLM입니다. 공개된 답을 다시 추출해 확인한 값만 누적 State에 넣습니다.")
         return dict(caseId=case_id, currentK=risk["k"], minK=d.g, suppressK=d.s, arm=self.arm,
                     disclosedQis=[dict(attributeLabel=ATTR_LABEL.get(x["attribute"], x["attribute"]), levelDescription=data.label(x["node_id"]))
                                   for x in (c.committed if c else []) if x.get("node_id") in data.N],
@@ -190,8 +217,8 @@ class ClinicDesk:
                     finalDecision=risk["policyDecision"], finalDecisionLabel=risk["statusLabel"], notes=notes, stateVersion=risk["version"],
                     source="backend")
 
-    # ── 질문 ──
-    def _seed_for(self, it: I.Intent, focus: str):
+    # ── 보내기 전 확인 (결정적 응답기로 추정, State는 바꾸지 않음) ──
+    def _seed_for(self, it: I.Intent):
         return I.candidates(self.session.ctx.seeds, it)[:14]
 
     def preflight(self, case_id: str, session_id: str, question: str) -> dict[str, Any]:
@@ -202,10 +229,10 @@ class ClinicDesk:
             focus = it.case or s.ref
             base = dict(caseId=case_id, question=question, requiresWarning=False, currentK=k_now, projectedK=None, message=None,
                         affectedAttributes=[], suggestions=[], source="backend", supported=True, plannedAction=None,
-                        targetCaseId=None, targetCaseLabel=None)
+                        targetCaseId=None, targetCaseLabel=None, estimate="oracle" if self.live else None)
             if not it.understood:
                 return dict(base, understood=False)
-            for seed in self._seed_for(it, focus):
+            for seed in self._seed_for(it):
                 pv = self.session.preview(seed["seed_id"], self.arm, focus, question)
                 if not pv.get("applicable"):
                     continue
@@ -248,18 +275,24 @@ class ClinicDesk:
             s = self.slot(case_id)
             return [dict(label=x["label"], question=x["question"]) for x in self._ranked(s.ref)][:6]
 
+    # ── 질문 ──
     def ask(self, case_id: str, session_id: str, question: str, client_message_id: str) -> dict[str, Any]:
         question = question.strip()
         if not question:
             raise ValueError("질문이 비어 있습니다.")
+        if len(question) > MAX_QUESTION:
+            raise ValueError(f"질문은 {MAX_QUESTION}자 이하로 써 주세요.")
         with self.eng.lock:
             s = self._check(case_id, session_id)
             it = I.parse(question)
-            focus = it.case or s.ref
             k_before = {cid: self.k(cid) for cid in self.slots}
             rec = None
-            if it.understood:
-                for seed in self._seed_for(it, focus):
+            if self.live:
+                # 의료진 문장을 그대로 LLM에 보낸다. LLM 오류(LLMError)는 State를 바꾸기 전에 나므로 그대로 올린다.
+                rec = self.session.ask_text(s.ref, question, self.arm, compare=self.compare)
+            elif it.understood:
+                focus = it.case or s.ref
+                for seed in self._seed_for(it):
                     if self.session.ask(seed, focus, question, self.arm) is not None:
                         rec = self._records()[-1]
                         break
@@ -353,4 +386,251 @@ class ClinicDesk:
         n_gen = len(changed) - n_sup
         what = ", ".join(x for x in (f"가림 {n_sup}건" if n_sup else "", f"넓힘 {n_gen}건" if n_gen else "") if x)
         head = f"그대로 답하면 후보가 {worst}명까지 줄어들어 " if worst is not None else ""
-        return f"{head}일부 값을 보호해 답했습니다 ({what})."
+        how = " 대상 AI의 답을 재작성기가 고친 뒤 다시 확인했습니다." if self.live and rec["release_mode"] == "REWRITTEN" else ""
+        return f"{head}일부 값을 보호해 답했습니다 ({what}).{how}"
+
+    # ── DB 스냅숏 (서버를 다시 켠 뒤 읽기 전용으로 보여 줄 화면 계약 전체) ──
+    def snapshot(self) -> dict[str, Any]:
+        with self.eng.lock:
+            per = {cid: dict(conversation=copy.deepcopy(self.conversation(cid)), disclosures=copy.deepcopy(self.disclosures(cid)),
+                             decision=self.policy_decision(cid), risk=self.risk_state(cid)) for cid in self.slots}
+            return dict(workspace_id=self.workspace_id, version=self.version, updated_at=self.updated_at, labels={cid: s.label for cid, s in self.slots.items()},
+                        environment=self.environment(), policy=self.policy(), patient=self.patient_context(),
+                        cases=self.similar_cases(f"{self.workspace_id}:patient"), per_case=per)
+
+
+class ArchivedConversation:
+    """DB에 남은 지난 대화 (서버를 다시 켜기 전 대화). 화면 계약을 스냅숏에서 읽기만 한다."""
+
+    archived = True
+    live = False
+
+    def __init__(self, row: dict[str, Any], messages: list[dict[str, Any]] | None = None) -> None:
+        snap = row.get("clinic")
+        if not snap:
+            raise NotFound(row.get("conv_id"))
+        self.row = row
+        self.id = row["conv_id"]
+        self.snap = snap
+        self.workspace_id = snap["workspace_id"]
+        self.raw_messages = messages or []
+
+    def _case(self, case_id: str) -> dict[str, Any]:
+        if case_id not in self.snap["per_case"]:
+            raise NotFound(case_id)
+        return self.snap["per_case"][case_id]
+
+    def case_of_ref(self, ref: str) -> str | None:
+        m = _REF.fullmatch(ref or "")
+        cid = f"case-{int(m.group(1))}" if m else None
+        return cid if cid in self.snap["per_case"] else None
+
+    def ref_of(self, case_id: str) -> str:
+        self._case(case_id)
+        return case_id.replace("case-", "사례")
+
+    def session_id(self, case_id: str) -> str:
+        return f"{self.workspace_id}:{case_id}"
+
+    def environment(self) -> dict[str, Any]:
+        return dict(self.snap["environment"], locationLabel=self.snap["environment"]["locationLabel"] + " · 지난 대화 (읽기 전용)")
+
+    def policy(self) -> dict[str, Any]:
+        return self.snap["policy"]
+
+    def patient_context(self) -> dict[str, Any]:
+        return self.snap["patient"]
+
+    def similar_cases(self, context_id: str) -> list[dict[str, Any]]:
+        if context_id != f"{self.workspace_id}:patient":
+            raise NotFound(context_id)
+        return self.snap["cases"]
+
+    def conversation(self, case_id: str) -> dict[str, Any]:
+        return self._case(case_id)["conversation"]
+
+    def disclosures(self, case_id: str) -> dict[str, Any]:
+        return self._case(case_id)["disclosures"]
+
+    def policy_decision(self, case_id: str) -> dict[str, Any]:
+        return self._case(case_id)["decision"]
+
+    def risk_state(self, case_id: str) -> dict[str, Any]:
+        return self._case(case_id)["risk"]
+
+    def risk_states(self) -> list[dict[str, Any]]:
+        return [v["risk"] for v in self.snap["per_case"].values()]
+
+    def messages(self) -> list[dict[str, Any]]:
+        labels = self.snap.get("labels") or {}
+        return _messages_view(self.raw_messages, self.case_of_ref, lambda cid: labels.get(cid, cid))
+
+    def preflight(self, case_id: str, session_id: str, question: str) -> dict[str, Any]:
+        self._case(case_id)
+        return dict(caseId=case_id, question=question, requiresWarning=False, currentK=None, projectedK=None,
+                    message="서버를 다시 켜기 전 대화라 미리 세기를 할 수 없습니다.", affectedAttributes=[], suggestions=[], source="backend",
+                    supported=False, plannedAction=None, targetCaseId=None, targetCaseLabel=None)
+
+    def suggestions(self, case_id: str) -> list[dict[str, Any]]:
+        self._case(case_id)
+        return []
+
+    def ask(self, *a: Any, **kw: Any) -> dict[str, Any]:
+        raise Conflict("지난 대화는 읽기만 할 수 있습니다. 새 대화를 시작하세요.")
+
+
+class ClinicDesk:
+    """
+    의료진 한 명(데모 모드에서는 화면 하나)의 진료 지원 AI.
+    start로 다른 환자(trial)를 고르면 새 대화를 만든다. 지난 대화는 관제 화면에 남는다.
+    on_change(대화, 이유)는 대화가 바뀔 때마다 부른다 (DB 저장, persist.py). 실패해도 의료진 요청은 그대로 끝낸다.
+    """
+
+    def __init__(self, eng: Engine, trial_id: str = "T0014", arm: str = "C1", budget: int = 60, *, llm_mode: str = "oracle",
+                 owner: dict[str, Any] | None = None, compare: bool = True, location_label: str = DEMO_LOCATION,
+                 on_change: Callable[[ClinicConversation, str], None] | None = None, keep: int | None = None,
+                 on_evict: Callable[[ClinicConversation], None] | None = None, lazy: bool = False) -> None:
+        self.eng, self.arm, self.budget, self.llm_mode = eng, arm, budget, llm_mode
+        self.owner, self.compare, self.location_label = owner, compare, location_label
+        self.on_change, self.keep, self.on_evict = on_change, keep, on_evict
+        self.default_trial = trial_id
+        self.lock = threading.RLock()            # 이 의료진의 질문 · 새 대화 시작을 한 번에 하나씩 (LLM을 기다리는 동안에도)
+        self.history: dict[str, ClinicConversation] = {}
+        self._current: ClinicConversation | None = None
+        if not lazy:                             # lazy: 운영 모드. EMR에서 환자를 열 때 첫 대화를 만든다 (안 열고 화면을 보면 기본 환자)
+            self.start(trial_id)
+
+    @property
+    def current(self) -> ClinicConversation:
+        if self._current is None:
+            with self.lock:
+                if self._current is None:
+                    self.start(self.default_trial)
+        return self._current  # type: ignore[return-value]
+
+    def peek(self) -> ClinicConversation | None:
+        """지금 대화 (없으면 만들지 않고 None)."""
+        return self._current
+
+    # 지금 대화로 넘기는 읽기 (앞선 코드 · 테스트와 같은 이름)
+    @property
+    def session(self) -> Session:
+        return self.current.session
+
+    @property
+    def slots(self) -> dict[str, Slot]:
+        return self.current.slots
+
+    @property
+    def workspace_id(self) -> str:
+        return self.current.workspace_id
+
+    def start(self, trial_id: str, *, launch: dict[str, Any] | None = None) -> ClinicConversation:
+        with self.lock:
+            cur = self._current
+            if cur is not None and cur.session.trial_id == trial_id and cur.session.turn == 0 and not cur.session.messages:
+                # 같은 환자이고 아직 아무것도 묻지 않은 대화는 그대로 쓴다 (화면을 열 때 만든 기본 대화를 EMR에서 다시 열 때 등)
+                if launch is not None:
+                    cur.session.launch = launch
+                    self._changed(cur, "launch")
+                return cur
+            with self.eng.lock:
+                s = self.eng.new_session(trial_id, source="clinic", budget=self.budget, llm_mode=self.llm_mode)
+                s.owner = self.owner
+                s.launch = launch
+                conv = ClinicConversation(self.eng, s, self.arm, compare=self.compare, location_label=self.location_label)
+                self.history[s.id] = conv
+                self._current = conv
+            self._changed(conv, "start")
+            self._evict()
+            return conv
+
+    def ask(self, case_id: str, session_id: str, question: str, client_message_id: str) -> dict[str, Any]:
+        with self.lock:
+            conv = self.current
+            out = conv.ask(case_id, session_id, question, client_message_id)
+            self._changed(conv, "ask")
+            return out
+
+    def _changed(self, conv: ClinicConversation, why: str) -> None:
+        if self.on_change is None:
+            return
+        try:
+            self.on_change(conv, why)
+        except Exception as exc:          # 저장 실패가 의료진 답을 막지 않게 한다 (관제 /api/health에 개수가 남는다)
+            print(f"[medicloak] 대화 {conv.id} 저장 실패: {type(exc).__name__}: {exc}")
+
+    def _evict(self) -> None:
+        """
+        메모리에 둘 지난 대화 수 상한 (DB가 있을 때만). 내린 대화는 DB 스냅숏으로 관제 화면에 남는다.
+        저장에 성공한 대화만 내린다 (실패하면 메모리에 그대로 두고 다음에 다시). 뒤에서 비교 갈래를 계산 중인 대화는 두고 간다.
+        """
+        if not self.keep or self.on_evict is None:
+            return
+        for sid in list(self.history):
+            if len(self.history) <= self.keep:
+                break
+            conv = self.history[sid]
+            if (self._current is not None and sid == self._current.id) or conv.session.compare_pending:
+                continue
+            try:
+                self.on_evict(conv)
+            except Exception as exc:
+                print(f"[medicloak] 대화 {sid}를 메모리에서 내리지 못했습니다 (저장 실패, 다음에 다시): {type(exc).__name__}: {exc}")
+                break
+            self.history.pop(sid, None)
+
+
+class DeskRegistry:
+    """계정마다 ClinicDesk 하나. 데모 모드(로그인 없음)는 'demo' 하나만 쓴다."""
+
+    def __init__(self, eng: Engine, *, trial: str = "T0014", llm_mode: str = "oracle", compare: bool = True,
+                 location_label: str = DEMO_LOCATION, on_change: Callable[[ClinicConversation, str], None] | None = None,
+                 keep: int | None = None, on_evict: Callable[[ClinicConversation], None] | None = None,
+                 archive: Callable[[str], ArchivedConversation | None] | None = None, lazy: bool = False) -> None:
+        self.eng, self.trial, self.llm_mode, self.compare, self.location_label = eng, trial, llm_mode, compare, location_label
+        self.on_change, self.keep, self.on_evict, self.archive, self.lazy = on_change, keep, on_evict, archive, lazy
+        self.desks: dict[Any, ClinicDesk] = {}
+        self.lock = threading.Lock()
+
+    def desk_for(self, user: dict[str, Any] | None) -> ClinicDesk:
+        key = user["user_id"] if user else "demo"
+        with self.lock:
+            d = self.desks.get(key)
+            if d is None:
+                owner = dict(user_id=user["user_id"], username=user["username"], label=user["display_name"],
+                             department=user.get("department")) if user else None
+                d = ClinicDesk(self.eng, self.trial, llm_mode=self.llm_mode, owner=owner, compare=self.compare,
+                               location_label=self.location_label, on_change=self.on_change, keep=self.keep, on_evict=self.on_evict,
+                               lazy=self.lazy and user is not None)
+                self.desks[key] = d
+            return d
+
+    def live(self, sid: str) -> ClinicConversation | None:
+        with self.lock:
+            desks = list(self.desks.values())
+        for d in desks:
+            conv = d.history.get(sid)
+            if conv is not None:
+                return conv
+        return None
+
+    def current_ids(self) -> set[str]:
+        with self.lock:
+            return {c.id for c in (d.peek() for d in self.desks.values()) if c is not None}
+
+    def lookup(self, sid: str) -> ClinicConversation | ArchivedConversation:
+        conv = self.live(sid)
+        if conv is not None:
+            return conv
+        if self.archive is not None:
+            a = self.archive(sid)
+            if a is not None:
+                return a
+        raise NotFound(sid)
+
+    def all_live(self) -> list[ClinicConversation]:
+        with self.lock:
+            desks = list(self.desks.values())
+        return [c for d in desks for c in d.history.values()]
+

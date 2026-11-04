@@ -20,7 +20,8 @@
 화면과 서버:
 
 ```bash
-python -m webdemo --build          # 데모 서버 + 화면 (LLM 0, API 키 불필요). http://127.0.0.1:8000
+python -m medicloak init && python -m medicloak serve --build   # 운영 모드: 로그인 · 가상 EMR(DB · FHIR) · .env의 실제 LLM. medicloak/README.md
+python -m webdemo --build          # 데모 서버 + 화면 (LLM 0, API 키 불필요, 로그인 없음). http://127.0.0.1:8000
 python -m api_server               # 실제 LLM 연구 서버 (.env 필요). 화면은 cd frontend && VITE_API_MODE=http VITE_API_BASE_URL=/api npm run dev
 python scripts/build_terminology_db.py --no-llm   # 용어 DB 메타데이터 (LLM 0). 쉬운 설명은 --resume으로 채움 (LLM)
 ```
@@ -36,6 +37,7 @@ python scripts/build_terminology_db.py --no-llm   # 용어 DB 메타데이터 (L
 | 의료 시나리오 (Synthea 576명) | `python -m medical` — RAG 문서·유사 환자 검색·사례별 추적·사건 단위 k(kcalc)·Defender(이유진 정책)·C0/C1/C1S·Validated k. 상세: [docs/medical.md](docs/medical.md) |
 | 단서 추출 정확도 (보류 검증) | holdout_2(처음 보는 질의 환자 13명) 팀 고정본 채점 정밀도 97.0% · 재현율 89.2% · F1 0.929, 확정 값 기준 F1 0.896. [medical/scoring/](medical/scoring/README.md) |
 | 화면 (MediCloak) | `frontend/` 의료진 화면(EMR 진료 지원 AI, 위험 숫자 없음, 사례 노트 · 세부 정보 요청) + 보안 관제 · 의료진 대화 위험 분석 · 단서 그래프 · 리포트 · 감사 기록 · 의료 용어 사전. 데모 서버(`python -m webdemo`) 또는 연구 서버(`python -m api_server`). ADR-0020 |
+| MediCloak 운영 모드 | `python -m medicloak`: 로그인 · 역할 분리(의료진 · 보안 담당자), 의료진 계정마다 대화, SQLite DB(가상 EMR 576명 · 대화 · 감사 기록), FHIR R4 읽기 API(외래 환자만), `.env`의 실제 LLM이 의료진 질문에 답함, 의료진 화면 API에서 위험 숫자 제거. [medicloak/README.md](medicloak/README.md), ADR-0021 |
 | 의료 용어 RAG | 검색 · 용어 카드 · 답변 속 용어 자동 표시 (`medical/terminology.py` + `term_service.py`) |
 | 실행 갈래 | C0(Defender 없음), C1(공개 전 Defender), C1S(무상태 Defender 대조군) |
 | 위험 계산 백엔드 | `risk_defender`(이유진 파트, 기본) / `ontology`(D1 Stage 3 계층 + D1 Stage 11 Defender) |
@@ -352,7 +354,7 @@ python -m adapters.check_fuzzer                 # Seed 선택과 두 턴 변형
 
 ## 의사결정 기록 (ADR)
 
-기준 · 구조 · 실험 방식을 바꾼 결정은 [`docs/adr/`](docs/adr/README.md)에 한 건씩 남깁니다 (현재 19건). 색인과 AI용 요약(`docs/adr/ADR_CONTEXT.md`, `index.json`)은 `scripts/adr.py`가 ADR 파일에서 만들고, 병합되면 GitHub Actions가 갱신합니다.
+기준 · 구조 · 실험 방식을 바꾼 결정은 [`docs/adr/`](docs/adr/README.md)에 한 건씩 남깁니다 (현재 21건). 색인과 AI용 요약(`docs/adr/ADR_CONTEXT.md`, `index.json`)은 `scripts/adr.py`가 ADR 파일에서 만들고, 병합되면 GitHub Actions가 갱신합니다.
 
 ```bash
 python scripts/adr.py new "제목" --slug short-name --deciders 이름 --area risk --sprint S5 --jira ZP-00

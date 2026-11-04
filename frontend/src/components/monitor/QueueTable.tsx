@@ -41,10 +41,12 @@ export function QueueTable({ rows, selected, onSelect, kReq }: Props) {
               <td className="border-b border-line px-3 py-3 align-middle">
                 <button type="button" onClick={() => onSelect(r.id)} className="text-left">
                   <span className="font-mono text-[13px] text-ink">{r.trial_id}</span>
-                  <span className="ml-2 text-xs text-ink-3">{r.source_label}</span>
+                  <span className="ml-2 text-xs text-ink-3">{r.owner ? `${r.source_label} · ${r.owner}` : r.source_label}</span>
                 </button>
                 <div className="text-xs text-ink-3">
                   {r.qtype_label} {r.turns}턴
+                  {r.llm_mode === 'live' && <span className="ml-1.5 rounded-[4px] bg-surface-2 px-1 py-px text-[10.5px] font-semibold text-ink-2">LLM</span>}
+                  {r.archived && <span className="ml-1.5 rounded-[4px] bg-surface-2 px-1 py-px text-[10.5px] font-semibold text-ink-2">지난 대화</span>}
                 </div>
                 {r.flag &&
                   (r.pending_request ? (

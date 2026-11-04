@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from webdemo.backend.app import create_app  # noqa: E402
 from webdemo.backend.engine import Engine  # noqa: E402
+from webdemo.backend.redact import leaked_numbers  # noqa: E402
 
 
 @pytest.fixture(scope="module")
@@ -116,18 +117,36 @@ def _clinic(client):
     return pc, cases, sid
 
 
+def _watching(client):
+    """보안 담당자 API에서 지금 의료진 대화 번호 (데모: 화면 하나 = 대화 하나)."""
+    return next(x["id"] for x in client.get("/api/watch").json() if x["current"])
+
+
 def test_clinic_contract_shapes(client):
     client.post("/api/session/reset", json=dict(trialId="T0014"))
     pc, cases, sid = _clinic(client)
     assert pc["trialId"] == "T0014" and "patient" not in pc                # 질의 환자 번호는 의료진 화면으로 보내지 않는다
     assert [c["caseId"] for c in cases] == [f"case-{i}" for i in range(1, 6)]
     assert cases[3]["description"].endswith("(비공개)")           # 턴 0 검색 답에서 사례4 처방 약은 가려졌다 (슬라이드 18)
+    # 의료진 화면 API에는 후보 수 · 기준값이 없다 (ADR-0021)
     risks = {r["caseId"]: r for r in client.get("/api/risk-states").json()}
-    assert risks["case-1"]["k"] == 6 and risks["case-1"]["riskLevel"] == "safe"
+    assert risks["case-1"]["k"] is None and risks["case-1"]["riskLevel"] == "safe" and risks["case-1"]["disclosureAllowed"]
     pol = client.get("/api/protection-policy").json()
-    assert (pol["arm"], pol["minK"], pol["suppressK"]) == ("C1", 5, 3)
-    assert client.get("/api/health").json()["backend"] == "webdemo"
+    assert (pol["arm"], pol["minK"], pol["suppressK"], pol["populationSize"]) == ("C1", None, None, None)
+    assert client.get("/api/cases/case-1/policy-decision").status_code == 403
+    # 같은 대화를 보안 담당자 API(/api/watch/{대화})로 보면 숫자가 그대로 있다
+    w = _watching(client)
+    wr = {r["caseId"]: r for r in client.get(f"/api/watch/{w}/risk-states").json()}
+    assert wr["case-1"]["k"] == 6 and wr["case-1"]["riskLevel"] == "safe"
+    wp = client.get(f"/api/watch/{w}/protection-policy").json()
+    assert (wp["arm"], wp["minK"], wp["suppressK"]) == ("C1", 5, 3)
+    assert client.get(f"/api/watch/{w}/cases/case-1/policy-decision").json()["currentK"] == 6
+    assert client.get("/api/monitor/policy").json()["minK"] == 5
+    h = client.get("/api/health").json()
+    assert h["backend"] == "webdemo" and not h["auth"] and h["llm"]["mode"] == "oracle"
+    assert client.get("/api/auth/me").status_code == 404                      # 데모 서버에는 로그인이 없다
     assert client.get("/api/cases/case-9/session").status_code == 404
+    assert client.get("/api/watch/S9999/risk-states").status_code == 404
 
 
 def test_clinic_question_is_defended_and_monitored(client):
@@ -135,15 +154,24 @@ def test_clinic_question_is_defended_and_monitored(client):
     _, _, sid = _clinic(client)
     q = "사례1 환자가 그 시술을 받은 시기를 월 단위로 알려 주세요."
     pf = client.post("/api/cases/case-1/preflight", json=dict(sessionId=sid, question=q)).json()
-    assert pf["supported"] and pf["requiresWarning"] and (pf["currentK"], pf["projectedK"]) == (6, 1)
+    assert pf["supported"] and pf["requiresWarning"] and pf["plannedAction"] == "suppress"
+    assert (pf["currentK"], pf["projectedK"], pf["message"]) == (None, None, None) and not leaked_numbers(pf)
+    w = _watching(client)
+    wpf = client.post(f"/api/watch/{w}/cases/case-1/preflight", json=dict(sessionId=sid, question=q)).json()
+    assert (wpf["currentK"], wpf["projectedK"]) == (6, 1) and "6명에서 1명" in wpf["message"]       # 보안 담당자 '질문 미리 세기'
     r = client.post("/api/cases/case-1/messages", json=dict(sessionId=sid, question=q, clientMessageId="c1"))
     assert r.status_code == 200, r.text
     body = r.json()
     p = body["assistantMessage"]["protection"]
-    assert p["decision"] == "suppress" and (p["kBefore"], p["kAfter"]) == (6, 6)
+    assert p["decision"] == "suppress" and (p["kBefore"], p["kAfter"], p["explanation"]) == (None, None, None)
+    assert all("후보" not in (t.get("levelDescription") or "") for t in p["transformations"])
     assert any(s["kind"] == "disclosure" for s in body["assistantMessage"]["segments"])
     assert "2004" not in json.dumps(body, ensure_ascii=False)       # 가린 원래 값(2004-06)은 의료진 응답 어디에도 없다
-    assert body["userMessage"]["segments"][0]["text"] == q and body["riskState"]["k"] == 6
+    assert body["userMessage"]["segments"][0]["text"] == q and body["riskState"]["k"] is None and not leaked_numbers(body)
+    wp = client.get(f"/api/watch/{w}/cases/case-1/session").json()["messages"][-1]["protection"]
+    assert (wp["kBefore"], wp["kAfter"]) == (6, 6) and "후보" in wp["explanation"]
+    assert not leaked_numbers(client.get("/api/cases/case-1/session").json())
+    assert not leaked_numbers(client.get("/api/cases/case-1/disclosures").json())
     # 관제 화면: 같은 대화가 보이고, 원래 값은 열람 사유를 남긴 뒤에만 보인다
     ov = client.get("/api/monitor/overview").json()
     row = next(x for x in ov["sessions"] if x["source"] == "clinic" and x["turns"] >= 1)
@@ -157,6 +185,8 @@ def test_clinic_question_is_defended_and_monitored(client):
     assert rv["review"]["action"] == "reviewed"
     audit = client.get("/api/monitor/audit").json()
     assert [a["action"] for a in audit[:2]] == ["reviewed", "reveal"] and audit[1]["reason"] == "오탐 확인"
+    asked = next(a for a in audit if a["action"] == "clinic_question" and a["session"] == row["id"])       # 질문도 접근 기록에 남는다
+    assert asked["case"] == "사례1" and asked["protected"] >= 1 and "question" not in asked
 
 
 def test_clinic_preflight_plans_action_and_history_values(client):
@@ -230,11 +260,12 @@ def test_clinic_and_security_exchange_messages(client):
 def test_clinic_unknown_question_and_session_conflict(client):
     client.post("/api/session/reset", json=dict(trialId="T0014"))
     _, _, sid = _clinic(client)
-    before = client.get("/api/risk-states").json()
+    w = _watching(client)
+    before = client.get(f"/api/watch/{w}/risk-states").json()
     r = client.post("/api/cases/case-2/messages", json=dict(sessionId=sid.replace("case-1", "case-2"), question="오늘 날씨 어때요?",
                                                             clientMessageId="c2")).json()
     assert r["assistantMessage"]["protection"]["releaseMode"] == "NO_ANSWER"
-    assert [x["k"] for x in client.get("/api/risk-states").json()] == [x["k"] for x in before]
+    assert [x["k"] for x in client.get(f"/api/watch/{w}/risk-states").json()] == [x["k"] for x in before]
     assert client.post("/api/cases/case-1/messages", json=dict(sessionId="ws-old:case-1", question="나이는?", clientMessageId="c3")).status_code == 409
     assert client.post("/api/cases/case-1/messages", json=dict(sessionId=sid, question="  ", clientMessageId="c4")).status_code == 422
     sug = client.get("/api/cases/case-1/suggestions").json()

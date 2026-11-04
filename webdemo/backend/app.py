@@ -1,44 +1,69 @@
-# 데모 API (FastAPI). 빌드한 프런트엔드(frontend/dist)도 같은 서버가 내보낸다.
+# MediCloak API (FastAPI). 빌드한 프런트엔드(frontend/dist)도 같은 서버가 내보낸다.
 #
-#   의료진 화면 (frontend/ 계약, api_server와 같은 경로)
+# 두 가지로 켠다
+#   데모    python -m webdemo     로그인 없음 · 결정적 응답기 · 메모리에만 기록. 화면 하나가 대화 하나를 쓴다.
+#   운영    python -m medicloak   로그인 · 역할 분리 · DB(가상 EMR · 기록) · .env의 실제 LLM. 의료진 계정마다 대화를 따로 쓴다.
+#
+#   의료진 화면 (frontend/ 계약, api_server와 같은 경로) — 언제나 위험 숫자를 지워서 보낸다 (redact.py)
 #     GET  /api/workspace · /api/protection-policy · /api/patient-context · /api/cases?patientContextId= · /api/risk-states
-#     GET  /api/cases/{id}/session · /disclosures · /policy-decision · /suggestions
-#     POST /api/cases/{id}/messages · /preflight          POST /api/session/reset {trialId}     GET /api/clinic/patients
-#     GET  /api/clinic/messages · POST /api/clinic/messages {kind, text, caseId}   보안 담당자와 주고받는 메시지 (세부 정보 요청 · 답장)
-#   보안 담당자 관제
-#     GET  /api/monitor/overview · /api/monitor/sessions/{sid} · /api/monitor/audit
+#     GET  /api/cases/{id}/session · /disclosures · /suggestions          (판정 근거 /policy-decision은 403)
+#     POST /api/cases/{id}/messages · /preflight          POST /api/session/reset {trialId}
+#     GET  /api/clinic/messages · POST /api/clinic/messages {kind, text, caseId}   보안 담당자와 주고받는 메시지
+#     GET  /api/clinic/history                           이 계정의 지난 대화 (운영 모드)
+#     GET  /api/clinic/patients                          데모 환자 목록 (데모 모드만)
+#   가상 EMR (운영 모드, 의료진)
+#     GET  /api/emr/worklist · POST /api/emr/launch {fhirId, purpose}     GET /fhir/metadata · /fhir/Patient · /fhir/{자원}?patient=
+#   보안 담당자
+#     GET  /api/watch                                    의료진 대화 목록 (지난 대화 포함)
+#     GET  /api/watch/{대화}/…                           그 대화의 의료진 화면 계약을 숫자 그대로 (위와 같은 경로, 읽기 전용)
+#     GET  /api/monitor/overview · /policy · /sessions/{sid} · /audit
 #     POST /api/monitor/sessions/{sid}/reveal {reason} · /review {action, note} · /messages {kind, text, case}   GET …/messages
-#   레드팀·결과
-#     POST /api/redteam · GET /api/redteam/{id} · GET /api/poc (webdemo/data/poc_summary.json, 2026-10-23 POC 집계)
-#   평가 지표 대시보드: GET /eval/ (eval_demo/ 정적 페이지)
-#   의료 용어 RAG: GET /api/terminology/status · /search · /{node_id} · 목록, POST /api/terminology/detect (medical/terminology_api.py)
-#   세션 직접 조작 (POC 재현·테스트용)
-#     /api/meta · /api/patients · /api/sessions …
+#     POST /api/redteam · GET /api/redteam/{id} · GET /api/poc     평가 지표 대시보드 GET /eval/
+#   로그인 (운영 모드)
+#     POST /api/auth/login {username, password} · /api/auth/logout     GET /api/auth/me
+#   함께 쓰는 것: GET /api/health · 의료 용어 RAG /api/terminology/…
 
 from __future__ import annotations
 
 import json
 import os
 from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from fastapi import APIRouter, FastAPI, HTTPException, Query
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from core.llm_client import LLMError
 from medical.config import ROOT
 from medical.terminology_api import terminology_router
-from webdemo.backend.clinic import ClinicDesk, Conflict, NotFound
+from webdemo.backend import redact
+from webdemo.backend.auth import COOKIE, ROLE_KO, SESSION_TTL, Auth, LoginBlocked, roles_for, route_path, user_view
+from webdemo.backend.clinic import ArchivedConversation, ClinicConversation, ClinicDesk, Conflict, DeskRegistry, NotFound
 from webdemo.backend.engine import ARMS, DemoError, Engine, summarize
+from webdemo.backend.fhir import FEATURED, OutpatientEmr, fhir_router, find_trial, worklist
 from webdemo.backend.monitor import REVIEW_KO, Monitor
+from webdemo.backend.persist import Persist
 
 HERE = Path(__file__).resolve().parent
 DIST = Path(os.environ.get("WEBDEMO_DIST") or ROOT / "frontend" / "dist")
 POC_FILE = HERE.parent / "data" / "poc_summary.json"
 EVAL_DIR = ROOT / "eval_demo"
-FEATURED = ("T0014", "T0010", "T0024", "T0036", "T0005", "T0016", "T0037", "T0001")
+PRODUCT_LOCATION = "MediCloak 가상 EMR (Synthea 합성 환자)"
+
+
+@dataclass
+class Product:
+    """운영 모드 설정 (python -m medicloak serve가 만든다)."""
+    store: Any                              # webdemo.backend.store.Store
+    auth: bool = True
+    compare: bool = True                    # 실제 LLM 대화에서도 C0 · C1S 비교 갈래를 계산 (원 응답은 같이 씀, C1S 재작성 호출이 더 들 수 있음)
+    keep: int | None = 12                   # 의료진마다 메모리에 둘 대화 수 (넘으면 DB 스냅숏으로만 남김)
+    cookie_secure: bool = False             # https로만 쿠키를 보낼지 (역방향 프록시 뒤 https 운영이면 켠다)
+    location_label: str = PRODUCT_LOCATION
 
 
 class NewSession(BaseModel):
@@ -101,30 +126,78 @@ class SecurityNoteIn(BaseModel):
     case: str | None = None
 
 
-def create_app(engine: Engine | None = None, *, trial: str | None = None, simulations: bool | None = None) -> FastAPI:
+class LoginIn(BaseModel):
+    username: str = Field(..., min_length=1, max_length=64)
+    password: str = Field(..., min_length=1, max_length=256)
+
+
+class LaunchIn(BaseModel):
+    fhirId: str = Field(..., min_length=1, max_length=64)
+    purpose: str = Field(..., examples=["PRESCRIPTION"])
+
+
+def create_app(engine: Engine | None = None, *, trial: str | None = None, simulations: bool | None = None,
+               product: Product | None = None) -> FastAPI:
     state: dict[str, Any] = {}
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         eng = engine or Engine(Path(os.environ["WEBDEMO_WORKDIR"]) if os.environ.get("WEBDEMO_WORKDIR") else None)
-        state["engine"] = eng
-        state["monitor"] = Monitor(eng)
-        state["clinic"] = ClinicDesk(eng, trial or os.environ.get("WEBDEMO_TRIAL") or "T0014")
+        store = product.store if product else None
+        persist = Persist(store, eng) if store is not None else None
+        mon = Monitor(eng, store, on_session_change=persist.save_session if persist else None)
+        registry = DeskRegistry(eng, trial=trial or os.environ.get("WEBDEMO_TRIAL") or "T0014",
+                                llm_mode="live" if eng.live_ctx is not None else "oracle",
+                                compare=product.compare if product else True,
+                                location_label=product.location_label if product else "MediCloak 데모 (Synthea 합성 환자)",
+                                on_change=persist.save if persist else None, keep=product.keep if persist else None,
+                                on_evict=persist.evict if persist else None, archive=persist.archive if persist else None,
+                                lazy=persist is not None)
+        if persist is not None:
+            persist.monitor, persist.registry = mon, registry
+            eng.on_compare_done = persist.save_session          # 뒤에서 계산한 비교 갈래(C1S)도 DB에 남긴다
+        state.update(engine=eng, monitor=mon, registry=registry, persist=persist, store=store,
+                     auth=Auth(store) if product and product.auth else None,
+                     emr=OutpatientEmr(store) if store is not None else None, worklist=None)
+        if state["auth"] is None:
+            state["clinic"] = registry.desk_for(None)          # 데모: 화면 하나 = 대화 하나
         sims = simulations if simulations is not None else os.environ.get("WEBDEMO_NO_SIM") != "1"
         if sims:
-            state["monitor"].seed_simulations()
+            mon.seed_simulations()
+        if product is not None:
+            try:                                         # LLM을 기다리는 질문이 동기 요청 일꾼을 모두 잡지 않게 여유를 둔다
+                import anyio.to_thread
+                anyio.to_thread.current_default_thread_limiter().total_tokens = 100
+            except Exception:
+                pass
         yield
+        # 끌 때: 뒤에서 계산 중인 비교 갈래(C1S)를 잠시 기다려 DB에 남긴다 (못 끝낸 것은 '대기'로 남는다)
+        if eng.compare_pending():
+            eng.wait_compare(20)
 
-    app = FastAPI(title="MediCloak 의료 AI 데모", version="0.2", lifespan=lifespan)
+    # 운영 모드에서는 API 문서(/docs · /openapi.json)를 열지 않는다
+    docs = dict(docs_url=None, redoc_url=None, openapi_url=None) if product is not None else {}
+    app = FastAPI(title="MediCloak 의료 AI", version="0.3", lifespan=lifespan, **docs)
 
     def eng() -> Engine:
         return state["engine"]
 
-    def clinic() -> ClinicDesk:
-        return state["clinic"]
-
     def mon() -> Monitor:
         return state["monitor"]
+
+    def reg() -> DeskRegistry:
+        return state["registry"]
+
+    def user_of(request: Request) -> dict[str, Any] | None:
+        return getattr(request.state, "user", None)
+
+    def desk(request: Request) -> ClinicDesk:
+        if state["auth"] is None:
+            return state["clinic"]
+        return reg().desk_for(user_of(request))
+
+    def cur(request: Request) -> ClinicConversation:
+        return desk(request).current
 
     def arm_ok(arm: str) -> str:
         if arm not in ARMS:
@@ -135,7 +208,10 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
         try:
             return eng().session(sid)
         except KeyError:
-            raise HTTPException(404, f"없는 대화입니다: {sid} (서버를 다시 켜면 대화가 지워집니다)")
+            a = mon().archived(sid)
+            if a is not None:
+                return a
+            raise HTTPException(404, f"없는 대화입니다: {sid}" + ("" if state["store"] is not None else " (데모 서버는 다시 켜면 대화가 지워집니다)"))
 
     def guard(fn: Callable[[], Any]) -> Any:
         try:
@@ -146,6 +222,8 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
             raise HTTPException(409, str(exc))
         except DemoError as exc:
             raise HTTPException(400, str(exc))
+        except LLMError as exc:
+            raise HTTPException(502, f"대상 AI 호출에 실패했습니다 ({type(exc).__name__}). 대화 상태는 바뀌지 않았습니다.")
         except ValueError as exc:
             raise HTTPException(422, str(exc))
 
@@ -153,81 +231,197 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
     async def demo_error(_, exc: DemoError):
         return JSONResponse(status_code=400, content={"detail": str(exc)})
 
-    # ── 의료진 화면 ──────────────────────────────────────
-    r = APIRouter(prefix="/api")
+    # ── 로그인 · 역할 (운영 모드) ─────────────────────────
+    @app.middleware("http")
+    async def access(request: Request, call_next):
+        a: Auth | None = state.get("auth")
+        request.state.user = None
+        if a is None:
+            return await call_next(request)
+        token = request.cookies.get(COOKIE)
+        user = a.user_of(token) if token else None
+        request.state.user = user
+        need = roles_for(route_path(request.scope))            # 라우터가 맞추는 경로 (root_path를 뗀 것)
+        if need is False or need is None:
+            return await call_next(request)
+        if user is None:
+            return JSONResponse(status_code=401, content={"detail": "로그인이 필요합니다."})
+        if user["role"] not in need:
+            other = " · ".join(ROLE_KO[r] for r in sorted(need))
+            return JSONResponse(status_code=403, content={"detail": f"{other} 계정만 쓸 수 있습니다. 지금은 {ROLE_KO[user['role']]} 계정입니다."})
+        return await call_next(request)
+
+    def client_of(request: Request) -> str:
+        return request.client.host if request.client else "-"
+
+    def require_access(request: Request) -> None:
+        """
+        API 라우터마다 붙이는 두 번째 검사: 실제로 맞은 경로 틀(예: /api/monitor/sessions/{sid})로 역할을 다시 본다.
+        미들웨어 검사가 배포 방식(앞 경로, 프록시)에 따라 빗나가도 여기서 막힌다.
+        """
+        if state.get("auth") is None:
+            return
+        route = request.scope.get("route")
+        need = roles_for(getattr(route, "path", None) or route_path(request.scope))
+        if need is None:
+            return
+        user = user_of(request)
+        if user is None:
+            raise HTTPException(401, "로그인이 필요합니다.")
+        if need is False or user["role"] not in need:
+            raise HTTPException(403, "이 계정으로는 쓸 수 없는 기능입니다.")
+
+    def attempt_label(a: Auth, username: str) -> str:
+        # 없는 아이디는 입력값을 남기지 않는다 (아이디 칸에 비밀번호를 잘못 친 경우 감사 기록에 비밀번호가 남지 않게)
+        name = username.strip()[:64]
+        return f"{name} (로그인 시도)" if a.known(name) else "없는 아이디 (로그인 시도)"
+
+    auth_r = APIRouter(prefix="/api/auth")
+
+    @auth_r.post("/login")
+    def login(body: LoginIn, request: Request, response: Response) -> dict[str, Any]:
+        a: Auth | None = state["auth"]
+        if a is None:
+            raise HTTPException(404, "로그인 없는 데모 서버입니다.")
+        try:
+            got = a.login(body.username, body.password, client_of(request))
+        except LoginBlocked as exc:
+            mon().log("login_blocked", None, actor=attempt_label(a, body.username), client=client_of(request))
+            raise HTTPException(429, str(exc))
+        if got is None:
+            mon().log("login_failed", None, actor=attempt_label(a, body.username), client=client_of(request))
+            raise HTTPException(401, "아이디 또는 비밀번호가 맞지 않습니다.")
+        token, user = got
+        response.set_cookie(COOKIE, token, max_age=int(SESSION_TTL), httponly=True, samesite="lax",
+                            secure=bool(product and product.cookie_secure) or request.url.scheme == "https", path="/")
+        mon().log("login", None, user=user, client=client_of(request))
+        return dict(user=user_view_of(user))
+
+    @auth_r.post("/logout")
+    def logout(request: Request, response: Response) -> dict[str, Any]:
+        a: Auth | None = state["auth"]
+        if a is None:
+            raise HTTPException(404, "로그인 없는 데모 서버입니다.")
+        user = user_of(request)
+        a.logout(request.cookies.get(COOKIE))
+        response.delete_cookie(COOKIE, path="/")
+        if user:
+            mon().log("logout", None, user=user)
+        return dict(status="ok")
+
+    @auth_r.get("/me")
+    def me(request: Request) -> dict[str, Any]:
+        if state["auth"] is None:
+            raise HTTPException(404, "로그인 없는 데모 서버입니다.")
+        user = user_of(request)
+        if user is None:
+            raise HTTPException(401, "로그인이 필요합니다.")
+        return dict(user=user_view_of(user))
+
+    def user_view_of(u: dict[str, Any]) -> dict[str, Any]:
+        return user_view(dict(u))
+
+    app.include_router(auth_r)
+
+    # ── 의료진 화면 (숫자 없음) ───────────────────────────
+    guarded = [Depends(require_access)]
+    r = APIRouter(prefix="/api", dependencies=guarded)
 
     @r.get("/health")
     def health() -> dict[str, Any]:
-        return dict(status="ok", backend="webdemo", target="결정적 응답기 (LLM 없음)", monitor=True, trialId=clinic().session.trial_id,
-                    simulations=mon().sim_status)
+        e = eng()
+        live = e.live_ctx is not None
+        out = dict(status="ok", backend="medicloak" if state["store"] is not None else "webdemo", product="MediCloak",
+                   target=e.live_label if live else "결정적 응답기 (LLM 없음)", monitor=True, simulations=mon().sim_status,
+                   auth=state["auth"] is not None,
+                   llm=dict(mode="live" if live else "oracle", label=e.live_label, live=live,
+                            waiting=e.live_llm.waiting if e.live_llm is not None else 0, compare_pending=e.compare_pending()))
+        if state["auth"] is None:
+            out["trialId"] = state["clinic"].session.trial_id
+        if state["persist"] is not None:
+            out["persist"] = dict(errors=state["persist"].errors)
+        return out
 
     @r.get("/workspace")
-    def workspace() -> dict[str, Any]:
-        return clinic().environment()
+    def workspace(request: Request) -> dict[str, Any]:
+        env = cur(request).environment()
+        u = user_of(request)
+        if u:
+            env = dict(env, roleLabel=f"{u['display_name']} · {u.get('department') or '의료진'}")
+        return env
 
     @r.get("/protection-policy")
-    def protection_policy() -> dict[str, Any]:
-        return clinic().policy()
+    def protection_policy(request: Request) -> dict[str, Any]:
+        return redact.policy(cur(request).policy())
 
     @r.get("/patient-context")
-    def patient_context() -> dict[str, Any]:
-        return clinic().patient_context()
+    def patient_context(request: Request) -> dict[str, Any]:
+        return cur(request).patient_context()
 
     @r.get("/cases")
-    def cases(patientContextId: str) -> list[dict[str, Any]]:
-        return guard(lambda: clinic().similar_cases(patientContextId))
+    def cases(patientContextId: str, request: Request) -> list[dict[str, Any]]:
+        return guard(lambda: cur(request).similar_cases(patientContextId))
 
     @r.get("/cases/{case_id}/session")
-    def conversation(case_id: str) -> dict[str, Any]:
-        return guard(lambda: clinic().conversation(case_id))
+    def conversation(case_id: str, request: Request) -> dict[str, Any]:
+        return redact.conversation(guard(lambda: cur(request).conversation(case_id)))
 
     @r.post("/cases/{case_id}/messages")
-    def messages(case_id: str, body: MessageIn) -> dict[str, Any]:
+    def ask(case_id: str, body: MessageIn, request: Request) -> dict[str, Any]:
         if not body.question.strip():
             raise HTTPException(422, "질문이 비어 있습니다.")
-        return guard(lambda: clinic().ask(case_id, body.sessionId, body.question, body.clientMessageId))
+        d = desk(request)
+        out = guard(lambda: d.ask(case_id, body.sessionId, body.question, body.clientMessageId))
+        p = out["assistantMessage"]["protection"]
+        mon().log("clinic_question", d.current.session, user=user_of(request), actor="의료진 (데모)", case=d.current.ref_of(case_id),
+                  turn=out["assistantMessage"].get("engineTurn"), release=p.get("releaseMode"),
+                  protected=sum(t["action"] != "allow" for t in p.get("transformations", [])))
+        return redact.send_result(out)
 
     @r.post("/cases/{case_id}/preflight")
-    def preflight(case_id: str, body: PreflightIn) -> dict[str, Any]:
-        return guard(lambda: clinic().preflight(case_id, body.sessionId, body.question))
+    def preflight(case_id: str, body: PreflightIn, request: Request) -> dict[str, Any]:
+        c = cur(request)
+        return redact.preflight(guard(lambda: c.preflight(case_id, body.sessionId, body.question)), live=c.live)
 
     @r.get("/cases/{case_id}/suggestions")
-    def suggestions(case_id: str) -> list[dict[str, Any]]:
-        return guard(lambda: clinic().suggestions(case_id))
+    def suggestions(case_id: str, request: Request) -> list[dict[str, Any]]:
+        return guard(lambda: cur(request).suggestions(case_id))
 
     @r.get("/risk-states")
-    def risk_states() -> list[dict[str, Any]]:
-        c = clinic()
-        return [c.risk_state(cid) for cid in c.slots]
+    def risk_states(request: Request) -> list[dict[str, Any]]:
+        return [redact.risk(x) for x in cur(request).risk_states()]
 
     @r.get("/cases/{case_id}/disclosures")
-    def disclosures(case_id: str) -> dict[str, Any]:
-        return guard(lambda: clinic().disclosures(case_id))
+    def disclosures(case_id: str, request: Request) -> dict[str, Any]:
+        return redact.disclosures(guard(lambda: cur(request).disclosures(case_id)))
 
     @r.get("/cases/{case_id}/policy-decision")
     def policy_decision(case_id: str) -> dict[str, Any]:
-        return guard(lambda: clinic().policy_decision(case_id))
+        raise HTTPException(403, "판정 근거(후보 수 · 기준값)는 보안 담당자 화면에서만 볼 수 있습니다.")
 
     @r.post("/session/reset")
-    def reset(body: ResetIn | None = None) -> dict[str, Any]:
-        tid = (body.trialId if body else None) or clinic().session.trial_id
-        guard(lambda: clinic().start(tid))
-        mon().log("clinic_start", clinic().session, actor="의료진 (데모)")
-        return dict(status="ok", workspaceId=clinic().workspace_id, trialId=tid)
+    def reset(request: Request, body: ResetIn | None = None) -> dict[str, Any]:
+        d = desk(request)
+        tid = (body.trialId if body else None) or d.session.trial_id
+        guard(lambda: d.start(tid))
+        mon().log("clinic_start", d.session, user=user_of(request), actor="의료진 (데모)")
+        return dict(status="ok", workspaceId=d.workspace_id, trialId=tid)
 
     @r.get("/clinic/messages")
-    def clinic_messages() -> list[dict[str, Any]]:
-        return clinic().messages()
+    def clinic_messages(request: Request) -> list[dict[str, Any]]:
+        return cur(request).messages()
 
     @r.post("/clinic/messages")
-    def post_clinic_message(body: ClinicNoteIn) -> list[dict[str, Any]]:
-        c = clinic()
+    def post_clinic_message(body: ClinicNoteIn, request: Request) -> list[dict[str, Any]]:
+        c = cur(request)
         ref = guard(lambda: c.ref_of(body.caseId)) if body.caseId else None
-        guard(lambda: mon().post_message(c.session, "clinician", body.kind, body.text, ref))
+        guard(lambda: mon().post_message(c.session, "clinician", body.kind, body.text, ref, user=user_of(request)))
         return c.messages()
 
     @r.get("/clinic/patients")
     def clinic_patients() -> list[dict[str, Any]]:
+        if state["emr"] is not None:
+            raise HTTPException(404, "운영 모드에서는 EMR 외래 목록(/api/emr/worklist)에서 환자를 고릅니다.")
         out = []
         for p in eng().patients():
             panel = {x["label"]: x["value"] for x in p["panel"]}
@@ -235,39 +429,163 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
                             ageSex=panel.get("연령 / 성별"), mainDx=panel.get("주진단"), item=panel.get("고려 중인 처치")))
         return out
 
+    @r.get("/clinic/history")
+    def clinic_history(request: Request) -> list[dict[str, Any]]:
+        """이 의료진의 대화 목록 (지금 대화 · 지난 대화). 숫자 없이 언제 · 어떤 환자 · 질문 몇 번."""
+        d = desk(request)
+        out, seen = [], set()
+        with eng().lock:
+            for conv in list(d.history.values()):
+                s = conv.session
+                pc = conv.patient_context()
+                out.append(dict(id=s.id, trialId=s.trial_id, startedAt=s.created, lastActive=s.last_active, questions=s.turn,
+                                patient=f"{pc['ageSexLabel']} · {pc['primaryDiagnosis']}", purpose=pc["queryPurpose"],
+                                current=conv is d.peek(), archived=False))
+                seen.add(s.id)
+        store, u = state["store"], user_of(request)
+        if store is not None and u is not None:
+            for c in store.conversations("clinic"):
+                if c["user_id"] != u["user_id"] or c["conv_id"] in seen or not c.get("clinic") or not c.get("turns"):
+                    continue
+                pc = c["clinic"]["patient"]
+                out.append(dict(id=c["conv_id"], trialId=c["trial_id"], startedAt=c["started_at"], lastActive=c["last_active"],
+                                questions=c["turns"], patient=f"{pc['ageSexLabel']} · {pc['primaryDiagnosis']}", purpose=pc["queryPurpose"],
+                                current=False, archived=True))
+        out.sort(key=lambda x: (not x["current"], -(x["lastActive"] or 0)))
+        return out
+
+    # ── 가상 EMR (운영 모드) ─────────────────────────────
+    def emr() -> OutpatientEmr:
+        if state["emr"] is None:
+            raise HTTPException(404, "가상 EMR은 운영 모드(python -m medicloak)에서만 켜집니다.")
+        return state["emr"]
+
+    @r.get("/emr/worklist")
+    def emr_worklist() -> list[dict[str, Any]]:
+        e = emr()
+        if state["worklist"] is None:
+            with eng().lock:
+                state["worklist"] = worklist(eng(), e)
+        return state["worklist"]
+
+    @r.post("/emr/launch")
+    def emr_launch(body: LaunchIn, request: Request) -> dict[str, Any]:
+        emr()
+        tid = find_trial(eng(), body.fhirId, body.purpose)
+        d = desk(request)
+        guard(lambda: d.start(tid, launch=dict(fhirId=body.fhirId, purpose=body.purpose)))
+        mon().log("emr_launch", d.session, user=user_of(request), actor="의료진 (데모)", purpose=body.purpose)
+        return dict(status="ok", workspaceId=d.workspace_id, trialId=tid)
+
+    # ── 보안 담당자: 의료진 대화를 숫자와 함께 (읽기 전용) ──
+    w = APIRouter(prefix="/api/watch", dependencies=guarded)
+
+    def conv_of(sid: str) -> ClinicConversation | ArchivedConversation:
+        try:
+            return reg().lookup(sid)
+        except NotFound:
+            raise HTTPException(404, f"없는 의료진 대화입니다: {sid}")
+
+    @w.get("")
+    def watch_list() -> list[dict[str, Any]]:
+        rows = [x for x in mon().overview()["sessions"] if x["source"] == "clinic"]
+        current = reg().current_ids()
+        out = [dict(id=x["id"], trialId=x["trial_id"], owner=x.get("owner"), qtypeLabel=x["qtype_label"], turns=x["turns"],
+                    lastActive=x["last_active"], created=x["created"], status=x["status"], statusLabel=x["status_label"],
+                    archived=bool(x.get("archived")), current=x["id"] in current, pendingRequest=x["pending_request"],
+                    llmMode=x.get("llm_mode")) for x in rows]
+        out.sort(key=lambda x: (not x["current"], x["archived"], -(x["lastActive"] or 0)))
+        return out
+
+    @w.get("/{sid}/workspace")
+    def w_workspace(sid: str) -> dict[str, Any]:
+        return conv_of(sid).environment()
+
+    @w.get("/{sid}/protection-policy")
+    def w_policy(sid: str) -> dict[str, Any]:
+        return conv_of(sid).policy()
+
+    @w.get("/{sid}/patient-context")
+    def w_patient(sid: str) -> dict[str, Any]:
+        return conv_of(sid).patient_context()
+
+    @w.get("/{sid}/cases")
+    def w_cases(sid: str, patientContextId: str) -> list[dict[str, Any]]:
+        c = conv_of(sid)
+        return guard(lambda: c.similar_cases(patientContextId))
+
+    @w.get("/{sid}/risk-states")
+    def w_risks(sid: str) -> list[dict[str, Any]]:
+        return conv_of(sid).risk_states()
+
+    @w.get("/{sid}/cases/{case_id}/session")
+    def w_conversation(sid: str, case_id: str) -> dict[str, Any]:
+        c = conv_of(sid)
+        return guard(lambda: c.conversation(case_id))
+
+    @w.get("/{sid}/cases/{case_id}/disclosures")
+    def w_disclosures(sid: str, case_id: str) -> dict[str, Any]:
+        c = conv_of(sid)
+        return guard(lambda: c.disclosures(case_id))
+
+    @w.get("/{sid}/cases/{case_id}/policy-decision")
+    def w_decision(sid: str, case_id: str) -> dict[str, Any]:
+        c = conv_of(sid)
+        with eng().lock:
+            return guard(lambda: c.policy_decision(case_id))
+
+    @w.get("/{sid}/cases/{case_id}/suggestions")
+    def w_suggestions(sid: str, case_id: str) -> list[dict[str, Any]]:
+        c = conv_of(sid)
+        return guard(lambda: c.suggestions(case_id))
+
+    @w.post("/{sid}/cases/{case_id}/preflight")
+    def w_preflight(sid: str, case_id: str, body: PreflightIn) -> dict[str, Any]:
+        c = conv_of(sid)
+        return guard(lambda: c.preflight(case_id, body.sessionId, body.question))
+
     # ── 관제 ─────────────────────────────────────────────
     @r.get("/monitor/overview")
     def overview() -> dict[str, Any]:
         return mon().overview()
+
+    @r.get("/monitor/policy")
+    def monitor_policy() -> dict[str, Any]:
+        e = eng()
+        d = e.ctx["staged"].defender
+        return dict(modeLabel=e.live_label if e.live_ctx is not None else "결정적 응답기 (LLM 없음)", arm="C1",
+                    stateModeLabel="누적 판정 (대화 전체 기억)", minK=d.g, suppressK=d.s, populationSize=e.ctx["staged"].p_ref, source="backend",
+                    kReq=e.cfg.k_req, llmLive=e.live_ctx is not None, compare=product.compare if product else True,
+                    auth=state["auth"] is not None, persist=state["store"] is not None, llmUsage=e.live_usage())
 
     @r.get("/monitor/sessions/{sid}")
     def monitor_session(sid: str) -> dict[str, Any]:
         return mon().detail(sess(sid))
 
     @r.post("/monitor/sessions/{sid}/reveal")
-    def reveal(sid: str, body: RevealIn) -> dict[str, Any]:
-        return mon().reveal(sess(sid), body.reason.strip())
+    def reveal(sid: str, body: RevealIn, request: Request) -> dict[str, Any]:
+        return mon().reveal(sess(sid), body.reason.strip(), user=user_of(request))
 
     @r.post("/monitor/sessions/{sid}/review")
-    def review(sid: str, body: ReviewIn) -> dict[str, Any]:
+    def review(sid: str, body: ReviewIn, request: Request) -> dict[str, Any]:
         if body.action not in REVIEW_KO:
             raise HTTPException(422, f"action은 {', '.join(REVIEW_KO)} 중 하나입니다.")
         s = sess(sid)
-        return guard(lambda: mon().review(s, body.action, body.note))
+        return guard(lambda: mon().review(s, body.action, body.note, user=user_of(request)))
 
     @r.get("/monitor/sessions/{sid}/messages")
     def security_thread(sid: str) -> dict[str, Any]:
         return mon().thread(sess(sid))          # 원문을 열람한 상세를 다시 받지 않고 메시지만 새로 고칠 때
 
     @r.post("/monitor/sessions/{sid}/messages")
-    def post_security_message(sid: str, body: SecurityNoteIn) -> dict[str, Any]:
+    def post_security_message(sid: str, body: SecurityNoteIn, request: Request) -> dict[str, Any]:
         s = sess(sid)
-        guard(lambda: mon().post_message(s, "security", body.kind, body.text, body.case))
+        guard(lambda: mon().post_message(s, "security", body.kind, body.text, body.case, user=user_of(request)))
         return mon().thread(s)
 
     @r.get("/monitor/audit")
     def audit() -> list[dict[str, Any]]:
-        return list(reversed(mon().audit))
+        return list(reversed(mon().audit_entries()))
 
     # ── 세션 직접 조작 (POC 재현·테스트) ─────────────────
     @r.get("/meta")
@@ -285,45 +603,65 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
 
     @r.get("/sessions")
     def sessions() -> list[dict[str, Any]]:
-        return [s._summary() for s in eng().sessions.values()]
+        # 의료진 대화는 빼고 보낸다 (질의 환자 번호가 들어 있고, 관제 화면에서 사유를 남긴 열람으로만 원문을 본다)
+        return [s._summary() for s in list(eng().sessions.values()) if s.source != "clinic"]
 
     @r.get("/sessions/{sid}/clinician")
     def clinician(sid: str, arm: str = Query("C1")) -> dict[str, Any]:
         with eng().lock:
-            return sess(sid).clinician_view(arm_ok(arm))
+            return live_session(sid).clinician_view(arm_ok(arm))
 
     @r.get("/sessions/{sid}/security")
     def security(sid: str) -> dict[str, Any]:
         with eng().lock:
-            return sess(sid).security_view()
+            return live_session(sid).security_view()
 
     @r.get("/sessions/{sid}/questions")
     def questions(sid: str, arm: str = Query("C1")) -> list[dict[str, Any]]:
         with eng().lock:
-            return sess(sid).questions(arm_ok(arm))
+            return live_session(sid).questions(arm_ok(arm))
 
     @r.post("/sessions/{sid}/preview")
     def preview(sid: str, body: Preview) -> dict[str, Any]:
         with eng().lock:
-            return sess(sid).preview(body.seed_id, arm_ok(body.arm))
+            return live_session(sid).preview(body.seed_id, arm_ok(body.arm))
 
     @r.post("/sessions/{sid}/turns")
     def turn(sid: str, body: Step) -> dict[str, Any]:
         with eng().lock:
-            return sess(sid).step(body.seed_id, arm_ok(body.arm))
+            s = live_session(sid)
+            if s.llm_mode == "live":
+                raise HTTPException(409, "실제 LLM 의료진 대화는 의료진 화면에서만 이어 묻습니다.")
+            return s.step(body.seed_id, arm_ok(body.arm))
 
     @r.post("/sessions/{sid}/run")
     def run_all(sid: str, arm: str = Query("C1")) -> dict[str, Any]:
         with eng().lock:
-            s = sess(sid)
+            s = live_session(sid)
+            if s.llm_mode == "live":
+                raise HTTPException(409, "실제 LLM 의료진 대화는 의료진 화면에서만 이어 묻습니다.")
             n = s.run_to_end(arm_ok(arm))
             return dict(turns_added=n, turn=s.turn)
 
+    def live_session(sid: str):
+        """
+        세션 직접 조작(POC 재현 · 테스트)용. 의료진 대화는 여기서 열거나 바꿀 수 없다: 이 경로는 원 응답 · 비교 조건의 답을
+        가리지 않고 보내며(사유 · 감사 기록 없이), /turns · /run은 의료진 대화에 질문을 더해 버린다.
+        의료진 대화는 /api/monitor/sessions/{sid}(가린 상세 · 사유를 남긴 열람)와 /api/watch/{sid}로 본다.
+        """
+        try:
+            s = eng().session(sid)
+        except KeyError:
+            raise HTTPException(404, f"없는 대화입니다: {sid}")
+        if s.source == "clinic":
+            raise HTTPException(403, "의료진 대화는 관제(/api/monitor/sessions/…) · 의료진 대화 분석(/api/watch/…)에서 봅니다.")
+        return s
+
     # ── 레드팀·결과 ──────────────────────────────────────
     @r.post("/redteam")
-    def start_job(body: Job) -> dict[str, Any]:
+    def start_job(body: Job, request: Request) -> dict[str, Any]:
         j = eng().start_job(body.profile, body.fuzzer, body.per_type).as_dict()
-        mon().log("redteam_start", None, job=j["id"], per_type=body.per_type, fuzzer=body.fuzzer)
+        mon().log("redteam_start", None, user=user_of(request), job=j["id"], per_type=body.per_type, fuzzer=body.fuzzer)
         return j
 
     @r.get("/redteam")
@@ -345,11 +683,14 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
         out["fuzzer_compare"] = {k.replace("fuzzer_compare_", ""): v for k, v in raw.items() if k.startswith("fuzzer_compare_")}
         return out
 
+    app.include_router(w)
+    app.include_router(fhir_router(emr), dependencies=guarded)
+    app.include_router(terminology_router(), dependencies=guarded)   # 의료 용어 RAG (/api/terminology/…). 아래 '없는 경로'보다 먼저
+
     @r.api_route("/{rest:path}", methods=["GET", "POST"])
     def unknown(rest: str):
         raise HTTPException(404, f"없는 API 경로입니다: /api/{rest}")
 
-    app.include_router(terminology_router())       # 의료 용어 RAG (/api/terminology/…). 아래 r의 '없는 경로' 처리보다 먼저
     app.include_router(r)
 
     # ── 평가 지표 대시보드 (eval_demo/, 빌드 없는 정적 페이지) ──
@@ -378,7 +719,7 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
     return app
 
 
-NO_BUILD_HTML = """<!doctype html><html lang="ko"><meta charset="utf-8"><title>MediCloak 데모</title>
+NO_BUILD_HTML = """<!doctype html><html lang="ko"><meta charset="utf-8"><title>MediCloak</title>
 <body style="font-family:system-ui,sans-serif;max-width:640px;margin:64px auto;padding:0 16px;line-height:1.7;color:#161827">
 <h1 style="font-size:22px">화면 파일이 아직 없습니다</h1>
 <p>API 서버는 켜져 있습니다. 화면을 보려면 다른 터미널에서 프런트엔드를 한 번 빌드한 뒤 이 페이지를 새로 고치세요.</p>

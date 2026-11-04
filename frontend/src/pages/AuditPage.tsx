@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { MONITOR_UNAVAILABLE, monitorApi } from '../api/monitorApi';
 import { Card, CardHeader } from '../components/common/Card';
 import { EmptyState, ErrorState, LoadingState } from '../components/common/StatusViews';
+import { useBackendInfo } from '../hooks/useBackendInfo';
 import { caseLabel, clockTime } from '../lib/time';
 import type { AuditEntry } from '../types/monitor';
 
@@ -16,10 +17,30 @@ const ACTION_KO: Record<string, string> = {
   access_request: '의료진 세부 정보 요청',
   clinician_reply: '의료진 답장',
   security_reply: '보안 담당자 답장',
+  login: '로그인',
+  logout: '로그아웃',
+  login_failed: '로그인 실패',
+  login_blocked: '로그인 잠시 막음',
+  emr_launch: 'EMR에서 진료 지원 AI 열기',
+  clinic_question: '의료진 질문',
 };
+
+const PURPOSE_KO: Record<string, string> = { PRESCRIPTION: '처방', TREATMENT_PROCEDURE: '시술·치료', COURSE_CARE: '경과·관리' };
+
+/** 사유와 메모 칸: 질문 기록은 본문 대신 어느 사례에 무엇을 보호했는지만 */
+function detailOf(a: AuditEntry): string | null {
+  if (a.action === 'clinic_question') {
+    const parts = [a.case ? caseLabel(a.case) : null, a.protected ? `보호 ${a.protected}건` : '보호한 값 없음', a.release ? `공개 방식 ${a.release}` : null];
+    return parts.filter(Boolean).join(' · ');
+  }
+  if (a.action === 'emr_launch') return a.purpose ? `${PURPOSE_KO[a.purpose] ?? a.purpose} 참고` : null;
+  if (a.action.startsWith('login') || a.action === 'logout') return a.client ? `접속 주소 ${a.client}` : null;
+  return null;
+}
 
 /** 감사 기록: 누가 언제 무엇을 했는지. 원문 열람은 사유와 함께 남는다. */
 export function AuditPage() {
+  const backend = useBackendInfo();
   const [items, setItems] = useState<AuditEntry[] | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -41,7 +62,7 @@ export function AuditPage() {
   return (
     <div className="scroll-thin mx-auto h-full max-w-4xl overflow-y-auto p-4 md:p-6">
       <Card>
-        <CardHeader title="감사 기록" aside="서버를 다시 켜면 지워지는 데모 기록입니다" />
+        <CardHeader title="감사 기록" aside={backend?.kind === 'medicloak' ? 'DB에 남는 기록 (최근 2,000건)' : '서버를 다시 켜면 지워지는 데모 기록입니다'} />
         {error ? (
           <ErrorState message={error} />
         ) : !items ? (
@@ -76,8 +97,12 @@ export function AuditPage() {
                       )}
                     </td>
                     <td className="border-b border-line px-4 py-3 text-ink-2">
-                      {e.case && <span className="mr-1.5 font-semibold text-ink">{caseLabel(e.case)}</span>}
-                      {e.reason ?? e.note ?? ''}
+                      {detailOf(e) ?? (
+                        <>
+                          {e.case && <span className="mr-1.5 font-semibold text-ink">{caseLabel(e.case)}</span>}
+                          {e.reason ?? e.note ?? ''}
+                        </>
+                      )}
                     </td>
                   </tr>
                 ))}

@@ -6,6 +6,7 @@ import { StatusChip } from '../common/StatusChip';
 export function KValueBadge({ risk, showLabel = false }: { risk: CaseRiskState | undefined; showLabel?: boolean }) {
   if (!risk) return <span className="chip bg-surface-2 text-ink-3">후보 –</span>;
   const tone = RISK_TONE[risk.riskLevel].tone;
+  if (risk.k == null) return <StatusChip tone={tone}>{risk.statusLabel}</StatusChip>;
   return (
     <StatusChip tone={tone} title={`${risk.statusLabel}, 후보 ${risk.k}명`}>
       <span className="num">

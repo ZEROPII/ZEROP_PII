@@ -1,6 +1,8 @@
 // ZEROOP2 Clinical Case Finder 도메인 타입
 //
 // 원칙
+// - 재식별 위험 숫자(후보 수 k · 기준값 · 기준 집단 크기)는 의료진 화면 API에서 null로 온다 (백엔드 redact.py, ADR-0021).
+//   같은 계약을 보안 담당자 '의료진 대화' API(/api/watch/{대화})로 받으면 숫자가 그대로 있다. 그래서 숫자 필드는 number | null.
 // - 현재 환자(PatientContext)와 검색된 사례(CaseSummary 이하)는 서로 다른 데이터 영역이다.
 //   PatientContext는 질문 전송·응답 표시 어디에도 섞이지 않는다.
 // - k 계산, QI 결합, 누적 State 판정은 백엔드(risk_defender / medical.defense)의 몫이다.
@@ -69,10 +71,11 @@ export type MessageSegment =
 export interface ProtectionResult {
   decision: PrivacyAction;
   transformations: PrivacyTransformation[];
-  /** 백엔드가 만든 보호 처리 설명 문장. */
-  explanation: string;
-  kBefore: number;
-  kAfter: number;
+  /** 백엔드가 만든 보호 처리 설명 문장 (후보 수가 들어 있어 의료진 화면 API에서는 null). */
+  explanation: string | null;
+  /** 의료진 화면 API에서는 null */
+  kBefore: number | null;
+  kAfter: number | null;
   /** 실제 백엔드만: 공개 방식 (RAW · REWRITTEN · REWRITTEN_FALLBACK · REFUSAL · REFUSAL_EXTRACTION_FAILED) */
   releaseMode?: string;
   /** 실제 백엔드만: 원 응답 QI 추출 성공 여부. false면 이번 답변의 공개가 k에 반영되지 않았을 수 있다. */
@@ -133,8 +136,8 @@ export type PolicyDecisionState = 'allow' | 'generalize' | 'suppress' | 'restric
 
 export interface CaseRiskState {
   caseId: CaseId;
-  /** 백엔드가 확정한 최신 누적 k (후보 수) */
-  k: number;
+  /** 백엔드가 확정한 최신 누적 k (후보 수). 의료진 화면 API에서는 null */
+  k: number | null;
   riskLevel: RiskLevel;
   /** 백엔드 표시 문구. 예: "주의", "여유", "추가 공개 제한" */
   statusLabel: string;
@@ -152,12 +155,12 @@ export interface ProtectionPolicy {
   /** C0 방어 없음 / C1 누적 State Defender / C1S 매 턴 빈 State */
   arm: 'C0' | 'C1' | 'C1S';
   stateModeLabel: string;
-  /** 이 값 초과일 때만 그대로 공개 (generalize_threshold) */
-  minK: number;
-  /** 원래 값으로 k가 이 값 이하이면 억제 (suppress_threshold) */
-  suppressK: number;
-  /** 로그 눈금 막대의 최대 후보 수 (모집단 규모) */
-  populationSize: number;
+  /** 이 값 초과일 때만 그대로 공개 (generalize_threshold). 의료진 화면 API에서는 null */
+  minK: number | null;
+  /** 원래 값으로 k가 이 값 이하이면 억제 (suppress_threshold). 의료진 화면 API에서는 null */
+  suppressK: number | null;
+  /** 로그 눈금 막대의 최대 후보 수 (모집단 규모). 의료진 화면 API에서는 null */
+  populationSize: number | null;
   source: DataSource;
 }
 
@@ -177,7 +180,8 @@ export interface PreflightRiskAssessment {
   caseId: CaseId;
   question: string;
   requiresWarning: boolean;
-  currentK: number;
+  /** 의료진 화면 API에서는 null */
+  currentK: number | null;
   projectedK: number | null;
   message: string | null;
   affectedAttributes: string[];
@@ -232,6 +236,7 @@ export interface PolicyDecisionRationale {
   currentK: number;
   minK: number;
   suppressK: number;
+  /* 판정 근거는 보안 담당자 API에서만 온다 (의료진 화면 API는 403) */
   arm: ProtectionPolicy['arm'];
   disclosedQis: { attributeLabel: string; levelDescription: string }[];
   generalized: { attributeLabel: string; levelDescription: string }[];
@@ -260,4 +265,59 @@ export interface SendQuestionResponse {
   newDisclosures: DisclosureHistoryEntry[];
   /** 이 답변이 다른 사례도 언급해 그 사례의 State가 바뀐 경우, 그 사례들의 최신 상태 (각 사례 State는 따로 쌓인다). */
   relatedRiskStates?: CaseRiskState[];
+}
+
+// ── 로그인 (python -m medicloak) ─────────────────────────────────────────────
+
+export type UserRole = 'clinician' | 'security';
+
+export interface AuthUser {
+  userId: number;
+  username: string;
+  displayName: string;
+  role: UserRole;
+  roleLabel: string;
+  department: string | null;
+}
+
+// ── 가상 EMR 외래 목록 (python -m medicloak) ─────────────────────────────────
+
+export interface WorklistPurpose {
+  trialId: string;
+  /** PRESCRIPTION · TREATMENT_PROCEDURE · COURSE_CARE */
+  purpose: string;
+  purposeLabel: string;
+  /** 이 진료 목적의 진료일 (합성 데이터의 기준일) */
+  visitDate: string;
+  ageSex?: string;
+  mainDx?: string;
+  item?: string;
+}
+
+export interface WorklistPatient {
+  /** FHIR Patient.id */
+  fhirId: string;
+  /** 화면 표시용 앞 8자리 */
+  identifier: string;
+  sex: 'male' | 'female' | 'unknown';
+  birthYear: number | null;
+  region: string;
+  conditions: string[];
+  events: number;
+  purposes: WorklistPurpose[];
+  featured: boolean;
+  lastVisit: string;
+}
+
+/** 이 의료진의 대화 목록 (지금 대화 · 지난 대화) */
+export interface ClinicHistoryItem {
+  id: string;
+  trialId: string;
+  startedAt: number;
+  lastActive: number;
+  questions: number;
+  patient: string;
+  purpose: string;
+  current: boolean;
+  archived: boolean;
 }
