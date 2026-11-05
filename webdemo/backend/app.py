@@ -45,6 +45,7 @@ from medical.config import ROOT
 from medical.terminology_api import terminology_router
 from webdemo.backend import redact
 from webdemo.backend.assist import ReviewAssistant
+from webdemo.backend.autocheck import ACTOR as AUTO_ACTOR, AUTO_FUZZER, AUTO_PER_TYPE, AutoRedteam
 from webdemo.backend.auth import COOKIE, ROLE_KO, SESSION_TTL, Auth, LoginBlocked, roles_for, route_path, user_view
 from webdemo.backend.clinic import ArchivedConversation, ClinicConversation, ClinicDesk, Conflict, DeskRegistry, NotFound
 from webdemo.backend.engine import ARMS, DemoError, Engine, summarize
@@ -72,6 +73,8 @@ class Product:
     keep: int | None = 12                   # 의료진마다 메모리에 둘 대화 수 (넘으면 DB 스냅숏으로만 남김)
     cookie_secure: bool = False             # https로만 쿠키를 보낼지 (역방향 프록시 뒤 https 운영이면 켠다)
     location_label: str = PRODUCT_LOCATION
+    auto_redteam: str = "off"               # change: 설정(판정 규칙 판 · 답 형식 · 모델 · 규칙 추출)이 마지막 점검과 다르면 켤 때 점검을 돌린다
+    auto_daily: str | None = None           # 'HH:MM': 매일 그 시각에도 점검 (autocheck.py)
 
 
 class NewSession(BaseModel):
@@ -189,6 +192,12 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
             for x in store.runs():
                 if x.get("status") in ("queued", "running"):
                     store.save_run(dict(x, status="interrupted", error="서버를 다시 켜는 동안 끊겼습니다. 끝낸 trial도 집계하지 못했습니다."))
+        # 자동 레드팀 점검: 설정이 마지막 점검과 다르면 '유형마다 1명' 점검을 뒤에서 시작하고, 끝나면 직전 점검과 비교한다 (autocheck.py)
+        state["auto"] = AutoRedteam(eng, all_runs, start_live_job, mon.log,
+                                    on_change=bool(product and product.auto_redteam == "change"), daily=product.auto_daily if product else None)
+        state["auto"].on_start()
+        if product is not None and state["auto"].decision != "off":
+            print(f"[medicloak] 자동 레드팀 점검: {state['auto'].decision_text}")
         sims = simulations if simulations is not None else os.environ.get("WEBDEMO_NO_SIM") != "1"
         if sims and product is None:                 # 운영 모드 관제에는 실제 의료진 대화만 둔다 (레드팀은 레드팀 화면에서 따로 돌림)
             mon.seed_simulations()
@@ -199,6 +208,7 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
             except Exception:
                 pass
         yield
+        state["auto"].stop()
         # 끌 때: 뒤에서 계산 중인 비교 갈래(C1S)를 잠시 기다려 DB에 남긴다 (못 끝낸 것은 '대기'로 남는다)
         if eng.compare_pending():
             eng.wait_compare(20)
@@ -670,7 +680,9 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
                     stateModeLabel="누적 판정 (대화 전체 기억)", minK=d.g, suppressK=d.s, populationSize=e.ctx["staged"].p_ref, source="backend",
                     kReq=e.cfg.k_req, llmLive=e.live_ctx is not None, ruleExtract=bool(e.live_ctx is not None and e.live_ctx.cfg.rule_extract), compare=product.compare if product else True,
                     answerStyle=bool(e.live_ctx is not None and e.answer_style),
-                    auth=state["auth"] is not None, persist=state["store"] is not None, llmUsage=e.live_usage())
+                    auth=state["auth"] is not None, persist=state["store"] is not None, llmUsage=e.live_usage(),
+                    autoRedteam=dict(onChange=state["auto"].on_change and state["auto"].enabled, daily=state["auto"].daily if state["auto"].enabled else None,
+                                     decisionText=state["auto"].decision_text))
 
     @r.get("/monitor/sessions/{sid}")
     def monitor_session(sid: str) -> dict[str, Any]:
@@ -826,16 +838,44 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
         store = state["store"]
         return {x["id"]: x for x in store.runs()} if store is not None else {}
 
+    def all_runs() -> list[dict[str, Any]]:
+        out = stored_runs()
+        out.update({jid: j.as_dict() for jid, j in eng().jobs.items()})          # 메모리에 있는 실행이 더 새 상태
+        return list(out.values())
+
+    def finish_run(job: Any) -> None:
+        """점검이 끝나면 직전 점검과 비교해 붙이고(실제 LLM) 저장한다."""
+        auto = state.get("auto")
+        if auto is not None:
+            try:
+                auto.finished(job)
+            except Exception as exc:
+                print(f"[medicloak] 레드팀 비교 실패 ({job.id}): {type(exc).__name__}: {exc}")
+        save_run(job)
+
+    def start_live_job(trigger: str, *, per_type: int | None = AUTO_PER_TYPE, fuzzer: str = AUTO_FUZZER,
+                       user: dict[str, Any] | None = None) -> Any:
+        """실제 LLM 점검을 시작한다. 그때의 설정 · 지문을 기록에 남긴다 (자동 점검 · 직접 실행 같이)."""
+        meta = state["auto"].meta(trigger) if state.get("auto") is not None else dict(trigger=trigger)
+        job = eng().start_job("staged", fuzzer, per_type, live=True, on_finish=finish_run, meta=meta)
+        save_run(job)
+        mon().log("redteam_start", None, user=user, actor=None if user else AUTO_ACTOR, job=job.id, per_type=per_type, fuzzer=fuzzer,
+                  llm="live", trigger=trigger)
+        return job
+
     @r.post("/redteam")
     def start_job(body: Job, request: Request) -> dict[str, Any]:
         if body.llm not in ("auto", "live", "oracle"):
             raise HTTPException(422, "llm은 auto · live · oracle 중 하나입니다.")
         live = body.llm == "live" or (body.llm == "auto" and eng().live_llm is not None)
-        job = eng().start_job(body.profile, body.fuzzer, body.per_type, live=live, on_finish=save_run)
+        if live:
+            if eng().live_llm is None:
+                raise HTTPException(400, "이 서버에는 실제 LLM이 설정되어 있지 않습니다 (--llm real).")
+            return guard(lambda: start_live_job("manual", per_type=body.per_type, fuzzer=body.fuzzer, user=user_of(request))).as_dict()
+        job = eng().start_job(body.profile, body.fuzzer, body.per_type, live=False, on_finish=finish_run)
         save_run(job)
         j = job.as_dict()
-        mon().log("redteam_start", None, user=user_of(request), job=j["id"], per_type=body.per_type, fuzzer=body.fuzzer,
-                  llm="live" if live else "oracle")
+        mon().log("redteam_start", None, user=user_of(request), job=j["id"], per_type=body.per_type, fuzzer=body.fuzzer, llm="oracle")
         return j
 
     @r.post("/redteam/{jid}/cancel")
@@ -851,9 +891,12 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
 
     @r.get("/redteam")
     def jobs() -> list[dict[str, Any]]:
-        out = stored_runs()
-        out.update({jid: j.as_dict() for jid, j in eng().jobs.items()})          # 메모리에 있는 실행이 더 새 상태
-        return [dict(x, result=None) for x in sorted(out.values(), key=lambda x: x.get("started_at") or 0, reverse=True)]
+        return [dict(x, result=None) for x in sorted(all_runs(), key=lambda x: x.get("started_at") or 0, reverse=True)]
+
+    @r.get("/redteam/auto")
+    def auto_status() -> dict[str, Any]:
+        """자동 점검 설정 · 이번에 켤 때 한 일 · 도는 점검 · 마지막 비교와 경고 (autocheck.py)."""
+        return state["auto"].status()
 
     @r.get("/redteam/{jid}")
     def job(jid: str) -> dict[str, Any]:

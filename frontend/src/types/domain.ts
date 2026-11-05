@@ -75,7 +75,14 @@ export interface PrivacyTransformation {
 /** 응답 본문 조각. 보호 조치가 걸린 조각은 transformationId로 메타데이터를 가리킨다. */
 export type MessageSegment =
   | { kind: 'text'; text: string }
-  | { kind: 'disclosure'; text: string; transformationId: string };
+  | {
+      kind: 'disclosure';
+      text: string;
+      transformationId: string;
+      /** 실제 LLM 답에서 지워진 가린 값의 자리 표시 (그 사례 단락 끝에 붙는다). label: '시기' · '사례 2 나이' */
+      placeholder?: boolean;
+      label?: string;
+    };
 
 /** 답변 한 건에 대한 보호 처리 결과. */
 export interface ProtectionResult {

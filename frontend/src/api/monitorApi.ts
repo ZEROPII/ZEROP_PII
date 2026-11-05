@@ -4,6 +4,7 @@
 import type {
   Approval,
   AssistState,
+  AutoStatus,
   AuditEntry,
   HiddenItem,
   MonitorDetail,
@@ -82,6 +83,8 @@ export const monitorApi = {
     request<RedTeamJob>('/redteam', { method: 'POST', body: JSON.stringify({ per_type, fuzzer, profile: 'staged', llm }) }),
   cancelRedTeam: (id: string) => request<RedTeamJob>(`/redteam/${encodeURIComponent(id)}/cancel`, { method: 'POST' }),
   jobs: (signal?: AbortSignal) => request<RedTeamJob[]>('/redteam', { signal }),
+  /** 자동 레드팀 점검: 설정 · 켤 때 한 일 · 도는 점검 · 마지막 비교와 경고 */
+  autoStatus: (signal?: AbortSignal) => request<AutoStatus>('/redteam/auto', { signal }),
   job: (id: string, signal?: AbortSignal) => request<RedTeamJob>(`/redteam/${encodeURIComponent(id)}`, { signal }),
   /** 사례 하나에서 후보가 줄어든 과정 (보안 담당자 API, 숫자 그대로) */
   narrowing: (sid: string, caseId: string, signal?: AbortSignal) =>

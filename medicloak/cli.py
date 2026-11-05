@@ -66,6 +66,11 @@ def init(db: Path, *, reset: bool = False, initial_password: str | None = None, 
 
 
 def serve(a: argparse.Namespace) -> None:
+    from webdemo.backend.autocheck import valid_daily
+    try:                                                # 무거운 준비 전에 옵션부터 확인한다
+        daily = valid_daily(a.auto_redteam_daily)
+    except ValueError as exc:
+        raise SystemExit(f"[medicloak] {exc}") from None
     db = Path(a.db)
     from webdemo.backend import emr
     if not db.exists():
@@ -108,7 +113,9 @@ def serve(a: argparse.Namespace) -> None:
     print(f"[medicloak] 위험 계산 엔진을 준비합니다 (10초 안팎) · 대상 AI: {label}")
     eng = Engine(db.parent / "engine", log=lambda s: print(s.replace("[webdemo]", "[medicloak]", 1)), paths=paths, live_llm=live_llm, live_label=label, first_id=first,
                  llm_concurrency=a.llm_concurrency, live_rule_extract=not a.no_rule_extract, answer_style=a.answer_style == "on")
-    product = Product(store=store, compare=not a.no_compare, keep=a.keep, cookie_secure=a.cookie_secure)
+    auto = a.auto_redteam if a.llm == "real" else "off"                 # 결정적 응답기 · 연결 점검 모드는 점검할 실제 LLM이 없다
+    product = Product(store=store, compare=not a.no_compare, keep=a.keep, cookie_secure=a.cookie_secure,
+                      auto_redteam=auto, auto_daily=daily if a.llm == "real" else None)
     app = create_app(eng, simulations=False, product=product)          # 운영 모드: 환자는 EMR에서 열 때 정해진다
     if not (DIST / "index.html").exists():
         print("[medicloak] 화면 파일(frontend/dist)이 없습니다. --build 를 붙여 한 번 빌드하세요. 지금은 API만 켭니다.", file=sys.stderr)
@@ -212,12 +219,17 @@ def _serve_args(p: argparse.ArgumentParser, top: bool = False) -> None:
     p.add_argument("--rewriter-model", **(kw or dict(default=None)), help="재작성기만 다른 모델로 (기본: .env LLM_MODEL)")
     p.add_argument("--answer-style", choices=("on", "off"), **(kw or dict(default="on")),
                    help="실제 LLM 대상 AI에 짧은 답 형식을 붙인다: 의료진 대화와 레드팀에 같이 (기본 on, ADR-0025)")
+    p.add_argument("--auto-redteam", choices=("change", "off"), **(kw or dict(default="change")),
+                   help="change: 판정 규칙 판 · 답 형식 · 모델 · 규칙 추출이 마지막 점검과 다르면 켤 때 '유형마다 1명' 레드팀을 뒤에서 돌리고 "
+                        "직전 점검과 비교한다 (기본, --llm real일 때만). off: 끔 (ADR-0028)")
+    p.add_argument("--auto-redteam-daily", metavar="HH:MM", **(kw or dict(default=None)),
+                   help="매일 이 시각(서버 시계)에도 '유형마다 1명' 레드팀을 돌린다 (기본: 안 함)")
 
 
 def _defaults(a: argparse.Namespace) -> argparse.Namespace:
     for k, v in dict(host="127.0.0.1", port=8000, llm="real", env_file=None, llm_concurrency=1, build=False,
                      no_compare=False, keep=12, cookie_secure=False, no_rule_extract=False, answer_style="on",
-                     extractor_model=None, rewriter_model=None).items():
+                     extractor_model=None, rewriter_model=None, auto_redteam="change", auto_redteam_daily=None).items():
         if not hasattr(a, k):
             setattr(a, k, v)
     return a

@@ -7,6 +7,7 @@ import { useToast } from '../components/layout/Toast';
 import { QueueTable } from '../components/monitor/QueueTable';
 import { RevealDialog } from '../components/monitor/RevealDialog';
 import { SessionDetail } from '../components/monitor/SessionDetail';
+import { AutoCheckNotice } from '../components/monitor/AutoCheckNotice';
 import type { MonitorDetail, MonitorOverview, MonitorRow, ReviewAction, ThreadMessage } from '../types/monitor';
 
 type TabId = 'all' | 'review' | 'danger' | 'caution' | 'safe';
@@ -211,6 +212,7 @@ export function MonitorPage() {
   return (
     <div className="scroll-thin flex h-full min-h-0 flex-col overflow-y-auto lg:overflow-hidden">
       <Brief o={overview} />
+      <AutoCheckNotice />
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-4 px-4 pb-4 md:px-6 md:pb-6 lg:grid-cols-[minmax(0,1fr)_minmax(420px,520px)]">
         <section className="panel flex min-h-[320px] flex-col overflow-hidden" aria-label="대화 목록">
           <div className="flex flex-wrap items-center gap-1 border-b border-line px-3 py-2.5">
@@ -259,6 +261,8 @@ export function MonitorPage() {
                 void loadOverview();
               }}
             />
+          ) : !selected ? (
+            <EmptyState message="의료진이 질문하면 대화가 왼쪽 목록에 나타나고, 고르면 여기에 상세가 보입니다." />
           ) : (
             <LoadingState label="대화 상세를 불러오는 중" />
           )}

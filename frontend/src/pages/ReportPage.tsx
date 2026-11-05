@@ -151,13 +151,63 @@ function styleText(j: RedTeamJob): string {
   return j.answer_style === 'on' ? '짧은 답 지시' : '답 형식 지시 없음';
 }
 
+const TRIGGER_KO: Record<string, string> = { change: '자동 · 설정 바뀜', daily: '자동 · 정기' };
+const TRIGGER_CARD: Record<string, string> = { change: '설정이 바뀌어 자동으로 시작한 점검', daily: '정해진 시각에 자동으로 시작한 점검' };
+const LEVEL_TONE = { warn: 'danger', caution: 'caution', ok: 'safe', none: 'plain' } as const;
+
 function jobTitle(j: RedTeamJob): string {
-  const who = j.live ? `${j.model ?? '실제 LLM'} · ${styleText(j)}` : `결정적 응답기 (${j.profile_label})`;
+  const auto = j.trigger && TRIGGER_KO[j.trigger] ? `${TRIGGER_KO[j.trigger]} · ` : '';
+  const who = `${auto}${j.live ? `${j.model ?? '실제 LLM'} · ${styleText(j)}` : `결정적 응답기 (${j.profile_label})`}`;
   const n = j.trials ?? Math.round(j.total / 3);
   const when = j.started_at ? new Date(j.started_at * 1000).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
   const kept = j.kept ?? j.done;
   const part = j.status === 'done' ? '' : ` · ${STATUS_KO[j.status]}, 대화 ${kept}/${j.total}까지 집계`;
   return `${j.id} ${who}, ${j.fuzzer_label}, 질의 환자 ${n}명 ${when}${part}`;
+}
+
+/** 끝난 실제 LLM 점검: 같은 규모로 바로 앞에 끝난 점검과 누적 방어 지표 비교 (autocheck.py) */
+function CompareCard({ job }: { job: RedTeamJob }) {
+  const c = job.compare!;
+  return (
+    <section aria-label="직전 점검과 비교" className="panel mb-4 px-5 py-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <h2 className="text-[15px] font-bold">{c.baseline ? `직전 점검 ${c.baseline.id}과 비교` : '직전 점검과 비교'}</h2>
+        <StatusChip tone={LEVEL_TONE[c.level]}>{c.levelLabel}</StatusChip>
+        {job.trigger && TRIGGER_CARD[job.trigger] && <span className="text-xs text-ink-3">{TRIGGER_CARD[job.trigger]}</span>}
+      </div>
+      <p className="mt-1.5 max-w-[62ch] text-[13px] leading-6 text-ink">{c.text}</p>
+      {c.rows.length > 0 && (
+        <table className="mt-2 w-full max-w-[640px] border-collapse text-[13px]">
+          <thead>
+            <tr className="text-left text-xs text-ink-3">
+              <th scope="col" className="border-b border-line py-1.5 pr-3 font-semibold">
+                누적 방어 지표
+              </th>
+              <th scope="col" className="border-b border-line px-3 py-1.5 text-right font-semibold">
+                직전 점검
+              </th>
+              <th scope="col" className="border-b border-line py-1.5 pl-3 text-right font-semibold">
+                이번 점검
+              </th>
+            </tr>
+          </thead>
+          <tbody>
+            {c.rows.map((r) => (
+              <tr key={r.key}>
+                <th scope="row" className="border-b border-line py-1.5 pr-3 text-left font-normal text-ink-2">
+                  {r.label}
+                </th>
+                <td className="num border-b border-line px-3 py-1.5 text-right text-ink-2">{r.before}</td>
+                <td className={`num border-b border-line py-1.5 pl-3 text-right ${r.worse ? 'font-semibold text-danger-text' : 'text-ink'}`}>{r.after}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {c.changes.length > 0 && <p className="mt-2 text-xs text-ink-2">바뀐 설정: {c.changes.join(' · ')}</p>}
+      <p className="mt-1.5 text-xs text-ink-3">{c.note}</p>
+    </section>
+  );
 }
 
 export function ReportPage() {
@@ -407,6 +457,7 @@ export function ReportPage() {
           {job.error && <p className="mt-1.5 text-xs text-danger-text">{job.error.split('\n')[0]}</p>}
         </div>
       )}
+      {shownJob?.compare && <CompareCard job={shownJob} />}
       {res ? (
         <ResultView res={res} title={title} />
       ) : pickedJob && !shownJob ? (

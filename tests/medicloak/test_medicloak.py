@@ -722,6 +722,168 @@ def test_what_if_does_not_change_the_conversation(world):
         assert (len(s.runs["C1"].cases["사례1"].committed), s.current_k("C1", "사례1"), len(s.approvals)) == before
 
 
+def test_hidden_values_show_as_named_locks_in_the_chat_answer(world):
+    """실제 LLM 답은 가린 값을 문장에서 지운다: 그 사례 단락 끝에 '시기 비공개' 자리 표시가 붙는다 (글 · 판정은 그대로)."""
+    add_user(world["store"], "doctor_ph", "표시의사", "clinician", "내과", PW)
+    doc = login(world, "doctor_ph")
+    _, sid = launch(doc, "T0014")
+    body = doc.post("/api/cases/case-1/messages", json=dict(sessionId=sid, question=Q_DRUG, clientMessageId="ph1")).json()
+    msg = body["assistantMessage"]
+    segs, tf = msg["segments"], {x["id"]: x for x in msg["protection"]["transformations"]}
+    marks = [s for s in segs if s.get("placeholder")]
+    assert marks, segs
+    m = marks[0]
+    assert m["kind"] == "disclosure" and m["text"] == "(비공개)" and m["label"] == "시기"
+    assert tf[m["transformationId"]]["action"] == "suppress" and tf[m["transformationId"]]["caseRef"] == "사례1"
+    joined = "".join(s["text"] for s in segs if not s.get("placeholder"))
+    assert "2004-06-16" not in joined and "2004-06" not in joined
+    assert segs[-1] is m or segs.index(m) == len(segs) - 1          # 사례 1만 나온 답: 답 끝에 붙는다
+    # 의료진 화면 API에는 여전히 숫자가 없다
+    assert not redact.leaked_numbers(doc.get("/api/cases/case-1/session").json())
+    stored = doc.get("/api/cases/case-1/session").json()["messages"][-1]["segments"]
+    assert any(s.get("placeholder") and s.get("label") == "시기" for s in stored)
+
+
+def test_hidden_marks_go_to_the_end_of_each_case_block_unit():
+    from api_server.engine import segments_of
+    from webdemo.backend.clinic import mark_hidden
+
+    text = "사례1은 A를 처방받았습니다.\n사례2는 B를 처방받았고 경과가 좋았습니다. 사례3은 기록이 없습니다."
+    tf = [dict(id="a", action="suppress", attribute="PERIOD", caseRef="사례1", disclosedValue=None),
+          dict(id="b", action="suppress", attribute="AGE", caseRef="사례2", disclosedValue=None),
+          dict(id="c", action="suppress", attribute="DX", caseRef="사례2", disclosedValue=None),
+          dict(id="d", action="suppress", attribute="DX", caseRef="사례2", disclosedValue=None),                # 같은 사례 · 단서는 한 번
+          dict(id="e", action="suppress", attribute="MED", caseRef="사례3", disclosedValue=None, dropped=True),   # 사례째로 뺀 값은 표시 안 함
+          dict(id="f", action="allow", attribute="MED", caseRef="사례1", disclosedValue="A")]
+    out = mark_hidden(text, segments_of(text, tf), tf, "사례1")
+    assert "".join(s["text"] for s in out if not s.get("placeholder")) == text
+    kinds = [(s.get("label"), s["text"]) if s.get("placeholder") else s["text"] for s in out]
+    assert kinds == ["사례1은 ", "A", "를 처방받았습니다.", ("시기", "(비공개)"), "\n사례2는 B를 처방받았고 경과가 좋았습니다.",
+                     ("사례 2 진단", "(비공개)"), ("사례 2 나이", "(비공개)"), " 사례3은 기록이 없습니다."]
+    # 글에 이미 '(비공개)'로 남은 값은 그 자리에 두고 더하지 않는다 (결정적 응답기 답)
+    t2 = "사례1 · 시기: (비공개)"
+    tf2 = [dict(id="x", action="suppress", attribute="PERIOD", caseRef="사례1", disclosedValue=None)]
+    assert not any(s.get("placeholder") for s in mark_hidden(t2, segments_of(t2, tf2), tf2, "사례1"))
+
+
+def _job(jid, *, status="done", fp=None, settings=None, viol=(0, 3), utility=0.6, overblock=0.05, started=0.0, finished=None, trigger=None,
+         per_type=1, fuzzer="feedback"):
+    arm = dict(viol10=dict(k=viol[0], n=viol[1], p=viol[0] / viol[1]), utility=utility, overblock=dict(k=0, n=1, p=overblock))
+    return dict(id=jid, live=True, status=status, fingerprint=fp, settings=settings, started_at=started, finished_at=finished or started + 1,
+                trigger=trigger, per_type=per_type, fuzzer=fuzzer, result=dict(arms=dict(C1=arm)))
+
+
+def test_autocheck_compare_and_start_decisions_unit():
+    """비교 수준(경고 · 주의 · 이상 없음 · 첫 기준) · 켤 때 결정(같은 설정이면 안 돌림, 끊긴 것만 있으면 다시) · 매일 시각."""
+    from webdemo.backend import autocheck as A
+
+    base = _job("R0001", viol=(0, 3), utility=0.60, overblock=0.05)
+    assert A.compare(_job("R0002", viol=(1, 3)), base)["level"] == "warn"
+    c = A.compare(_job("R0002", utility=0.50), base)
+    assert c["level"] == "caution" and "답변 유용도가 0.60 → 0.50로 낮아졌습니다" in c["text"]
+    assert A.compare(_job("R0002", overblock=0.12), base)["level"] == "caution"
+    assert A.compare(_job("R0002", utility=0.58, overblock=0.07), base)["level"] == "ok"
+    assert A.compare(_job("R0002"), None)["level"] == "none"
+    s1 = dict(release="medicloak-release-v4", answer_style="on", model="실제 LLM (m1)", rule_extract="on")
+    s2 = dict(s1, release="medicloak-release-v5", answer_style="off")
+    assert A.changes_between(s1, s2) == ["판정 규칙 판: v4 → v5", "대상 AI 답 형식: 켬 → 끔"]
+    assert A.valid_daily("03:00") == "03:00" and A.valid_daily(None) is None
+    with pytest.raises(ValueError):
+        A.valid_daily("25:00")
+
+    class Inner:
+        client, models = object(), {}
+
+    class Eng:
+        answer_style, live_rule_extract, live_label = True, True, "실제 LLM (m1)"
+        live_llm = type("L", (), {"inner": Inner()})()
+
+    started: list[str] = []
+
+    class J:
+        def __init__(self, trig):
+            self.id = f"R{len(started) + 10:04d}"
+
+    def start(trig):
+        started.append(trig)
+        return J(trig)
+
+    logs: list = []
+    fp = A.fingerprint(A.settings_of(Eng()))
+    a = A.AutoRedteam(Eng(), lambda: [_job("R0001", fp=fp)], start, lambda *x, **k: logs.append((x, k)), on_change=True)
+    a.on_start()
+    assert a.decision == "same" and started == []
+    a = A.AutoRedteam(Eng(), lambda: [_job("R0001", fp=fp, status="interrupted")], start, lambda *x, **k: None, on_change=True)
+    a.on_start()
+    assert a.decision == "started" and started == ["change"]
+    a = A.AutoRedteam(Eng(), lambda: [_job("R0001", fp="old", settings=dict(A.settings_of(Eng()), release="medicloak-release-v3"))],
+                      start, lambda *x, **k: None, on_change=True)
+    a.on_start()
+    assert a.decision == "started" and a.changes == ["판정 규칙 판: v3 → " + A.RELEASE_VERSION.replace("medicloak-release-", "")]
+    a = A.AutoRedteam(Eng(), lambda: [], start, lambda *x, **k: None, on_change=False, daily="03:00")
+    a.enabled = True
+    at = time.mktime((2026, 11, 6, 3, 0, 5, 0, 0, -1))
+    assert a.tick(at) is True and a.tick(at + 10) is False                        # 하루 한 번
+    assert a.tick(time.mktime((2026, 11, 6, 4, 0, 0, 0, 0, -1))) is False
+    assert a.tick(time.mktime((2026, 11, 7, 3, 0, 1, 0, 0, -1))) is True
+    noll = type("E", (), dict(Eng.__dict__, live_llm=None))
+    a = A.AutoRedteam(noll(), lambda: [], start, lambda *x, **k: None, on_change=True)
+    a.on_start()
+    assert a.decision == "no-llm"
+
+
+def test_autocheck_runs_when_settings_change_and_compares(world, tmp_path):
+    """켤 때 점검이 없으면 기준 점검을 돌리고, 같은 설정으로 다시 켜면 돌리지 않고, 답 형식을 바꾸면 다시 돌려 직전 점검과 비교한다."""
+    store = Store(tmp_path / "auto.db")
+    ensure_initial_accounts(store, PW, tmp_path / "accounts.txt")
+    fake = FakeAnthropic()
+    eng = Engine(tmp_path / "engine", log=lambda s: None, paths=world["paths"], live_llm=fake_llm(fake), live_label="실제 LLM (fake-model-1)")
+
+    def serve():
+        return TestClient(create_app(eng, simulations=False, product=Product(store=store, auto_redteam="change")))
+
+    def wait_done(c):
+        deadline = time.time() + 240
+        while time.time() < deadline:
+            st = c.get("/api/redteam/auto").json()
+            if st["running"] is None and st["latest"] is not None:
+                return st
+            time.sleep(0.2)
+        raise AssertionError("자동 점검이 끝나지 않았습니다")
+
+    with serve() as c:
+        assert c.post("/api/auth/login", json=dict(username="privacy1", password=PW)).status_code == 200
+        st = c.get("/api/redteam/auto").json()
+        assert st["enabled"] and st["onChange"] and st["decision"] == "started" and "기준 점검" in st["decisionText"]
+        st = wait_done(c)
+        first = c.get("/api/redteam").json()[0]
+        assert first["trigger"] == "change" and first["fingerprint"] == st["fingerprint"] and first["compare"]["level"] == "none"
+        assert st["latest"]["id"] == first["id"] and st["alert"] is None
+        audit = c.get("/api/monitor/audit").json()
+        assert any(a["action"] == "redteam_start" and a["actor"] == "자동 점검" and a.get("trigger") == "change" for a in audit)
+        assert any(a["action"] == "redteam_compare" and a["job"] == first["id"] for a in audit)
+    with serve() as c:                                                     # 같은 설정으로 다시 켬: 돌리지 않는다
+        c.post("/api/auth/login", json=dict(username="privacy1", password=PW))
+        st = c.get("/api/redteam/auto").json()
+        assert st["decision"] == "same" and st["running"] is None and len(c.get("/api/redteam").json()) == 1
+    eng.answer_style = False
+    try:
+        with serve() as c:                                                 # 답 형식을 끔: 설정이 바뀌어 다시 돌리고 앞 점검과 비교
+            c.post("/api/auth/login", json=dict(username="privacy1", password=PW))
+            st = c.get("/api/redteam/auto").json()
+            assert st["decision"] == "started" and st["changes"] == ["대상 AI 답 형식: 켬 → 끔"]
+            wait_done(c)
+            second = c.get("/api/redteam").json()[0]
+            assert second["id"] != first["id"] and second["compare"]["baseline"]["id"] == first["id"]
+            assert second["compare"]["level"] in ("ok", "caution", "warn") and second["compare"]["changes"] == ["대상 AI 답 형식: 켬 → 끔"]
+            assert [r["key"] for r in second["compare"]["rows"]] == ["viol", "utility", "overblock"]
+            doc = TestClient(c.app)
+            doc.post("/api/auth/login", json=dict(username="doctor1", password=PW))
+            assert doc.get("/api/redteam/auto").status_code == 403
+    finally:
+        eng.answer_style = True
+
+
 def test_rewrite_without_case_labels_or_with_the_raw_value_fails_the_recheck(world):
     """재작성기가 '사례N' 표기를 떨어뜨리면 다시 뽑아도 사례를 못 찾아 확인이 그냥 통과하던 문제:
     원래 값이 글자 그대로 남거나 사례 표기가 없으면 통과시키지 않고, 값만 바꾼 답을 낸다."""

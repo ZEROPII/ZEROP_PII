@@ -68,6 +68,8 @@ python -m medicloak serve [옵션]          # serve는 생략해도 됨
 | `--cookie-secure` | https로만 로그인 쿠키를 보냄 (역방향 프록시 뒤 https 운영) |
 | `--no-rule-extract` | 실제 LLM 대화 · 레드팀의 나이 · 날짜 규칙 추출을 끔. 기본은 켬: 추출기가 날짜를 약 항목 안에만 적어도 날짜를 단서로 셈 (ADR-0021) |
 | `--answer-style off` | 실제 LLM 대상 AI의 짧은 답 형식 지시를 끔. 기본은 켬: 의료진 대화와 레드팀에 같이 걸고, 레드팀 실행 기록에 남김 (ADR-0025) |
+| `--auto-redteam change` · `--auto-redteam off` | change(기본): 판정 규칙 판 · 답 형식 · 모델 · 규칙 추출이 마지막 점검과 다르면 켤 때 '유형마다 1명' 레드팀을 뒤에서 돌리고 직전 점검과 비교. `--llm real`일 때만 (ADR-0028) |
+| `--auto-redteam-daily 03:00` | 매일 그 시각(서버 시계)에도 '유형마다 1명' 레드팀을 돌림 (기본: 안 함) |
 | `--extractor-model 모델` · `--rewriter-model 모델` | 추출기(단서 뽑기 · 다시 확인) · 재작성기만 다른 모델로. 질문 하나에 이 둘이 3번쯤 불리므로 빠른 모델을 쓰면 기다림이 크게 준다 (ADR-0026) |
 | `--db 경로` | DB 파일 (기본 `runs/medicloak/medicloak.db`) |
 
@@ -94,7 +96,7 @@ python -m medicloak users passwd doctor1                   # 비밀번호 바꾸
 ## 화면 흐름
 
 1. **의료진** 로그인 → **외래 진료 목록**(`/emr`). 진료 중 · 완치 · 장기 미내원 탭으로 나뉘고, 줄마다 환자 번호 · 성별 · 연령대 · 진료 상태 · 대표 진단 · 마지막 기록일만 보입니다(생년 · 거주 지역은 없음). 환자를 고르면 FHIR로 읽은 진단 · 처방 기록이 나옵니다. 진료 목적(처방 · 시술·치료 · 경과·관리)을 골라 **진료 지원 AI 열기**. 이미 연 환자가 있으면 바꾸기 전에 확인을 받고, 지금 연 환자를 고르면 '돌아가기'가 됩니다. 열기 전에는 유사 사례 조회 화면이 '열린 환자가 없습니다'로 보입니다.
-2. **유사 사례 조회**(`/`)에서 사례에 묻습니다. 사례 하나는 과거 기록의 환자 한 명입니다. 사례 목록 머리에 여러 사례의 공통 값이, 사례마다 지금 환자와 겹치는 점('주진단 같음')과 다른 항목이 보이고, '비교'로 사례 × 항목 표를 엽니다. 예시 질문은 조회 목적(처방 · 시술·치료 · 경과·관리)에 맞는 진료 질문이고, '묻는 범위'를 '찾은 사례 전체'로 바꾸면 공통점 · 차이를 한 번에 묻습니다. 답을 기다리는 동안 지금 단계와 호출 수가 보입니다. 첫 답과 이후 답 모두 실제 LLM이 쓰고, 환자를 알아볼 수 있는 값은 '범위'나 '비공개'로 보입니다. 나이는 5세 구간, 날짜는 월보다 자세히 보이지 않습니다. 숫자(후보 수)는 보이지 않습니다. 오른쪽 사례 노트에는 답에 실제로 나온 값만 모입니다. 세부 정보가 필요하면 답 아래 **세부 정보 요청**을 보내고, 답장 · 확인 요청은 오른쪽 아래 **보호 담당자 창**(머리줄 알림으로도 열림)에서 봅니다.
+2. **유사 사례 조회**(`/`)에서 사례에 묻습니다. 사례 하나는 과거 기록의 환자 한 명입니다. 사례 목록 머리에 여러 사례의 공통 값이, 사례마다 지금 환자와 겹치는 점('주진단 같음')과 다른 항목이 보이고, '비교'로 사례 × 항목 표를 엽니다. 예시 질문은 조회 목적(처방 · 시술·치료 · 경과·관리)에 맞는 진료 질문이고, '묻는 범위'를 '찾은 사례 전체'로 바꾸면 공통점 · 차이를 한 번에 묻습니다. 답을 기다리는 동안 지금 단계와 호출 수가 보입니다. 첫 답과 이후 답 모두 실제 LLM이 쓰고, 환자를 알아볼 수 있는 값은 '범위'나 '비공개'로 보입니다. 실제 LLM이 문장에서 지운 값은 그 사례 단락 끝에 '시기 비공개'처럼 무엇을 가렸는지 이름과 함께 잠금 표시로 붙습니다(ADR-0028). 나이는 5세 구간, 날짜는 월보다 자세히 보이지 않습니다. 숫자(후보 수)는 보이지 않습니다. 오른쪽 사례 노트에는 답에 실제로 나온 값만 모입니다. 세부 정보가 필요하면 답 아래 **세부 정보 요청**을 보내고, 답장 · 확인 요청은 오른쪽 아래 **보호 담당자 창**(머리줄 알림으로도 열림)에서 봅니다.
 3. **보안 담당자** 로그인 → **관제**(`/monitor`). 의료진 이름이 붙은 대화와 요청이 맨 위에 옵니다. 상세에서
    - **후보 수**: 의료진 화면(누적 방어) · 턴별 방어 · 방어 없음의 대화 끝 후보 수를 한 눈금에, 초점 사례에서 후보가 단서마다 어떻게 줄었는지(가린 값은 '그대로였다면')를 봅니다.
    - **검토 보조**: 세부 정보 요청이 오면 검토 보조 에이전트가 뒤에서 초안을 만듭니다(ADR-0027).
@@ -127,6 +129,7 @@ python -m medicloak users passwd doctor1                   # 비밀번호 바꾸
 | `GET /api/monitor/policy` | 보안 담당자 | 판정 기준과 서버 설정 |
 | `GET /api/watch/{대화}/cases/{사례}/narrowing` | 보안 담당자 | 후보가 줄어든 과정 (단서마다 전 → 후, 가린 값의 그대로였다면, 규칙) |
 | `GET /api/monitor/sessions/{대화}/hidden` · `POST …/approve {items, reason}` | 보안 담당자 | 가린 값 목록(값 없음), 골라서 공개 승인 |
+| `GET /api/redteam/auto` | 보안 담당자 | 자동 레드팀 점검 설정 · 이번에 켤 때 한 일 · 도는 점검 · 마지막 비교와 경고 |
 | `GET · POST /api/monitor/sessions/{대화}/assist` | 보안 담당자 | 검토 보조 초안 (세부 정보 요청이 오면 뒤에서 만듦, POST는 다시 만들기). 보내지는 않음 |
 | `POST /api/monitor/sessions/{대화}/rules {case, attribute, note}` · `DELETE …/rules/{규칙}` | 보안 담당자 | 이 대화에 규칙 걸기 · 풀기 |
 | `POST /api/redteam {per_type, fuzzer, llm}` · `POST /api/redteam/{실행}/cancel` · `GET /api/redteam` | 보안 담당자 | 레드팀 점검 (운영 모드는 실제 LLM), 멈춤, 실행 목록 (DB) |
@@ -164,7 +167,10 @@ python -m medicloak users passwd doctor1                   # 비밀번호 바꾸
   - 승인한 값은 그 대화에서 계속 유효하고, 지금은 철회할 수 없습니다.
   - 검토 보조가 추천을 정할 때 쓰는 조회 목적 표(`assist.PURPOSE_NEED`)는 진료과와 함께 정합니다.
   - 검토 보조는 재작성기 모델로 요청마다 한 번 부릅니다.
-- **모델 · 지시문 변경**: 레드팀 실행 기록에 `medicloak_release` · `answer_style` 판이 남습니다. 모델이나 지시문을 바꾸면 배포 전에 '유형마다 1명' 레드팀을 돌려 이전 실행과 비교합니다.
+- **모델 · 지시문 변경**: 판정 규칙 판 · 답 형식 · 모델 · 규칙 추출이 바뀐 채로 서버를 켜면 '유형마다 1명' 레드팀이 자동으로 돌고, 끝나면 직전 점검과 누적 방어 지표를 비교합니다(ADR-0028).
+  - 나빠지면 관제 화면 위와 리포트에 '경고' · '주의'가 뜹니다.
+  - 질의 환자 3명 규모라, 경고가 나오면 규모를 키워 다시 확인합니다.
+  - 매일 돌리려면 `--auto-redteam-daily`, 끄려면 `--auto-redteam off`입니다.
 - **속도와 비용**: 질문 하나에 실제 LLM을 3~4번(최악 8번) 부릅니다. `--extractor-model` · `--rewriter-model`로 빠른 모델을 쓰고, `--no-compare`로 비교 갈래 계산을 끌 수 있습니다. 같은 환자 · 목적의 첫 답은 메모리에서 다시 씁니다.
 - **장애**: LLM 호출이 실패하면 질문은 '보내지 못했습니다 · 다시 보내기'로 남고, 대화 상태는 바뀌지 않습니다. 사례 목록과 노트는 그대로 보입니다.
 - **감사 기록**: 보관 기간과 점검 주기를 정합니다. 관제의 '같은 환자 반복 질문' 표시를 정기 점검 항목으로 둡니다.
@@ -184,6 +190,7 @@ webdemo/backend/persist.py    대화 스냅숏 · 턴 기록 저장, 지난 대�
 webdemo/backend/clinic.py     의료진 대화(ClinicConversation) · 의료진 한 명(ClinicDesk) · 계정별 목록(DeskRegistry)
 webdemo/backend/review.py     규칙(RuleDefender · RuledArmRun) · 가린 값 목록 · 재작성 지시 보강 · 사례 단위로 빼기 · 최소 공개 단위 (공개 승인 · 후보가 줄어든 과정은 engine.Session)
 webdemo/backend/assist.py     검토 보조 에이전트: 세부 정보 요청마다 가린 값별 후보 수 · 조회 목적 · 함께 열기를 확인해 초안을 만든다
+webdemo/backend/autocheck.py  자동 레드팀 점검: 설정 지문이 바뀌면(또는 매일 정해진 시각) 점검을 돌리고 직전 점검과 비교한다
 tests/medicloak/              운영 모드 테스트 (가짜 HTTP 세션으로 실제 LLM 경로)
 ```
 
@@ -200,4 +207,4 @@ tests/medicloak/              운영 모드 테스트 (가짜 HTTP 세션으로 
 - 첫 답 나눠 쓰기는 서버 메모리에만 있습니다(키는 요청의 SHA-256). 서버를 다시 켜면 처음 여는 환자는 다시 실제 LLM을 부릅니다.
 - 실제 LLM 레드팀 결과는 답 형식 설정에 따라 달라집니다. 리포트 화면의 실행 이름에 '짧은 답 지시' · '답 형식 지시 없음'이 보이니 같은 설정끼리 비교하세요.
 - 후보 수(k)는 '누구인지'가 드러나는 것을 막습니다. 후보 전원이 같은 값을 가지면 그 값은 알려질 수 있습니다(동질성). 이 부분은 연구 과제로 남아 있습니다(ADR-0025).
-- 결정은 [ADR-0021](../docs/adr/0021-medicloak-production-mode.md) · [ADR-0022](../docs/adr/0022-medicloak-real-llm-everywhere-and-review-feedback.md) · [ADR-0023](../docs/adr/0023-medicloak-drop-failing-case-before-refusal.md) · [ADR-0024](../docs/adr/0024-medicloak-release-units-and-clinician-screen.md) · [ADR-0025](../docs/adr/0025-medicloak-same-answer-style-for-clinic-and-redteam.md) · [ADR-0026](../docs/adr/0026-medicloak-clinical-workflow-and-purpose-rule.md) · [ADR-0027](../docs/adr/0027-medicloak-review-assistant-and-product-wording.md)에 있습니다.
+- 결정은 [ADR-0021](../docs/adr/0021-medicloak-production-mode.md) · [ADR-0022](../docs/adr/0022-medicloak-real-llm-everywhere-and-review-feedback.md) · [ADR-0023](../docs/adr/0023-medicloak-drop-failing-case-before-refusal.md) · [ADR-0024](../docs/adr/0024-medicloak-release-units-and-clinician-screen.md) · [ADR-0025](../docs/adr/0025-medicloak-same-answer-style-for-clinic-and-redteam.md) · [ADR-0026](../docs/adr/0026-medicloak-clinical-workflow-and-purpose-rule.md) · [ADR-0027](../docs/adr/0027-medicloak-review-assistant-and-product-wording.md) · [ADR-0028](../docs/adr/0028-medicloak-auto-redteam-and-hidden-markers.md)에 있습니다.

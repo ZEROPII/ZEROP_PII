@@ -36,6 +36,7 @@ function caseIdOfRef(ref: string | undefined, cases: CaseSummary[]): string | nu
 function Piece({ seg, tf, mentions }: { seg: MessageSegment; tf: Map<string, PrivacyTransformation>; mentions: TermMention[] | undefined }) {
   const terms = <TermText text={seg.text} mentions={mentions} />;
   if (seg.kind === 'text') return terms;
+  if (seg.placeholder) return <ClinicValue text={seg.text} transformation={tf.get(seg.transformationId)} placeholderLabel={seg.label ?? '값'} />;
   return (
     <ClinicValue text={seg.text} transformation={tf.get(seg.transformationId)}>
       {terms}

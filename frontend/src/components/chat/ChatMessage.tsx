@@ -24,7 +24,12 @@ function MessageBody({ message, mentions }: { message: ChatMessageModel; mention
         return segment.kind === 'text' ? (
           <span key={i}>{terms}</span>
         ) : (
-          <PrivacyHighlight key={i} text={segment.text} transformation={byId.get(segment.transformationId)}>
+          <PrivacyHighlight
+            key={i}
+            text={segment.text}
+            transformation={byId.get(segment.transformationId)}
+            placeholderLabel={segment.placeholder ? segment.label : undefined}
+          >
             {terms}
           </PrivacyHighlight>
         );

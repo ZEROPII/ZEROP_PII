@@ -86,6 +86,8 @@ export interface MonitorPolicy extends ProtectionPolicy {
   answerStyle?: boolean;
   /** 서버를 켠 뒤 의료진 대화 LLM 호출 (역할별 호출 수 · 토큰). LLM이 없으면 null */
   llmUsage?: { label: string; calls: number; by_role: Record<string, { calls: number; input_tokens: number; output_tokens: number }> } | null;
+  /** 자동 레드팀 점검 설정 (ADR-0028) */
+  autoRedteam?: { onChange: boolean; daily: string | null; decisionText: string };
 }
 
 export interface ThreadMessage {
@@ -366,6 +368,10 @@ export interface AuditEntry {
   case?: string | null;
   /** 운영 모드: 계정 번호 */
   user_id?: number;
+  /** 자동 레드팀 점검: 시작한 까닭 · 비교 수준 · 비교한 직전 점검 */
+  trigger?: string | null;
+  level?: string;
+  baseline?: string | null;
   /** 검토 보조 초안(assist_draft): 추천 · 추천별 수 · 쓴 방식 */
   verdict?: string;
   counts?: Partial<Record<'release' | 'consider' | 'keep' | 'decline', number>>;
@@ -449,4 +455,47 @@ export interface RedTeamJob {
   usage?: { calls: number; input_tokens: number; output_tokens: number };
   last?: string;
   result: PocResult | null;
+  /** 무엇이 시작했는지: change(설정이 바뀌어 자동) · daily(정기 자동) · manual(직접 실행). 이 기록이 생기기 전 실행은 없음 */
+  trigger?: 'change' | 'daily' | 'manual' | null;
+  /** 시작할 때의 설정 (판정 규칙 판 · 답 형식 · 모델 · 규칙 추출) */
+  settings?: Record<string, string> | null;
+  fingerprint?: string | null;
+  /** 끝난 실제 LLM 점검: 같은 규모로 바로 앞에 끝난 점검과의 비교 */
+  compare?: RunCompare | null;
+}
+
+export interface RunCompareRow {
+  key: 'viol' | 'utility' | 'overblock';
+  label: string;
+  before: string;
+  after: string;
+  worse: boolean;
+}
+
+export interface RunCompare {
+  level: 'warn' | 'caution' | 'ok' | 'none';
+  levelLabel: string;
+  text: string;
+  rows: RunCompareRow[];
+  /** 바뀐 설정 ('판정 규칙 판: v4 → v5') */
+  changes: string[];
+  note: string;
+  baseline: { id: string; finished_at?: number | null; trigger?: string | null } | null;
+}
+
+/** 자동 레드팀 점검 상태 (GET /api/redteam/auto) */
+export interface AutoStatus {
+  enabled: boolean;
+  onChange: boolean;
+  daily: string | null;
+  perType: number;
+  fuzzer: string;
+  settings: { key: string; label: string; value: string }[];
+  fingerprint: string;
+  decision: 'off' | 'no-llm' | 'same' | 'started' | 'failed';
+  decisionText: string;
+  changes: string[];
+  running: { id: string; trigger: string | null; triggerLabel: string; done: number; total: number } | null;
+  latest: { id: string; finishedAt: number | null; trigger: string | null; level: RunCompare['level']; levelLabel: string; text: string } | null;
+  alert: { level: 'warn' | 'caution'; levelLabel: string; text: string; jobId: string; finishedAt: number | null } | null;
 }

@@ -15,7 +15,7 @@ const ARM_DESCRIPTION = {
   C1S: '턴별 방어: 매 턴 새로 판정하고 앞선 답은 기억하지 않습니다. 단서를 하나씩 모으는 질문에 약한지 보는 대조군입니다.',
 } as const;
 
-const ROLE_KO: Record<string, string> = { target: '대상 AI', extractor: '추출기', rewriter: '재작성기' };
+const ROLE_KO: Record<string, string> = { target: '대상 AI', extractor: '추출기', rewriter: '재작성기', reviewer: '검토 보조' };
 
 function usageText(u: NonNullable<MonitorPolicy['llmUsage']>): string {
   const roles = Object.entries(u.by_role);
@@ -74,6 +74,18 @@ export function PolicyPage() {
                   ] as [string, string][])
                 : []),
               ['검토 반영', '규칙(이 대화에서 사례 · 단서는 늘 가림), 세부 정보 요청 승인 공개 (사유 · 감사 기록)'],
+              ['검토 보조', '세부 정보 요청마다 검토 초안: 추천은 규칙(후보 수 · 조회 목적), 요약 · 답장 문장은 실제 LLM. 보내는 것은 담당자'],
+              ...(p.autoRedteam
+                ? ([
+                    [
+                      '자동 레드팀 점검',
+                      [p.autoRedteam.onChange ? '설정이 바뀌면 켤 때 유형마다 1명' : null, p.autoRedteam.daily ? `매일 ${p.autoRedteam.daily}` : null]
+                        .filter(Boolean)
+                        .join(' · ') || '끔',
+                    ],
+                    ['이번에 켤 때', p.autoRedteam.decisionText],
+                  ] as [string, string][])
+                : []),
               ...(p.llmUsage ? ([['LLM 호출', `서버를 켠 뒤 ${usageText(p.llmUsage)}`]] as [string, string][]) : []),
             ] as [string, string][])
           : []),

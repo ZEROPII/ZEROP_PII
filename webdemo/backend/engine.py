@@ -241,7 +241,7 @@ class Engine:
 
     # ── 레드팀 ──
     def start_job(self, profile: str, fuzzer: str, per_type: int | None, *, live: bool = False,
-                  on_finish: Callable[["RedTeamJob"], None] | None = None) -> "RedTeamJob":
+                  on_finish: Callable[["RedTeamJob"], None] | None = None, meta: dict[str, Any] | None = None) -> "RedTeamJob":
         if profile not in PROFILES or fuzzer not in FUZZERS:
             raise DemoError("profile은 staged|full, fuzzer는 uniform|feedback 중 하나입니다.")
         if per_type is not None and per_type < 1:
@@ -252,7 +252,7 @@ class Engine:
             if any(j.status in ("queued", "running") for j in self.jobs.values()):
                 raise DemoError("이미 돌고 있는 레드팀 실행이 있습니다. 끝나거나 멈춘 뒤 다시 실행하세요.")
             jid = f"R{next(self._ids):04d}"
-            job = RedTeamJob(self, jid, profile, fuzzer, per_type, live=live, on_finish=on_finish)
+            job = RedTeamJob(self, jid, profile, fuzzer, per_type, live=live, on_finish=on_finish, meta=meta)
             self.jobs[jid] = job
         job.start()
         return job
@@ -863,8 +863,12 @@ class RedTeamJob(threading.Thread):
     """
 
     def __init__(self, eng: Engine, jid: str, profile: str, fuzzer: str, per_type: int | None, *, live: bool = False,
-                 on_finish: Callable[["RedTeamJob"], None] | None = None) -> None:
+                 on_finish: Callable[["RedTeamJob"], None] | None = None, meta: dict[str, Any] | None = None) -> None:
         super().__init__(daemon=True)
+        # 자동 점검(autocheck.py): 무엇이 시작했는지 · 그때의 설정과 지문 · 끝난 뒤 직전 점검과의 비교
+        meta = meta or {}
+        self.trigger, self.settings, self.fingerprint = meta.get("trigger"), meta.get("settings"), meta.get("fingerprint")
+        self.compare: dict[str, Any] | None = None
         self.eng, self.id, self.profile, self.fuzzer, self.per_type, self.live = eng, jid, profile, fuzzer, per_type, live
         # POC와 같은 설정 (efficiency, budget 10). 실제 LLM이면 의료진 대화와 같은 규칙 추출 설정을 쓴다
         self.cfg = MedicalConfig(fuzzer=fuzzer, rule_extract=live and getattr(eng, "live_rule_extract", True))
@@ -988,7 +992,8 @@ class RedTeamJob(threading.Thread):
                     status=self.status, error=self.error, elapsed=elapsed, eta=eta,
                     started_at=self.started, finished_at=self.finished, usage=self.usage(),
                     out=str(self.out.relative_to(ROOT)) if self.out.is_relative_to(ROOT) else str(self.out),
-                    last=self.last_line, result=self.result)
+                    last=self.last_line, result=self.result, trigger=self.trigger, settings=self.settings, fingerprint=self.fingerprint,
+                    compare=self.compare)
 
 
 def _cue(k: str) -> str:

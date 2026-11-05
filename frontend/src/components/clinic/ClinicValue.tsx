@@ -9,10 +9,35 @@ import type { PrivacyTransformation } from '../../types/domain';
  *   넓힌 값: 점선 밑줄과 '범위' 표시
  *   가린 값: 잠금 표시 '비공개' (위험색을 쓰지 않는다)
  */
-export function ClinicValue({ text, transformation, children }: { text: string; transformation: PrivacyTransformation | undefined; children?: ReactNode }) {
+export function ClinicValue({
+  text,
+  transformation,
+  children,
+  placeholderLabel,
+}: {
+  text: string;
+  transformation: PrivacyTransformation | undefined;
+  children?: ReactNode;
+  /** 답 글에서 지워진 가린 값의 자리 표시: 무엇을 가렸는지 이름을 붙여 보인다 ('시기 비공개') */
+  placeholderLabel?: string;
+}) {
   const body = children ?? text;
   if (!transformation || transformation.action === 'allow') return <>{body}</>;
   const name = attrName(transformation);
+  if (placeholderLabel && transformation.action === 'suppress') {
+    const why = transformation.purpose
+      ? '이번 조회 목적에 필요하지 않아 답에서 뺐습니다.'
+      : transformation.rule
+        ? '보안 담당자 규칙으로 답에서 뺐습니다.'
+        : '개인을 알아볼 수 있는 값이라 답에서 뺐습니다.';
+    return (
+      <span className="lock-token ml-1.5" title={`${placeholderLabel}: ${why} 필요하면 세부 정보 요청을 보내세요.`}>
+        <Lock className="h-3 w-3" strokeWidth={2.2} aria-hidden />
+        {placeholderLabel} 비공개
+        <span className="sr-only"> ({why})</span>
+      </span>
+    );
+  }
   if (transformation.action === 'generalize')
     return (
       <span title={`${name}: 개인을 알아볼 수 없도록 정확한 값 대신 범위로 보여 드립니다.`}>

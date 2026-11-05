@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import type { CaseSummary, ClinicMessage, ProtectionResult } from '../types/domain';
 import { matchReasons, overviewOf, splitItem } from './caseOverview';
-import { chartCopyText, protectionNote, whyText } from './clinicianCopy';
+import { answerPlainText, chartCopyText, protectionNote, whyText } from './clinicianCopy';
 import { koreanNames } from './koTerms';
 import { latestRequest, statusOf } from './requests';
 
@@ -94,5 +94,24 @@ describe('진료 기록 복사와 조회 목적 문구', () => {
     const why = whyText(p, '사례 1');
     expect(why[0]).toContain('조회 목적');
     expect(why.join(' ')).not.toContain('환자가 아주 적어');
+  });
+});
+
+describe('지워진 가린 값의 자리 표시', () => {
+  it('진료 기록 복사에도 무엇을 가렸는지 남긴다', () => {
+    const tf = [
+      { id: 't1', attribute: 'PERIOD', attributeLabel: '사례 1 시기', action: 'suppress', disclosedValue: null, levelDescription: '가림', caseRef: '사례1' },
+      { id: 't2', attribute: 'AGE', attributeLabel: '사례 1 나이', action: 'generalize', disclosedValue: '40~44세', levelDescription: '범위', caseRef: '사례1' },
+    ] as unknown as ProtectionResult['transformations'];
+    const text = answerPlainText(
+      [
+        { kind: 'text', text: '사례1은 ' },
+        { kind: 'disclosure', text: '40~44세', transformationId: 't2' },
+        { kind: 'text', text: '였고 약을 처방받았습니다.' },
+        { kind: 'disclosure', text: '(비공개)', transformationId: 't1', placeholder: true, label: '시기' },
+      ],
+      tf,
+    );
+    expect(text).toBe('사례1은 40~44세 (범위)였고 약을 처방받았습니다. (시기 비공개)');
   });
 });

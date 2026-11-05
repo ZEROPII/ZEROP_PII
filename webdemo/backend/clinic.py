@@ -32,6 +32,65 @@ from webdemo.backend.engine import ATTR_KO, QTYPE_KO, Engine, Session, parse_ans
 from webdemo.backend.review import CASE_DROPPED, ROUNDED, ref_no, same_text
 
 ATTR_LABEL = dict(AGE="나이", SEX="성별", REGION="거주 지역", DX="진단", PROC="시술", PERIOD="시기", MED="처방 약", PLAN="관리 계획")
+_CASE_LABEL = re.compile(r"사례\s*0*(\d+)(?!\d)")
+_SENTENCE_END = re.compile(r"[.!?。](?=\s|$)|\n")
+
+
+def mark_hidden(text: str, segments: list[dict[str, Any]], tf: list[dict[str, Any]], own_ref: str) -> list[dict[str, Any]]:
+    """
+    실제 LLM 답은 재작성기가 가린 값을 문장에서 지워, 글에 '(비공개)' 자리가 남지 않는다 (사례 노트에만 보였다).
+    글에서 찾지 못한 '가림' 조치마다 그 사례 단락 끝(다음 사례가 시작하는 문장 앞, 없으면 답 끝)에 잠금 표시 조각을 넣는다.
+    조각에는 무엇을 가렸는지(단서 이름, 다른 사례면 사례 이름도)를 붙인다. 값은 넣지 않는다.
+    사례째로 뺀 값은 뺀 사례 안내가 따로 있어 넣지 않는다. 내보낸 글 · 판정 · 후보 수는 그대로다 (화면 조각만 더한다).
+    """
+    matched = {s.get("transformationId") for s in segments if s.get("kind") == "disclosure"}
+    want: dict[tuple[str, str], dict[str, Any]] = {}
+    for x in tf:
+        if x["action"] == SUPPRESS and x["id"] not in matched and not x.get("dropped") and x.get("caseRef"):
+            want.setdefault((x["caseRef"], x["attribute"]), x)
+    if not want:
+        return segments
+    labels = [(m.start(), f"사례{int(m.group(1))}") for m in _CASE_LABEL.finditer(text)]
+    end_of_text = len(text.rstrip())
+
+    def block_end(ref: str) -> int:
+        mine = [pos for pos, r in labels if r == ref]
+        if not mine:
+            return end_of_text
+        nxt = next((pos for pos, r in labels if pos > mine[-1] and r != ref), None)
+        if nxt is None:
+            return end_of_text
+        ends = [m.start() if m.group() == "\n" else m.end() for m in _SENTENCE_END.finditer(text, mine[-1], nxt)]
+        return ends[-1] if ends else nxt
+
+    order = {a: i for i, a in enumerate(("DX", "PROC", "MED", "PLAN", "PERIOD", "AGE", "SEX", "REGION"))}
+    inserts = sorted((block_end(ref), ref_no(ref), order.get(attr, 99), x) for (ref, attr), x in want.items())
+
+    def marker(x: dict[str, Any]) -> dict[str, Any]:
+        name = ATTR_LABEL.get(x["attribute"], x["attribute"])
+        label = name if x["caseRef"] == own_ref else f"{x['caseRef'].replace('사례', '사례 ')} {name}"
+        return dict(kind="disclosure", text=SUPPRESSED, transformationId=x["id"], placeholder=True, label=label)
+
+    out: list[dict[str, Any]] = []
+    pos, k = 0, 0
+    for seg in segments:
+        start, end = pos, pos + len(seg["text"])
+        if seg["kind"] == "text":
+            cur = start
+            while k < len(inserts) and inserts[k][0] <= end:
+                at = max(inserts[k][0], cur)
+                if at > cur:
+                    out.append(dict(kind="text", text=seg["text"][cur - start: at - start]))
+                    cur = at
+                out.append(marker(inserts[k][3]))
+                k += 1
+            if cur < end:
+                out.append(dict(kind="text", text=seg["text"][cur - start:]))
+        else:
+            out.append(seg)
+        pos = end
+    out += [marker(x[3]) for x in inserts[k:]]
+    return out
 TITLE_ATTRS = ("DX", "MED", "PROC", "PLAN")          # 사례 목록 제목에 쓰는 단서 (진단 + 관련 항목)
 STATE_MODE_LABEL = dict(C0="방어 없음", C1="누적 판정 (대화 전체 기억)", C1S="턴별 판정 (매 턴 새로)")
 DEMO_LOCATION = "MediCloak 데모 (Synthea 합성 환자)"
@@ -495,7 +554,7 @@ class ClinicConversation:
             tf, entries = self._absorb(rec, None)
             mode, text = rec["release_mode"], rec["response_text"]
             explanation = self._explain(s, rec, tf, k_before)
-            segments = [dict(kind="text", text=text)] if mode.startswith("REFUSAL") else segments_of(text, tf)
+            segments = [dict(kind="text", text=text)] if mode.startswith("REFUSAL") else mark_hidden(text, segments_of(text, tf), tf, s.ref)
         acts = {t["action"] for t in tf}
         decision = SUPPRESS if SUPPRESS in acts else GENERALIZE if GENERALIZE in acts else ALLOW
         k_after = self.k(s.case_id)

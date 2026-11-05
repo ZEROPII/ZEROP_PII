@@ -27,9 +27,11 @@ const ACTION_KO: Record<string, string> = {
   emr_launch: 'EMR에서 진료 지원 AI 열기',
   clinic_question: '의료진 질문',
   assist_draft: '검토 보조 초안',
+  redteam_compare: '레드팀 직전 점검과 비교',
 };
 
 const PURPOSE_KO: Record<string, string> = { PRESCRIPTION: '처방', TREATMENT_PROCEDURE: '시술·치료', COURSE_CARE: '경과·관리' };
+const LEVEL_KO: Record<string, string> = { warn: '경고', caution: '주의', ok: '이상 없음', none: '첫 기준 점검' };
 const VERDICT_KO: Record<string, string> = { release: '공개 권장', partial: '일부 공개 권장', consider: '사유 확인 뒤 결정', keep: '지금 처리 유지 권장', none: '공개할 값 없음' };
 const RELEASE_KO: Record<string, string> = {
   RAW: '그대로',
@@ -56,7 +58,12 @@ function detailOf(a: AuditEntry): string | null {
     const items = (a.items ?? []).map((x) => `${caseLabel(x.case)} ${ATTR_KO[x.attribute] ?? x.attribute}`).join(', ');
     return [items, a.reason ? `사유: ${a.reason}` : null].filter(Boolean).join(' · ');
   }
-  if (a.action === 'redteam_start') return [a.job, a.llm === 'live' ? '실제 LLM' : '결정적 응답기', a.per_type ? `유형마다 ${a.per_type}명` : '전체'].filter(Boolean).join(' · ');
+  if (a.action === 'redteam_start')
+    return [a.job, a.trigger === 'change' ? '설정이 바뀌어 자동' : a.trigger === 'daily' ? '정기 자동' : null, a.llm === 'live' ? '실제 LLM' : '결정적 응답기', a.per_type ? `유형마다 ${a.per_type}명` : '전체']
+      .filter(Boolean)
+      .join(' · ');
+  if (a.action === 'redteam_compare')
+    return [a.job, a.baseline ? `직전 ${a.baseline}` : null, LEVEL_KO[a.level ?? ''] ?? null, a.note].filter(Boolean).join(' · ');
   if (a.action === 'emr_launch') return a.purpose ? `${PURPOSE_KO[a.purpose] ?? a.purpose} 참고` : null;
   if (a.action === 'assist_draft') {
     const c = a.counts ?? {};

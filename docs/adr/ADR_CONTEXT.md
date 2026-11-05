@@ -1,7 +1,7 @@
 # Zero PII 의사결정 요약 (AI · 새 팀원용)
 
 > 이 파일은 `python scripts/adr.py index`가 `docs/adr/*.md`에서 만든다. 직접 고치지 않는다.
-> ADR 27건 (유효 25 · 대체·폐기 2), 마지막 결정일 2026-11-05.
+> ADR 28건 (유효 26 · 대체·폐기 2), 마지막 결정일 2026-11-05.
 
 ## 읽는 법
 
@@ -725,6 +725,67 @@ PR 템플릿에 "이 PR이 바꾸는 결정과 ADR 번호" 칸을 둔다.
   - 함께 열어 보기(하나씩은 기준 이상, 함께면 아래), 조사 · 나열
   - `what_if`가 State를 바꾸지 않음
 
+### ADR-0028. 설정이 바뀌면 레드팀 점검을 자동으로 돌려 직전 점검과 비교하고, 실제 LLM 답에서 지워진 가린 값을 답 안에 이름과 함께 표시한다
+
+- 승인 · 2026-11-05 · 결정 양승준 · S5 · 시스템·화면
+- 근거: `webdemo/backend/autocheck.py`, `webdemo/backend/engine.py`, `webdemo/backend/app.py`, `webdemo/backend/clinic.py`, `medicloak/cli.py`, `tests/medicloak/test_medicloak.py`, `frontend/src/components/monitor/AutoCheckNotice.tsx`, `frontend/src/pages/MonitorPage.tsx`, `frontend/src/pages/ReportPage.tsx`, `frontend/src/pages/PolicyPage.tsx`, `frontend/src/pages/AuditPage.tsx`, `frontend/src/components/clinic/ClinicValue.tsx`, `frontend/src/components/clinic/ClinicalMessage.tsx`, `frontend/src/components/chat/PrivacyHighlight.tsx`, `frontend/src/components/chat/ChatMessage.tsx`, `frontend/src/lib/clinicianCopy.ts`, `frontend/src/lib/clinicianExtras.test.ts`, `frontend/src/types/domain.ts`, `frontend/src/types/monitor.ts`, `medicloak/README.md`
+
+**결정**
+
+### 1. 자동 레드팀 점검 (`webdemo/backend/autocheck.py`)
+
+- **설정과 지문**: 점검 조건을 정하는 설정은 넷이다.
+  - 판정 규칙 판(`medicloak_release`)
+  - 대상 AI 답 형식
+  - 모델(대상 AI와 역할별 모델)
+  - 규칙 추출
+
+  이 넷의 해시를 지문으로 삼는다. 실제 LLM 점검마다 시작할 때의 설정과 지문을 기록에 남긴다. 직접 실행한 점검도 같다.
+- **켤 때**: 지금 지문을 점검 기록과 견준다.
+  - 같은 지문의 점검이 있으면(끝남 · 멈춤 · 오류 · 도는 중) 돌리지 않는다. 멈춘 점검을 다시 돌려 호출을 쓰지 않는다.
+  - 없으면 '유형마다 1명'(질의 환자 3명, k 피드백 퍼저) 점검을 뒤에서 시작한다. 처음 켤 때, 설정이 바뀌었을 때, 서버를 다시 켜느라 끊긴 점검만 있을 때가 여기에 든다.
+  - 서버 출력과 정책 화면에 이번에 한 일을 적는다.
+- **정해진 시각**: `--auto-redteam-daily HH:MM`이면 매일 그 시각(서버 시계)에도 같은 규모로 돌린다. 다른 점검이 돌고 있으면 그날은 건너뛴다.
+- **점검 호출의 우선순위**: 의료진 질문 호출에 자리를 양보한다. 레드팀 실행의 기존 방식(`background_calls`)을 그대로 쓴다.
+- **비교**: 실제 LLM 점검이 끝날 때마다, 같은 규모 · 같은 퍼저로 바로 앞에 끝난 점검과 누적 방어(C1) 지표를 견준다.
+
+  | 수준 | 조건 |
+  | --- | --- |
+  | 경고 | 후보가 기준 아래로 내려간 대화의 비율이 늘었다 |
+  | 주의 | 답변 유용도가 0.05 이상 떨어졌거나, 과하게 가린 비율이 5%p 이상 늘었다 |
+  | 이상 없음 | 둘 다 아니다 |
+  | 첫 기준 점검 | 견줄 직전 점검이 없다 |
+
+  - 바뀐 설정도 같이 적는다. 예: 대상 AI 답 형식: 켬 → 끔
+  - 질의 환자 3명 규모라 작은 차이는 우연일 수 있다는 안내를 붙인다.
+- **화면**:
+  - 관제 위 한 줄: 자동 점검이 도는 중이거나, 마지막 비교가 경고 · 주의일 때만 보인다.
+  - 리포트: 고른 점검 위에 '직전 점검과 비교' 표를 둔다. 실행 이름 앞에는 '자동 · 설정 바뀜' · '자동 · 정기'를 붙인다.
+  - 정책 화면: 자동 점검 설정과 이번에 켤 때 한 일을 보인다.
+- **기록**: 감사 기록에 '자동 점검'이 시작(`redteam_start`, trigger)과 비교 결과(`redteam_compare`)를 남긴다.
+- **켜고 끄기**: `--auto-redteam change`(기본) · `off`. `--llm real`일 때만 돈다. API는 `GET /api/redteam/auto`(보안 담당자)다.
+
+### 2. 답 안의 가린 값 표시 (`clinic.mark_hidden`)
+
+- 글에서 찾지 못한 '가림' 조치마다 자리 표시 조각(`placeholder`)을 넣는다.
+  - 자리는 그 사례 단락의 끝이다. 다음 사례가 시작하는 문장 바로 앞이고, 다음 사례가 없으면 답 끝이다.
+  - 조각에는 단서 이름을 붙인다. 고른 사례가 아니면 사례 이름도 붙인다('사례 2 나이').
+  - 같은 사례 · 단서는 한 번만 표시한다.
+  - 사례째로 뺀 값은 뺀 사례 안내가 따로 있어 표시하지 않는다.
+- 의료진 화면에는 잠금 표시 '시기 비공개'로 보인다. 툴팁으로 까닭을 알린다(개인 식별 · 보안 담당자 규칙 · 조회 목적).
+- 진료 기록 복사에는 '(시기 비공개)'로 남는다. 보안 담당자의 의료진 대화 화면에는 '시기 가림'으로 보인다.
+- 내보낸 글, 판정, 후보 수, 다시 확인은 바뀌지 않는다. 화면 조각만 더한다. 값은 넣지 않고, 사례 노트와 같은 정보만 보인다.
+
+**결과와 영향**
+
+- 운영 서버를 처음 켤 때와 설정을 바꿔 켤 때 실제 LLM 점검이 한 번 돈다(유형마다 1명). 끄려면 `--auto-redteam off`.
+- 레드팀 기록에 `trigger` · `settings` · `fingerprint` · `compare`가 더해진다. 이전 기록에는 없으므로, 이번 판을 처음 켜면 설정이 바뀐 것으로 보고 한 번 돈다.
+- 의료진 답 조각에 `placeholder` · `label`이 더해진다.
+- 테스트
+  - 비교 수준 · 바뀐 설정 문장 · 켤 때 결정(같은 지문, 끊긴 것만 있음, 설정 바뀜, LLM 없음) · 매일 시각
+  - 서버를 세 번 켜기(기준 점검 → 같은 설정이면 안 돎 → 답 형식을 끄면 다시 돌고 직전 점검과 비교) · 감사 기록 · 의료진 403
+  - 답 끝 '시기 비공개' 조각 · 사례 단락 끝 위치 · 사례째로 뺀 값 제외 · 숫자 없음 · 복사 문구
+
 ## 대체 · 폐기된 결정
 
 - ADR-0002. 억제 기준을 k ≤ 3으로 둔다 (2026-09-23, 대체됨 → ADR-0007)
@@ -804,3 +865,8 @@ Synthea 추가 생성 요청과 생성본의 묶음 검사. 합성데이터 담�
 - `PURPOSE_NEED` 표는 병원 진료과와 정한다(지금은 처방 · 시술·치료 · 경과·관리 기본값).
 - 공개 승인의 만료 · 철회(ADR-0026에서 이어짐).
 - 검토 초안을 DB에 남길지 정한다. 지금은 메모리에만 두고, 감사 기록에는 요약만 남긴다.
+
+**ADR-0028**
+
+- 비교 규모를 키우는 선택(예: 경고가 나오면 '유형마다 5명'으로 다시 확인)을 자동으로 이어 붙일지 정한다.
+- 정기 점검 결과를 메신저 · 메일로 알리는 연동.
