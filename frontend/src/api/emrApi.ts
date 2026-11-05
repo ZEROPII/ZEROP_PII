@@ -14,7 +14,7 @@ async function get<T>(url: string, signal?: AbortSignal): Promise<T> {
     throw new ApiError('서버에 연결할 수 없습니다.');
   }
   if (res.status === 401) notifyUnauthorized();
-  if (res.status === 404 && url.includes('/emr/')) throw new ApiError('가상 EMR은 python -m medicloak 로 켠 서버에서만 쓸 수 있습니다.', 404);
+  if (res.status === 404 && url.includes('/emr/')) throw new ApiError('EMR 연동은 MediCloak 운영 서버(python -m medicloak)에서만 쓸 수 있습니다.', 404);
   if (!res.ok) throw new ApiError(`요청이 실패했습니다 (HTTP ${res.status}).`, res.status);
   return (await res.json()) as T;
 }

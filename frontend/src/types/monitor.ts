@@ -287,6 +287,69 @@ export interface MonitorDetail {
   archived?: boolean;
   rules?: ReviewRule[];
   approvals?: Approval[];
+  /** 검토 보조 초안 상태 (세부 정보 요청이 오면 서버가 뒤에서 만든다) */
+  assist?: AssistState;
+}
+
+/** 검토 보조: 가린 값 하나의 판정 (값 원문은 없다) */
+export interface AssistItem {
+  id: string;
+  turn: number;
+  where: string;
+  case: string;
+  attribute: string;
+  attributeLabel: string;
+  action: 'generalize' | 'suppress' | 'dropped';
+  actionLabel: string;
+  /** 조회 목적에 쓰이는 정도: 직접 · 범위로 충분 · 관련 적음 */
+  need: 'need' | 'coarse' | 'low';
+  needLabel: string;
+  kNow: number | null;
+  /** 이 값 하나만 지금 공개했을 때 후보 수 */
+  kIfRelease: number | null;
+  rec: 'release' | 'consider' | 'keep' | 'decline';
+  recLabel: string;
+  why: string;
+  alternative: string | null;
+}
+
+export interface AssistDraft {
+  case: string | null;
+  caseLabel: string;
+  purpose: string;
+  purposeLabel: string;
+  requestId: string;
+  requestText: string;
+  kReq: number;
+  kNow: number | null;
+  items: AssistItem[];
+  /** 함께 열어도 기준 이상인 값 (승인 창에 미리 고를 것) */
+  release: string[];
+  combinedK: number | null;
+  counts: Record<'release' | 'consider' | 'keep' | 'decline', number>;
+  verdict: 'release' | 'partial' | 'consider' | 'keep' | 'none';
+  verdictLabel: string;
+  /** 검토 보조가 확인한 것 (순서대로) */
+  steps: { label: string; detail: string }[];
+  summary: string;
+  /** 의료진 답장 초안 (숫자 없음) */
+  reply: string;
+  /** 공개 승인 사유 초안 (공개 가능 값이 있을 때) */
+  reason: string;
+  reasonFit?: '구체적' | '불분명' | '목적과 다름';
+  reasonNote?: string;
+  writer: 'llm' | 'template';
+  writerLabel: string;
+  createdAt: number;
+}
+
+export interface AssistState {
+  status: 'none' | 'running' | 'ready' | 'error';
+  requestId?: string;
+  startedAt?: number;
+  finishedAt?: number;
+  draft?: AssistDraft;
+  error?: string;
 }
 
 export interface AuditEntry {
@@ -303,6 +366,10 @@ export interface AuditEntry {
   case?: string | null;
   /** 운영 모드: 계정 번호 */
   user_id?: number;
+  /** 검토 보조 초안(assist_draft): 추천 · 추천별 수 · 쓴 방식 */
+  verdict?: string;
+  counts?: Partial<Record<'release' | 'consider' | 'keep' | 'decline', number>>;
+  writer?: 'llm' | 'template';
   /** 의료진 질문(clinic_question): 대화 턴 · 공개 방식 · 보호한 값 수 */
   turn?: number | null;
   release?: string | null;

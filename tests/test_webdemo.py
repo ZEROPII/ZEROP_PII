@@ -250,8 +250,15 @@ def test_clinic_and_security_exchange_messages(client):
     client.post("/api/clinic/messages", json=dict(kind="reply", text="처방 간격 확인용이었습니다."))
     row = next(x for x in client.get("/api/monitor/overview").json()["sessions"] if x["id"] == sid)
     assert row["pending_request"] and row["flag"] == "의료진 답장 도착" and not row["awaiting_clinician"]
-    acts = [a["action"] for a in client.get("/api/monitor/audit").json() if a["session"] == sid]
+    audit = [a for a in client.get("/api/monitor/audit").json() if a["session"] == sid]
+    acts = [a["action"] for a in audit if a["action"] != "assist_draft"]        # 검토 보조 초안은 뒤에서 만들어 순서가 섞일 수 있다
     assert acts[:4] == ["clinician_reply", "ask_clinician", "security_reply", "access_request"]       # 확인 요청은 한 번만 남는다
+    for _ in range(100):                                                   # 초안은 뒤에서 만든다 (보통 바로 끝남)
+        drafts = [a for a in client.get("/api/monitor/audit").json() if a["session"] == sid and a["action"] == "assist_draft"]
+        if drafts:
+            break
+        time.sleep(0.05)
+    assert drafts and drafts[0]["writer"] == "template" and drafts[0]["actor"] == "검토 보조 AI"   # 데모(LLM 없음)는 정해진 문장
     # 짧은 확인 요청 메모는 상태를 바꾸기 전에 거절한다 (검토 표시 · 감사 기록 · 메시지 모두 그대로)
     before_audit = len(client.get("/api/monitor/audit").json())
     assert client.post(f"/api/monitor/sessions/{sid}/review", json=dict(action="ask_clinician", note="x")).status_code == 422

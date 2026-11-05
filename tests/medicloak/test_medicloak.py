@@ -587,6 +587,141 @@ def test_review_only_reaches_the_current_conversation(world):
     assert sec.get(f"/api/monitor/sessions/{w1}").json()["approvals"] == []
 
 
+def _assist(sec: TestClient, w: str, timeout: float = 20.0) -> dict:
+    """검토 보조 초안이 끝날 때까지 (뒤에서 만든다)."""
+    end = time.time() + timeout
+    while True:
+        st = sec.get(f"/api/monitor/sessions/{w}/assist").json()
+        if st["status"] != "running" or time.time() > end:
+            return st
+        time.sleep(0.05)
+
+
+def test_review_assistant_drafts_on_request_without_raw_values(world):
+    """세부 정보 요청이 오면 검토 보조가 초안을 만든다: 값 원문 없이 판정하고, LLM에도 원문을 보내지 않고, 아무것도 스스로 보내지 않는다."""
+    add_user(world["store"], "doctor_as", "보조의사", "clinician", "내과", PW)
+    doc = login(world, "doctor_as")
+    _, sid = launch(doc, "T0014")
+    doc.post("/api/cases/case-1/messages", json=dict(sessionId=sid, question=Q_DRUG, clientMessageId="as1"))
+    sec = login(world, "privacy1")
+    w = current_conv(sec, "보조의사")
+    assert sec.get(f"/api/monitor/sessions/{w}/assist").json()["status"] == "none"
+    assert sec.post(f"/api/monitor/sessions/{w}/assist").status_code == 409          # 요청이 없으면 만들 초안이 없다
+    n_calls = len(world["fake"].calls)
+    doc.post("/api/clinic/messages", json=dict(kind="access_request", text="처방 시작 시기를 알아야 복용 기간을 판단할 수 있습니다.", caseId="case-1"))
+    st = _assist(sec, w)
+    assert st["status"] == "ready", st
+    d = st["draft"]
+    assert d["case"] == "사례1" and d["purpose"] == "PRESCRIPTION" and d["kReq"] == 5 and d["kNow"] == 6
+    item = next(i for i in d["items"] if i["attribute"] == "PERIOD")
+    assert item["kIfRelease"] == 1 and item["need"] == "coarse" and item["rec"] in ("decline", "keep") and item["recLabel"]
+    assert d["verdict"] in ("keep", "consider") and d["release"] == [] and d["combinedK"] is None
+    assert [s["label"] for s in d["steps"]] == ["요청 읽기", "가린 값 모으기", "하나씩 열어 보기", "조회 목적과 대조", "함께 열어 보기", "초안 쓰기"]
+    assert d["writer"] == "llm" and d["reasonFit"] == "구체적" and "2004-06-16" not in json.dumps(st, ensure_ascii=False)
+    assert not re.search(r"\d", re.sub(r"사례\s*\d+", "", d["reply"])) and "후보" not in d["reply"]
+    # LLM에는 단서 종류 · 처리 · 후보 수 · 요청 문장만 간다 (값 · 약 이름 · 환자 번호 없음)
+    prompts = [c["payload"]["messages"][-1]["content"] for c in world["fake"].calls[n_calls:]]
+    reviewer = [p for p in prompts if p.startswith("[검토 보조]")]
+    assert len(reviewer) == 1
+    assert "2004-06-16" not in reviewer[0] and "loratadine" not in reviewer[0].lower() and "처방 시작 시기를 알아야" in reviewer[0]
+    # 초안은 보내지 않는다: 의료진 메시지는 요청 하나 그대로, 공개 승인 · 규칙 없음
+    det = sec.get(f"/api/monitor/sessions/{w}").json()
+    assert [m["kind"] for m in det["messages"]] == ["access_request"] and det["approvals"] == [] and det["rules"] == []
+    assert det["assist"]["status"] == "ready" and det["row"]["pending_request"]
+    assert doc.get("/api/clinic/messages").json()[-1]["kind"] == "access_request"
+    # 감사 기록: 누가(검토 보조 AI) · 어느 요청 · 추천 수 · 쓴 방식만
+    a = next(x for x in sec.get("/api/monitor/audit").json() if x["action"] == "assist_draft" and x["session"] == w)
+    assert a["actor"] == "검토 보조 AI" and a["writer"] == "llm" and a["case"] == "사례1" and "2004-06-16" not in json.dumps(a, ensure_ascii=False)
+    # 의료진은 검토 보조 경로를 쓸 수 없다
+    assert doc.get(f"/api/monitor/sessions/{w}/assist").status_code == 403
+    # 초안대로 답장하면 의료진 화면에 도착한다 (담당자가 직접 보냄)
+    r = sec.post(f"/api/monitor/sessions/{w}/messages", json=dict(kind="reply", text=d["reply"], case="사례1"))
+    assert r.status_code == 200 and doc.get("/api/clinic/messages").json()[-1]["text"] == d["reply"]
+
+
+def test_review_assistant_uses_fixed_sentences_when_the_llm_draft_is_unusable(world):
+    """LLM 답장에 숫자가 섞이거나 JSON이 아니면 정해진 문장으로 쓴다. '다시 만들기'는 같은 요청으로 다시 돈다."""
+    add_user(world["store"], "doctor_as2", "보조의사둘", "clinician", "내과", PW)
+    doc = login(world, "doctor_as2")
+    _, sid = launch(doc, "T0014")
+    doc.post("/api/cases/case-1/messages", json=dict(sessionId=sid, question=Q_DRUG, clientMessageId="as2"))
+    sec = login(world, "privacy1")
+    w = current_conv(sec, "보조의사둘")
+    fake = world["fake"]
+    try:
+        fake.assist = "numbers"
+        doc.post("/api/clinic/messages", json=dict(kind="access_request", text="시작 날짜가 필요합니다.", caseId="case-1"))
+        d = _assist(sec, w)["draft"]
+        assert d["steps"][-1]["detail"].startswith("정해진 문장") and "ValueError" in d["steps"][-1]["detail"]
+        assert d["writer"] == "template" and "후보" not in d["reply"] and not re.search(r"\d", re.sub(r"사례\s*\d+", "", d["reply"]))
+        assert "사례 1" in d["reply"] and d["summary"].startswith("사례 1 요청")
+        fake.assist = "broken"
+        assert sec.post(f"/api/monitor/sessions/{w}/assist").json()["status"] in ("running", "ready")      # 가짜 LLM은 바로 끝날 수 있다
+        st = _assist(sec, w)
+        assert st["status"] == "ready" and st["draft"]["writer"] == "template" and "ValueError" in st["draft"]["steps"][-1]["detail"]
+        fake.assist = "ok"
+        assert sec.post(f"/api/monitor/sessions/{w}/assist").status_code == 200
+        assert _assist(sec, w)["draft"]["writer"] == "llm"
+    finally:
+        fake.assist = "ok"
+
+
+def test_review_assistant_what_if_and_greedy_combination_unit():
+    """what_if는 State를 바꾸지 않는다 · 하나씩은 기준 이상이어도 함께 열면 기준 아래가 되는 값은 '사유 확인'으로 돌린다."""
+    from webdemo.backend import assist
+
+    assert assist.join_ko(["나이", "날짜", "약 이름"]) == "나이, 날짜와 약 이름" and assist.join_ko(["진단명", "날짜"]) == "진단명과 날짜"
+    assert assist.josa("약 이름", "은", "는") == "약 이름은" and assist.josa("날짜", "은", "는") == "날짜는"
+    assert assist.recommend("suppress", "need", 8, 5)[0] == "release"
+    assert assist.recommend("suppress", "low", 2, 5)[0] == "decline"
+    assert assist.recommend("generalize", "coarse", 2, 5)[0] == "keep"
+    assert assist.recommend("suppress", "coarse", 1, 5)[0] == "decline"
+    assert assist.recommend("suppress", "need", 3, 5)[0] == "consider"
+
+    class Stub:
+        qtype, messages, logs = "PRESCRIPTION", [], {"C1": []}
+        cfg = MedicalConfig(mode="exploration")
+
+        def hidden(self):
+            return [dict(id="1:사례1:0", turn=1, case="사례1", index=0, attribute="MED", action="suppress", released=False, dropped=False),
+                    dict(id="1:사례1:1", turn=1, case="사례1", index=1, attribute="DX", action="suppress", released=False, dropped=False),
+                    dict(id="2:사례1:0", turn=2, case="사례1", index=0, attribute="SEX", action="suppress", released=False, dropped=False)]
+
+        def current_k(self, arm, ref):
+            return 20
+
+        def what_if(self, ids):
+            one = {"1:사례1:0": 9, "1:사례1:1": 7, "2:사례1:0": 2}
+            return {"사례1": one[ids[0]] if len(ids) == 1 else 4}
+
+    a = assist.analyse(Stub(), dict(id="M0001", case="사례1", text="약과 진단이 필요합니다"))
+    rec = {i["attribute"]: i["rec"] for i in a["items"]}
+    assert rec == {"MED": "release", "DX": "consider", "SEX": "decline"} and a["release"] == ["1:사례1:0"] and a["combinedK"] == 9
+    assert a["verdict"] == "partial" and a["counts"] == dict(release=1, consider=1, keep=0, decline=1)
+    t = assist.template_text(a)
+    assert "약 이름은 공개 승인으로" in t["reply"] and "진단명은 그대로" in t["reply"] and "성별은 이번 처방 참고 목적과 관련이 적어" in t["reply"]
+    assert t["reply"].startswith("요청하신 사례 1의") and "처방 참고에 필요한 약 공개" in t["reason"]
+    with pytest.raises(ValueError):
+        assist.parse_draft('{"summary": "사례 1 요청을 봤습니다.", "reply": "후보가 2명이라 공개하지 않습니다 다시 알려 주세요"}')
+    ok = assist.parse_draft('설명\n{"summary": "사례 1 요청을 봤습니다.", "reply": "요청하신 사례 1의 날짜는 공개하지 않습니다.", "reason_fit": "모름"}')
+    assert ok["reasonFit"] == "불분명"
+
+
+def test_what_if_does_not_change_the_conversation(world):
+    add_user(world["store"], "doctor_wi", "가정의사", "clinician", "내과", PW)
+    doc = login(world, "doctor_wi")
+    _, sid = launch(doc, "T0014")
+    doc.post("/api/cases/case-1/messages", json=dict(sessionId=sid, question=Q_DRUG, clientMessageId="wi1"))
+    sec = login(world, "privacy1")
+    w = current_conv(sec, "가정의사")
+    s = world["eng"].sessions[w]
+    with world["eng"].lock:
+        before = (len(s.runs["C1"].cases["사례1"].committed), s.current_k("C1", "사례1"), len(s.approvals))
+        item = next(x for x in s.hidden() if x["attribute"] == "PERIOD")
+        assert s.what_if([item["id"]]) == {"사례1": 1} and s.what_if(["9:사례9:0"]) == {}
+        assert (len(s.runs["C1"].cases["사례1"].committed), s.current_k("C1", "사례1"), len(s.approvals)) == before
+
+
 def test_rewrite_without_case_labels_or_with_the_raw_value_fails_the_recheck(world):
     """재작성기가 '사례N' 표기를 떨어뜨리면 다시 뽑아도 사례를 못 찾아 확인이 그냥 통과하던 문제:
     원래 값이 글자 그대로 남거나 사례 표기가 없으면 통과시키지 않고, 값만 바꾼 답을 낸다."""

@@ -227,12 +227,28 @@ export function RulesSection({ d, open, onOpen, onDetail }: { d: MonitorDetail; 
 }
 
 /** 세부 정보 요청 승인: 가린 값을 골라 사유와 함께 공개한다 */
-export function ApprovePanel({ d, caseRef, onCancel, onDetail }: { d: MonitorDetail; caseRef: string | null; onCancel(): void; onDetail(d: MonitorDetail): void }) {
+export function ApprovePanel({
+  d,
+  caseRef,
+  onCancel,
+  onDetail,
+  initialPick,
+  initialReason,
+}: {
+  d: MonitorDetail;
+  caseRef: string | null;
+  onCancel(): void;
+  onDetail(d: MonitorDetail): void;
+  /** 검토 보조 추천대로 미리 고를 값 · 사유 초안 */
+  initialPick?: string[];
+  initialReason?: string;
+}) {
   const toast = useToast();
   const [items, setItems] = useState<HiddenItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [picked, setPicked] = useState<Set<string>>(new Set());
-  const [reason, setReason] = useState('');
+  const [picked, setPicked] = useState<Set<string>>(new Set(initialPick ?? []));
+  const [reason, setReason] = useState(initialReason ?? '');
+  const seeded = !!initialPick?.length;
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -275,6 +291,7 @@ export function ApprovePanel({ d, caseRef, onCancel, onDetail }: { d: MonitorDet
       </div>
       <p className="mt-1 text-xs leading-5 text-ink-2">
         고른 값은 이 의료진의 이 대화에만 나가고, 누적 판정에 더해져 이후 답에 반영됩니다. 사유와 공개한 항목은 감사 기록에 남습니다.
+        {seeded && ' 검토 보조가 공개 가능으로 본 값과 사유 초안을 담아 두었습니다. 확인하고 고쳐서 공개하세요.'}
       </p>
       {error ? (
         <p className="mt-2 text-xs text-danger-text">{error}</p>

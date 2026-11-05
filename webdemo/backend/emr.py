@@ -83,7 +83,7 @@ def load_csv(store: Store, paths: MedicalPaths | None = None, cfg: MedicalConfig
     store.set_meta("emr_loaded_at", str(time.time()))
     store.set_meta("emr_source", f"{Path(paths.nodes).name}, {Path(paths.events).name}")
     counts = dict(emr_node=len(nodes), emr_event=len(events), emr_patient=len(rows))
-    log(f"[medicloak] 가상 EMR 적재 {time.time() - t0:.1f}초: 노드 {len(nodes):,} · 사건 {len(events):,} · 환자 {len(rows):,}명")
+    log(f"[medicloak] EMR 적재 {time.time() - t0:.1f}초: 노드 {len(nodes):,} · 사건 {len(events):,} · 환자 {len(rows):,}명")
     return counts
 
 
@@ -92,7 +92,7 @@ def export_csv(store: Store, out_dir: Path, log=print) -> MedicalPaths:
     out_dir.mkdir(parents=True, exist_ok=True)
     version = store.get_meta("emr_version")
     if version is None:
-        raise RuntimeError("가상 EMR이 비어 있습니다. 먼저 python -m medicloak init 을 실행하세요.")
+        raise RuntimeError("EMR 데이터가 비어 있습니다. 먼저 python -m medicloak init 을 실행하세요.")
     nodes, events, marker = out_dir / "노드_db.csv", out_dir / "사건연결표_db.csv", out_dir / "VERSION"
     if not (marker.exists() and marker.read_text().strip() == version and nodes.exists() and events.exists()):
         t0 = time.time()
@@ -248,7 +248,7 @@ def bundle(resources: list[dict[str, Any]], total: int) -> dict[str, Any]:
 
 CAPABILITY = dict(
     resourceType="CapabilityStatement", status="active", kind="instance", fhirVersion="4.0.1", format=["json"],
-    software=dict(name="MediCloak 가상 EMR (Synthea 합성 데이터)"),
+    software=dict(name="MediCloak EMR 연동 (FHIR R4)"),
     rest=[dict(mode="server", resource=[dict(type=t, interaction=[dict(code="read" if t == "Patient" else "search-type")],
                                              searchParam=[dict(name="patient", type="reference")] if t != "Patient" else [])
                                         for t in ("Patient", "Condition", "MedicationRequest", "Procedure", "CarePlan")])],

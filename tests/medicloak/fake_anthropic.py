@@ -35,7 +35,8 @@ class FakeResponse:
 class FakeAnthropic:
     def __init__(self, *, fail_status: int | None = None, delay: float = 0.0, drop_date: bool = True, period_in_med: bool = False,
                  drop_labels: bool = False, echo_lower: str | None = None, heed_retry: bool = False,
-                 ages: dict[str, str] | None = None, broken_extract: bool = False, regions: dict[str, str] | None = None) -> None:
+                 ages: dict[str, str] | None = None, broken_extract: bool = False, regions: dict[str, str] | None = None,
+                 assist: str = "ok") -> None:
         self.calls: list[dict[str, Any]] = []
         self.fail_status = fail_status
         self.delay = delay
@@ -48,6 +49,7 @@ class FakeAnthropic:
         self.ages = dict(ages or {})                # '나이'를 물으면 사례마다 이 글자로 답한다 ('33-38세' 같은 범위)
         self.regions = dict(regions or {})          # '거주'를 물으면 사례마다 이 지역으로 답한다 ('Boston, Massachusetts')
         self.broken_extract = broken_extract        # 추출기가 JSON이 아닌 답을 낸다 (첫 답 거절)
+        self.assist = assist                        # 검토 보조 초안: ok(JSON) · numbers(답장에 후보 수) · broken(JSON 아님)
         self.lock = threading.Lock()
         self.active = 0
         self.max_active = 0
@@ -78,13 +80,23 @@ class FakeAnthropic:
             p = c["payload"]
             u = p["messages"][-1]["content"]
             out.append("target" if p.get("system") else "extractor" if u.startswith("너는 의료 대화의 정보 추출기다")
-                       else "rewriter" if u.startswith("너는 병원 임상 의사결정 지원 AI의 답변을") else "other")
+                       else "rewriter" if u.startswith("너는 병원 임상 의사결정 지원 AI의 답변을")
+                       else "reviewer" if u.startswith("[검토 보조]") else "other")
         return out
 
     # ── 역할별 답 ──
     def answer(self, p: dict[str, Any]) -> str:
         system = p.get("system") or ""
         user = p["messages"][-1]["content"]
+        if user.startswith("[검토 보조]"):                 # 검토 보조: 판정표를 읽고 요약 · 답장 JSON
+            if self.assist == "broken":
+                return "초안을 쓰지 못했습니다"
+            case = re.search(r"\[요청 사례\] (.+)", user).group(1)
+            rows = [ln for ln in user.split("\n[판정]\n")[1].split("\n[함께 공개]")[0].splitlines() if ln.startswith("- ")]
+            reply = (f"요청하신 {case}의 값은 판정표대로 검토했습니다. 진료에 꼭 필요한 이유를 알려 주시면 다시 보겠습니다."
+                     if self.assist != "numbers" else f"요청하신 {case}는 후보가 2명이라 공개하지 않습니다.")
+            return "검토 초안입니다.\n" + json.dumps(dict(summary=f"{case} 요청 값 {len(rows)}개를 판정표대로 정리했습니다. 요청 사유는 복용 기간 판단입니다.",
+                                                        reply=reply, reason_fit="구체적", reason_note="복용 기간 판단에 쓰겠다고 밝힘"), ensure_ascii=False)
         if "[검색된 사례]" in system:
             m = re.search(r"사례\s*(\d+)", user)
             if m is None and len(p["messages"]) == 1:

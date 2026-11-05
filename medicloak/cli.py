@@ -53,7 +53,7 @@ def init(db: Path, *, reset: bool = False, initial_password: str | None = None, 
         if not emr.is_loaded(store):
             emr.load_csv(store, log=print)
         elif not quiet:
-            print(f"[medicloak] 가상 EMR이 이미 들어 있습니다 (환자 {store.count('emr_patient'):,}명 · 사건 {store.count('emr_event'):,}건)")
+            print(f"[medicloak] EMR 데이터가 이미 들어 있습니다 (환자 {store.count('emr_patient'):,}명 · 사건 {store.count('emr_event'):,}건)")
         out_file = db.parent / ACCOUNTS_FILE
         pw = initial_password or os.environ.get("MEDICLOAK_INITIAL_PASSWORD") or os.environ.get("MEDICLOAK_DEMO_PASSWORD") or None
         made = ensure_initial_accounts(store, pw, out_file)
@@ -90,7 +90,7 @@ def serve(a: argparse.Namespace) -> None:
     if a.build:
         from webdemo.__main__ import build_frontend
         try:
-            build_frontend()
+            build_frontend(prefix="[medicloak]")
         except subprocess.CalledProcessError as exc:
             raise SystemExit(f"프런트엔드 빌드에 실패했습니다 (종료 코드 {exc.returncode}). 위 오류를 확인하세요.")
     try:
@@ -106,7 +106,7 @@ def serve(a: argparse.Namespace) -> None:
     paths = emr.export_csv(store, db.parent / "emr_snapshot", log=print)
     first = Persist(store, None).next_id()          # type: ignore[arg-type]
     print(f"[medicloak] 위험 계산 엔진을 준비합니다 (10초 안팎) · 대상 AI: {label}")
-    eng = Engine(db.parent / "engine", paths=paths, live_llm=live_llm, live_label=label, first_id=first,
+    eng = Engine(db.parent / "engine", log=lambda s: print(s.replace("[webdemo]", "[medicloak]", 1)), paths=paths, live_llm=live_llm, live_label=label, first_id=first,
                  llm_concurrency=a.llm_concurrency, live_rule_extract=not a.no_rule_extract, answer_style=a.answer_style == "on")
     product = Product(store=store, compare=not a.no_compare, keep=a.keep, cookie_secure=a.cookie_secure)
     app = create_app(eng, simulations=False, product=product)          # 운영 모드: 환자는 EMR에서 열 때 정해진다
@@ -151,11 +151,11 @@ def _read_password(a: argparse.Namespace) -> str:
 
 
 def main(argv: list[str] | None = None) -> None:
-    ap = argparse.ArgumentParser(prog="python -m medicloak", description="MediCloak: 의료 AI 재식별 방어 (로그인 · 가상 EMR · 실제 LLM)")
+    ap = argparse.ArgumentParser(prog="python -m medicloak", description="MediCloak: 진료 지원 AI 개인정보 보호 (로그인 · EMR 연동 · 실제 LLM)")
     ap.add_argument("--db", default=str(DEFAULT_DB), help=f"DB 파일 (기본 {DEFAULT_DB.relative_to(ROOT)})")
     sub = ap.add_subparsers(dest="cmd")
 
-    p = sub.add_parser("init", help="DB · 가상 EMR · 처음 쓸 계정 준비")
+    p = sub.add_parser("init", help="DB · EMR 데이터 · 처음 쓸 계정 준비")
     p.add_argument("--reset", action="store_true", help="기존 DB(대화 · 감사 기록 포함)를 지우고 새로 만든다")
     p.add_argument("--initial-password", default=None, help="처음 계정 셋이 같이 쓸 비밀번호 (없으면 계정마다 임의로 만든다)")
     p.add_argument("--demo-password", dest="initial_password", help=argparse.SUPPRESS)          # 예전 이름
@@ -199,7 +199,7 @@ def _serve_args(p: argparse.ArgumentParser, top: bool = False) -> None:
     p.add_argument("--host", **(kw or dict(default="127.0.0.1")))
     p.add_argument("--port", type=int, **(kw or dict(default=8000)))
     p.add_argument("--llm", choices=("real", "dry-run", "oracle"), **(kw or dict(default="real")),
-                   help="의료진 대화의 대상 AI: real(.env의 실제 모델, 기본) · dry-run(배선 확인용 가짜) · oracle(결정적 응답기)")
+                   help="의료진 대화의 대상 AI: real(.env의 실제 모델, 기본) · dry-run(연결 점검, LLM을 부르지 않음) · oracle(결정적 응답기)")
     p.add_argument("--env-file", **(kw or dict(default=None)), help="읽을 .env (기본: 저장소 루트의 .env)")
     p.add_argument("--llm-concurrency", type=int, **(kw or dict(default=1)), help="동시에 보내는 LLM 요청 수 (기본 1)")
     p.add_argument("--build", action="store_true", **(kw or {}), help="시작 전에 frontend/를 빌드한다 (npm 필요)")

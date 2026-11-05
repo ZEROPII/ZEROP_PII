@@ -12,14 +12,14 @@ ROOT = Path(__file__).resolve().parent.parent
 FRONTEND = ROOT / "frontend"
 
 
-def build_frontend() -> None:
+def build_frontend(prefix: str = "[webdemo]") -> None:
     npm = shutil.which("npm")
     if npm is None:
         raise SystemExit("npm이 없습니다. Node.js 18 이상을 설치한 뒤 다시 실행하세요 (https://nodejs.org).")
     if not (FRONTEND / "node_modules").exists():
-        print("[webdemo] 프런트엔드 패키지를 설치합니다 (처음 한 번, 1분 안팎)")
+        print(f"{prefix} 프런트엔드 패키지를 설치합니다 (처음 한 번, 1분 안팎)")
         subprocess.run([npm, "install", "--no-audit", "--no-fund"], cwd=FRONTEND, check=True)
-    print("[webdemo] 화면을 빌드합니다 (npm run build:demo)")
+    print(f"{prefix} 화면을 빌드합니다")
     subprocess.run([npm, "run", "build:demo"], cwd=FRONTEND, check=True)
 
 

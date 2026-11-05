@@ -3,6 +3,7 @@
 
 import type {
   Approval,
+  AssistState,
   AuditEntry,
   HiddenItem,
   MonitorDetail,
@@ -20,7 +21,7 @@ import { apiMode } from './index';
 import { API_BASE, notifyUnauthorized } from './session';
 import { ApiError } from './types';
 
-export const MONITOR_UNAVAILABLE = '관제 화면은 데모 서버(python -m webdemo)에 연결했을 때만 볼 수 있습니다.';
+export const MONITOR_UNAVAILABLE = '관제 화면은 MediCloak 서버에 연결했을 때만 볼 수 있습니다.';
 
 function base(): string {
   return API_BASE;
@@ -97,6 +98,9 @@ export const monitorApi = {
       method: 'POST',
       body: JSON.stringify({ case: caseRef, attribute, note: note || null }),
     }),
+  /** 검토 보조 초안 (세부 정보 요청마다 서버가 뒤에서 만든다). run은 같은 요청으로 다시 만든다 */
+  assist: (sid: string, signal?: AbortSignal) => request<AssistState>(`/monitor/sessions/${encodeURIComponent(sid)}/assist`, { signal }),
+  assistRun: (sid: string) => request<AssistState>(`/monitor/sessions/${encodeURIComponent(sid)}/assist`, { method: 'POST' }),
   removeRule: (sid: string, ruleId: string) =>
     request<MonitorDetail>(`/monitor/sessions/${encodeURIComponent(sid)}/rules/${encodeURIComponent(ruleId)}`, { method: 'DELETE' }),
 };

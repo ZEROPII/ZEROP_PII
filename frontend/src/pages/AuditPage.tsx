@@ -26,9 +26,11 @@ const ACTION_KO: Record<string, string> = {
   login_blocked: '로그인 잠시 막음',
   emr_launch: 'EMR에서 진료 지원 AI 열기',
   clinic_question: '의료진 질문',
+  assist_draft: '검토 보조 초안',
 };
 
 const PURPOSE_KO: Record<string, string> = { PRESCRIPTION: '처방', TREATMENT_PROCEDURE: '시술·치료', COURSE_CARE: '경과·관리' };
+const VERDICT_KO: Record<string, string> = { release: '공개 권장', partial: '일부 공개 권장', consider: '사유 확인 뒤 결정', keep: '지금 처리 유지 권장', none: '공개할 값 없음' };
 const RELEASE_KO: Record<string, string> = {
   RAW: '그대로',
   ROUNDED: '공개 단위로 바꾼 답',
@@ -56,6 +58,12 @@ function detailOf(a: AuditEntry): string | null {
   }
   if (a.action === 'redteam_start') return [a.job, a.llm === 'live' ? '실제 LLM' : '결정적 응답기', a.per_type ? `유형마다 ${a.per_type}명` : '전체'].filter(Boolean).join(' · ');
   if (a.action === 'emr_launch') return a.purpose ? `${PURPOSE_KO[a.purpose] ?? a.purpose} 참고` : null;
+  if (a.action === 'assist_draft') {
+    const c = a.counts ?? {};
+    const parts = [a.case ? caseLabel(a.case) : null, VERDICT_KO[a.verdict ?? ''] ?? null, c.release ? `공개 가능 ${c.release}` : null,
+      c.consider ? `사유 확인 ${c.consider}` : null, a.writer === 'llm' ? 'AI 초안' : '정해진 문장'];
+    return parts.filter(Boolean).join(' · ');
+  }
   if (a.action.startsWith('login') || a.action === 'logout') return a.client ? `접속 주소 ${a.client}` : null;
   return null;
 }

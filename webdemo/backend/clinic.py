@@ -221,7 +221,7 @@ class ClinicConversation:
 
     def policy(self) -> dict[str, Any]:
         d = self.session.ctx.defender
-        mode = self.eng.live_label if self.live else "데모 응답기 (LLM 없음)"
+        mode = self.eng.live_label if self.live else "결정적 응답기 (LLM 없음)"
         return dict(modeLabel=mode, arm=self.arm, stateModeLabel=STATE_MODE_LABEL[self.arm], minK=d.g, suppressK=d.s,
                     populationSize=self.session.ctx.p_ref, source="backend", live=self.live)
 

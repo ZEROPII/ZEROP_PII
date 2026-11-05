@@ -16,7 +16,7 @@ from typing import Any
 
 LLM_CHOICES = ("real", "dry-run", "oracle")
 ORACLE_LABEL = "결정적 응답기 (LLM 호출 없음)"
-DRY_RUN_LABEL = "배선 확인용 가짜 LLM (dry-run, 답 내용 의미 없음)"
+DRY_RUN_LABEL = "연결 점검 모드 (dry-run · 실제 LLM을 부르지 않음)"
 
 
 # 질문 문장을 만드는 역할. 의료진 대화의 사례 검색 질문(턴 0)은 시스템이 보내는 질문이라 결정적 응답기가 만든다.
@@ -152,7 +152,7 @@ def styled(role: str, system: str) -> str:
     return f"{system}\n\n{ANSWER_STYLE}" if role == "target" and ANSWER_STYLE not in system else system
 
 
-ROLE_KO = {"extractor": "추출기", "rewriter": "재작성기", "target": "대상 AI", "mutator": "공격 질문", "checker": "질문 확인"}
+ROLE_KO = {"extractor": "추출기", "rewriter": "재작성기", "target": "대상 AI", "mutator": "공격 질문", "checker": "질문 확인", "reviewer": "검토 보조"}
 
 
 class AnswerStyleLLM:

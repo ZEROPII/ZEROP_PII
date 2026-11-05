@@ -8,12 +8,15 @@ export interface BackendInfo {
   monitor: boolean;
   /** medicloak: 의료진 대화의 대상 AI가 실제(또는 dry-run) LLM인지 */
   llmLive?: boolean;
+  /** 판정 규칙 판 (예: medicloak-release-v4) */
+  release?: string;
 }
 
 interface Health {
   backend?: string;
   llm?: string | { mode?: string; label?: string; live?: boolean };
   arm?: string;
+  release?: string;
 }
 
 const MOCK: BackendInfo = { kind: 'mock', label: '예시 데이터', detail: '브라우저 안 Mock Service. 숫자는 화면 확인용 예시입니다.', monitor: false };
@@ -36,6 +39,7 @@ export function useBackendInfo(): BackendInfo | null {
             detail: `MediCloak 운영 서버 · 대상 AI: ${llm?.label ?? '알 수 없음'} (의료진 대화 · 레드팀 점검). 입력칸의 '보내기 전 확인'만 기록으로 추정합니다.`,
             monitor: true,
             llmLive: !!llm?.live,
+            release: h.release,
           });
         else if (h.backend === 'webdemo')
           setInfo({ kind: 'webdemo', label: '데모 서버', detail: '결정적 응답기로 의료 파이프라인을 그대로 돌립니다 (LLM 호출 없음).', monitor: true });

@@ -2,6 +2,7 @@ import { ExternalLink, Play, Square } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { MONITOR_UNAVAILABLE, monitorApi, type PocSummary } from '../api/monitorApi';
 import { ErrorState, LoadingState } from '../components/common/StatusViews';
+import { useBackendInfo } from '../hooks/useBackendInfo';
 import { StatusChip } from '../components/common/StatusChip';
 import { BarRow, KTurnChart, type Series } from '../components/report/KTurnChart';
 import { useToast } from '../components/layout/Toast';
@@ -161,6 +162,9 @@ function jobTitle(j: RedTeamJob): string {
 
 export function ReportPage() {
   const toast = useToast();
+  // 평가 지표 대시보드(eval_demo/)는 연구 재현용 정적 페이지다. 운영 서버 화면에서는 링크를 두지 않는다
+  const backend = useBackendInfo();
+  const researchLinks = !!backend && backend.kind !== 'medicloak';
   const [poc, setPoc] = useState<PocSummary | null>(null);
   const [jobs, setJobs] = useState<RedTeamJob[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -271,7 +275,7 @@ export function ReportPage() {
     ? shownJob
       ? jobTitle(shownJob)
       : '점검 결과를 불러오는 중'
-    : `결정적 응답기 기준 2026-10-23 POC (${dataset ? DATASETS[dataset] : ''})`;
+    : `기준 평가 · 결정적 응답기 2026-10-23 (${dataset ? DATASETS[dataset] : ''})`;
 
   return (
     <div className="scroll-thin h-full overflow-y-auto px-4 pb-6 pt-4 md:px-6">
@@ -295,19 +299,21 @@ export function ReportPage() {
             </optgroup>
           )}
           {pocKeys.length > 0 && (
-            <optgroup label="참고: 결정적 응답기 POC (2026-10-23)">
+            <optgroup label="참고: 기준 평가 (결정적 응답기 · 2026-10-23)">
               {pocKeys.map((k) => (
                 <option key={k} value={k}>
-                  POC {DATASETS[k]}
+                  기준 평가 {DATASETS[k]}
                 </option>
               ))}
             </optgroup>
           )}
         </select>
-        <a href="/eval/" target="_blank" rel="noreferrer" className="btn-ghost btn-sm" title="평가 지표 대시보드 (eval_demo/)">
-          <ExternalLink className="h-3.5 w-3.5" aria-hidden />
-          평가 지표 22개
-        </a>
+        {researchLinks && (
+          <a href="/eval/" target="_blank" rel="noreferrer" className="btn-ghost btn-sm" title="평가 지표 대시보드 (eval_demo/)">
+            <ExternalLink className="h-3.5 w-3.5" aria-hidden />
+            평가 지표 22개
+          </a>
+        )}
         <span className="flex-1" />
         <div className="flex flex-wrap items-center gap-2 rounded-control bg-surface-2 p-1.5 pl-3 text-[13px]">
           <span className="text-ink-2">{live ? '실제 LLM으로 새 점검' : '새 점검 (결정적 응답기)'}</span>

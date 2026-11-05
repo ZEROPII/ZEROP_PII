@@ -97,11 +97,17 @@ python -m medicloak users passwd doctor1                   # 비밀번호 바꾸
 2. **유사 사례 조회**(`/`)에서 사례에 묻습니다. 사례 하나는 과거 기록의 환자 한 명입니다. 사례 목록 머리에 여러 사례의 공통 값이, 사례마다 지금 환자와 겹치는 점('주진단 같음')과 다른 항목이 보이고, '비교'로 사례 × 항목 표를 엽니다. 예시 질문은 조회 목적(처방 · 시술·치료 · 경과·관리)에 맞는 진료 질문이고, '묻는 범위'를 '찾은 사례 전체'로 바꾸면 공통점 · 차이를 한 번에 묻습니다. 답을 기다리는 동안 지금 단계와 호출 수가 보입니다. 첫 답과 이후 답 모두 실제 LLM이 쓰고, 환자를 알아볼 수 있는 값은 '범위'나 '비공개'로 보입니다. 나이는 5세 구간, 날짜는 월보다 자세히 보이지 않습니다. 숫자(후보 수)는 보이지 않습니다. 오른쪽 사례 노트에는 답에 실제로 나온 값만 모입니다. 세부 정보가 필요하면 답 아래 **세부 정보 요청**을 보내고, 답장 · 확인 요청은 오른쪽 아래 **보호 담당자 창**(머리줄 알림으로도 열림)에서 봅니다.
 3. **보안 담당자** 로그인 → **관제**(`/monitor`). 의료진 이름이 붙은 대화와 요청이 맨 위에 옵니다. 상세에서
    - **후보 수**: 의료진 화면(누적 방어) · 턴별 방어 · 방어 없음의 대화 끝 후보 수를 한 눈금에, 초점 사례에서 후보가 단서마다 어떻게 줄었는지(가린 값은 '그대로였다면')를 봅니다.
+   - **검토 보조**: 세부 정보 요청이 오면 검토 보조 에이전트가 뒤에서 초안을 만듭니다(ADR-0027).
+     - 가린 값마다 지금 하나만 열었을 때의 후보 수와 조회 목적에 쓰이는 정도를 보고 추천을 정합니다.
+     - 추천은 공개 가능 · 사유 확인 뒤 결정 · 지금 범위 유지 · 공개하지 않음 가운데 하나입니다.
+     - 공개 가능한 값은 함께 열어도 기준 이상인지 다시 셉니다.
+     - 요약과 의료진 답장 초안은 실제 LLM이 씁니다. LLM에는 가린 값의 원문을 보내지 않습니다.
+     - 초안은 보내지 않습니다. '승인 창에 담기' · '답장 칸에 넣기'로 담당자가 고쳐 직접 보냅니다.
    - **값 공개 승인**: 세부 정보 요청이 오면 가린 값을 골라 사유를 적고 공개합니다. 값은 그 의료진의 그 대화에만 '공개 승인' 메시지로 가고, 누적 판정에 더해집니다. 관제 화면에서는 공개한 값도 원문 열람 뒤에만 보입니다.
    - **이 대화에 규칙 걸기**: 사례와 단서 종류를 고르면 다음 질문부터 그 단서는 늘 가립니다. 풀 수 있습니다.
    - 승인과 규칙은 의료진이 지금 열어 둔 대화에만 됩니다. 의료진이 다른 환자를 열었거나 지난 대화이면 막힙니다(409).
 4. **의료진 대화**(`/watch`)에서 대화를 골라 후보가 줄어든 과정, 답마다의 판정 표(단서 · 조치 · 그대로였다면 · 고친 답 다시 확인)와 단서 그래프를 봅니다. 원문은 관제에서 사유를 적어야 열립니다.
-5. **리포트**(`/report`)에서 레드팀 점검을 실제 LLM으로 돌립니다. 규모(유형마다 1 · 2 · 5 · 10명, 전체)를 고르면 어림 호출 수를 보여 주고, 진행 · 호출 수 · 토큰 · 남은 시간을 보며 멈출 수 있습니다. LLM 호출이 실패한 질의 환자는 집계에서 빼고 그 수를 보이며, 처음 세 명이 모두 실패하면 오류로 멈춥니다. 결과는 DB에 남고, 결정적 응답기 POC는 참고로 고를 수 있습니다.
+5. **리포트**(`/report`)에서 레드팀 점검을 실제 LLM으로 돌립니다. 규모(유형마다 1 · 2 · 5 · 10명, 전체)를 고르면 어림 호출 수를 보여 주고, 진행 · 호출 수 · 토큰 · 남은 시간을 보며 멈출 수 있습니다. LLM 호출이 실패한 질의 환자는 집계에서 빼고 그 수를 보이며, 처음 세 명이 모두 실패하면 오류로 멈춥니다. 결과는 DB에 남고, 결정적 응답기로 잰 기준 평가(2026-10-23)를 참고로 고를 수 있습니다.
 6. **감사 기록**(`/audit`)에 로그인 · 로그아웃 · 실패, EMR 열기, 의료진 질문(사례 · 보호한 값 수 · 내보낸 답, 질문 본문은 넣지 않음), 열람 · 검토 · 메시지, 공개 승인(항목 · 사유, 값은 넣지 않음), 규칙 걸기 · 풀기, 레드팀 시작 · 멈춤이 남습니다.
 
 서버를 다시 켜면 지난 대화는 관제 · 의료진 대화 화면에 '지난 대화'로 남습니다. 열람과 검토 표시는 되지만 메시지는 보낼 수 없습니다. 의료진은 새 대화부터 시작하고, '조회 기록'에 지난 진료가 나옵니다.
@@ -121,6 +127,7 @@ python -m medicloak users passwd doctor1                   # 비밀번호 바꾸
 | `GET /api/monitor/policy` | 보안 담당자 | 판정 기준과 서버 설정 |
 | `GET /api/watch/{대화}/cases/{사례}/narrowing` | 보안 담당자 | 후보가 줄어든 과정 (단서마다 전 → 후, 가린 값의 그대로였다면, 규칙) |
 | `GET /api/monitor/sessions/{대화}/hidden` · `POST …/approve {items, reason}` | 보안 담당자 | 가린 값 목록(값 없음), 골라서 공개 승인 |
+| `GET · POST /api/monitor/sessions/{대화}/assist` | 보안 담당자 | 검토 보조 초안 (세부 정보 요청이 오면 뒤에서 만듦, POST는 다시 만들기). 보내지는 않음 |
 | `POST /api/monitor/sessions/{대화}/rules {case, attribute, note}` · `DELETE …/rules/{규칙}` | 보안 담당자 | 이 대화에 규칙 걸기 · 풀기 |
 | `POST /api/redteam {per_type, fuzzer, llm}` · `POST /api/redteam/{실행}/cancel` · `GET /api/redteam` | 보안 담당자 | 레드팀 점검 (운영 모드는 실제 LLM), 멈춤, 실행 목록 (DB) |
 | `GET /api/monitor/sessions/{대화}/messages` | 보안 담당자 | 의료진과 주고받은 메시지 (공개 승인 본문의 값은 지움) |
@@ -152,7 +159,11 @@ python -m medicloak users passwd doctor1                   # 비밀번호 바꾸
   - 병원 내부 모델
   - 계약으로 보호되는 전용 환경
   - 보내기 전 가명처리
-- **보호 담당자 운영**: 세부 정보 요청은 사람이 승인합니다. 진료 중 응답 시간 목표와 당직, 메신저 알림 연동이 필요합니다. 승인한 값은 그 대화에서 계속 유효하고, 지금은 철회할 수 없습니다.
+- **보호 담당자 운영**: 세부 정보 요청은 사람이 승인합니다.
+  - 진료 중 응답 시간 목표와 당직, 메신저 알림 연동이 필요합니다.
+  - 승인한 값은 그 대화에서 계속 유효하고, 지금은 철회할 수 없습니다.
+  - 검토 보조가 추천을 정할 때 쓰는 조회 목적 표(`assist.PURPOSE_NEED`)는 진료과와 함께 정합니다.
+  - 검토 보조는 재작성기 모델로 요청마다 한 번 부릅니다.
 - **모델 · 지시문 변경**: 레드팀 실행 기록에 `medicloak_release` · `answer_style` 판이 남습니다. 모델이나 지시문을 바꾸면 배포 전에 '유형마다 1명' 레드팀을 돌려 이전 실행과 비교합니다.
 - **속도와 비용**: 질문 하나에 실제 LLM을 3~4번(최악 8번) 부릅니다. `--extractor-model` · `--rewriter-model`로 빠른 모델을 쓰고, `--no-compare`로 비교 갈래 계산을 끌 수 있습니다. 같은 환자 · 목적의 첫 답은 메모리에서 다시 씁니다.
 - **장애**: LLM 호출이 실패하면 질문은 '보내지 못했습니다 · 다시 보내기'로 남고, 대화 상태는 바뀌지 않습니다. 사례 목록과 노트는 그대로 보입니다.
@@ -172,6 +183,7 @@ webdemo/backend/live.py       실제 LLM 만들기 · 네트워크 대기 중 �
 webdemo/backend/persist.py    대화 스냅숏 · 턴 기록 저장, 지난 대화 읽기, 번호 잇기
 webdemo/backend/clinic.py     의료진 대화(ClinicConversation) · 의료진 한 명(ClinicDesk) · 계정별 목록(DeskRegistry)
 webdemo/backend/review.py     규칙(RuleDefender · RuledArmRun) · 가린 값 목록 · 재작성 지시 보강 · 사례 단위로 빼기 · 최소 공개 단위 (공개 승인 · 후보가 줄어든 과정은 engine.Session)
+webdemo/backend/assist.py     검토 보조 에이전트: 세부 정보 요청마다 가린 값별 후보 수 · 조회 목적 · 함께 열기를 확인해 초안을 만든다
 tests/medicloak/              운영 모드 테스트 (가짜 HTTP 세션으로 실제 LLM 경로)
 ```
 
@@ -188,4 +200,4 @@ tests/medicloak/              운영 모드 테스트 (가짜 HTTP 세션으로 
 - 첫 답 나눠 쓰기는 서버 메모리에만 있습니다(키는 요청의 SHA-256). 서버를 다시 켜면 처음 여는 환자는 다시 실제 LLM을 부릅니다.
 - 실제 LLM 레드팀 결과는 답 형식 설정에 따라 달라집니다. 리포트 화면의 실행 이름에 '짧은 답 지시' · '답 형식 지시 없음'이 보이니 같은 설정끼리 비교하세요.
 - 후보 수(k)는 '누구인지'가 드러나는 것을 막습니다. 후보 전원이 같은 값을 가지면 그 값은 알려질 수 있습니다(동질성). 이 부분은 연구 과제로 남아 있습니다(ADR-0025).
-- 결정은 [ADR-0021](../docs/adr/0021-medicloak-production-mode.md) · [ADR-0022](../docs/adr/0022-medicloak-real-llm-everywhere-and-review-feedback.md) · [ADR-0023](../docs/adr/0023-medicloak-drop-failing-case-before-refusal.md) · [ADR-0024](../docs/adr/0024-medicloak-release-units-and-clinician-screen.md) · [ADR-0025](../docs/adr/0025-medicloak-same-answer-style-for-clinic-and-redteam.md) · [ADR-0026](../docs/adr/0026-medicloak-clinical-workflow-and-purpose-rule.md)에 있습니다.
+- 결정은 [ADR-0021](../docs/adr/0021-medicloak-production-mode.md) · [ADR-0022](../docs/adr/0022-medicloak-real-llm-everywhere-and-review-feedback.md) · [ADR-0023](../docs/adr/0023-medicloak-drop-failing-case-before-refusal.md) · [ADR-0024](../docs/adr/0024-medicloak-release-units-and-clinician-screen.md) · [ADR-0025](../docs/adr/0025-medicloak-same-answer-style-for-clinic-and-redteam.md) · [ADR-0026](../docs/adr/0026-medicloak-clinical-workflow-and-purpose-rule.md) · [ADR-0027](../docs/adr/0027-medicloak-review-assistant-and-product-wording.md)에 있습니다.

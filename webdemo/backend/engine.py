@@ -373,6 +373,21 @@ class Session:
         self.last_active = ap["at"]
         return ap
 
+    def what_if(self, item_ids: list[str]) -> dict[str, int]:
+        """
+        고른 가린 값을 지금 공개했다면 사례마다 후보 수 (검토 보조가 씀). approve와 같은 방식으로 누적 State 사본에 더해 세고,
+        State · 승인 기록은 바꾸지 않는다. 이미 공개한 값 · 없는 번호는 건너뛴다.
+        """
+        items = {x["id"]: x for x in self.hidden()}
+        chosen = [items[i] for i in dict.fromkeys(item_ids) if i in items and not items[i]["released"]]
+        r, kc = self.runs["C1"], self.ctx.kc
+        trial: dict[str, list[dict[str, Any]]] = {}
+        for x in chosen:
+            d = decision_of(self.logs["C1"], x["turn"], x["case"], x["index"])
+            base = trial.setdefault(x["case"], list(r.cases[x["case"]].committed) if x["case"] in r.cases else [])
+            base.append(dict(attribute=d["attribute"], node_id=d["node_id"], event_group=self._event_group_for(base, x, d)))
+        return {ref: kc.k(committed)["k"] for ref, committed in trial.items()}
+
     def _event_group_for(self, committed: list[dict[str, Any]], item: dict[str, Any], d: dict[str, Any]) -> str | None:
         """
         가린 값의 사건 묶음 표지는 그 턴 원 응답 추출의 것이다. 같은 사건의 다른 값(예: 약 이름)이 다시 확인 추출에서 다른 표지로

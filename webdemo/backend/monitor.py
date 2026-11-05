@@ -90,6 +90,7 @@ class Monitor:
         self._mids = itertools.count((store.max_seq("thread_message") if store else 0) + 1)
         self._seq_lock = threading.Lock()
         self.sim_status = "idle"
+        self.assistant: Any = None                  # 검토 보조 (assist.ReviewAssistant). create_app이 붙인다
 
     # ── 감사 기록 ──
     def log(self, action: str, session: Any = None, *, user: dict[str, Any] | None = None, actor: str | None = None,
@@ -243,7 +244,7 @@ class Monitor:
             v = mask(v)
             msgs = mask_messages(msgs)
         return dict(v, row=row, revealed=reveal, source_label=SOURCE_KO.get(s.source, s.source), live_arm=LIVE_ARM, messages=msgs,
-                    archived=bool(getattr(s, "archived", False)))
+                    archived=bool(getattr(s, "archived", False)), assist=self.assist_state(s))
 
     def reveal(self, s: Any, reason: str, user: dict[str, Any] | None = None) -> dict[str, Any]:
         self.log("reveal", s, user=user, reason=reason)
@@ -346,7 +347,28 @@ class Monitor:
         if audit:
             self.log(MSG_AUDIT[(sender, kind)], s, user=user, actor=ACTOR if sender == "security" else CLINICIAN, note=text, case=case)
         self._changed(s)
+        if sender == "clinician" and kind == "access_request" and self.assistant is not None and getattr(s, "source", None) == "clinic":
+            try:
+                self.assistant.schedule(s, m)           # 검토 초안은 뒤에서 만든다 (요청 응답은 기다리지 않는다)
+            except Exception as exc:
+                print(f"[medicloak] 검토 보조를 시작하지 못했습니다: {type(exc).__name__}: {exc}")
         return m
+
+    # ── 검토 보조 (assist.py) ──
+    def assist_state(self, s: Any) -> dict[str, Any]:
+        if getattr(s, "archived", False) or self.assistant is None:
+            return dict(status="none")
+        return self.assistant.state(s)
+
+    def assist_run(self, s: Any) -> dict[str, Any]:
+        if getattr(s, "archived", False):
+            raise Conflict("지난 대화에는 검토 초안을 만들 수 없습니다.")
+        if self.assistant is None or getattr(s, "source", None) != "clinic":
+            raise Conflict("검토 초안은 의료진 대화의 세부 정보 요청에만 만듭니다.")
+        try:
+            return self.assistant.schedule(s)
+        except LookupError as exc:
+            raise Conflict(str(exc)) from exc
 
     def thread(self, s: Any) -> dict[str, Any]:
         """관제 화면의 메시지 목록 (공개 승인 메시지의 값은 지운다. 값은 사유를 남긴 열람의 상세에서 본다)."""

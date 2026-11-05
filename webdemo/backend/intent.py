@@ -82,5 +82,5 @@ def candidates(seeds: list[dict[str, Any]], it: Intent) -> list[dict[str, Any]]:
     return [s for _, _, s in sorted(out, key=lambda x: (-x[0], x[1]))]
 
 
-HELP_TEXT = ("이 데모의 AI는 검색된 사례 기록에서 나이, 성별, 거주지, 진단, 시술, 처방 약, 관리 계획, 시기를 묻는 질문에 답합니다. "
+HELP_TEXT = ("이 진료 지원 AI는 검색된 사례 기록에서 나이, 성별, 거주지, 진단, 시술, 처방 약, 관리 계획, 시기를 묻는 질문에 답합니다. "
              "예: \"사례1 환자의 진단은 무엇인가요?\", \"이 환자가 그 약을 처방받은 시기를 알려 주세요.\"")

@@ -9,6 +9,7 @@ import { StatusChip } from '../common/StatusChip';
 import { ClueGraph } from '../graph/ClueGraph';
 import { AnswerTerms } from '../terminology/AnswerTerms';
 import { TermText } from '../terminology/TermText';
+import { AssistPanel } from './AssistPanel';
 import { ApprovalsList, ApprovePanel, CountsSection, RulesSection } from './ReviewTools';
 
 const TONE = { danger: 'danger', caution: 'caution', safe: 'safe' } as const;
@@ -118,11 +119,13 @@ export function SessionDetail({ detail: d, onReveal, onReview, onMessage, onDeta
   const [open, setOpen] = useState<Set<number>>(new Set());
   const [rulesOpen, setRulesOpen] = useState(false);
   const [approveOpen, setApproveOpen] = useState(false);
+  const [approveSeed, setApproveSeed] = useState<{ ids: string[]; reason: string } | null>(null);
   const [answers, setAnswers] = useState<Set<number>>(new Set());
   const [composer, setComposer] = useState<Composer | null>(null);
   const [graphOpen, setGraphOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const approveRef = useRef<HTMLDivElement>(null);
   const r = d.row;
   const c1 = d.arms[d.live_arm];
   const messages = d.messages ?? [];
@@ -134,10 +137,15 @@ export function SessionDetail({ detail: d, onReveal, onReview, onMessage, onDeta
     setGraphOpen(false);
     setRulesOpen(false);
     setApproveOpen(false);
+    setApproveSeed(null);
   }, [d.id]);
   useEffect(() => {
     if (composer) composerRef.current?.focus();
   }, [composer?.kind]); // eslint-disable-line react-hooks/exhaustive-deps
+  // 승인 창을 열면 (검토 보조에서 담은 경우 포함) 화면에 보이게 내린다
+  useEffect(() => {
+    if (approveOpen) approveRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }, [approveOpen, approveSeed]);
 
   const facts = useMemo<ClueFact[]>(
     () =>
@@ -296,11 +304,19 @@ export function SessionDetail({ detail: d, onReveal, onReview, onMessage, onDeta
             <MailQuestion className="mt-0.5 h-4 w-4 shrink-0 text-iris-text" aria-hidden />
             <span className="min-w-0 flex-1">
               <strong className="font-semibold">{pending.kind === 'access_request' ? '의료진이 세부 정보를 요청했습니다' : '의료진이 답장했습니다'}</strong>
-              {pending.case && <span className="ml-1 text-ink-2">({caseLabel(pending.case)})</span>}
+              {pending.case && <span className="ml-1 whitespace-nowrap text-ink-2">({caseLabel(pending.case)})</span>}
               <span className="mt-0.5 block text-xs text-ink-2">아래 메시지를 읽고 답장해 주세요. 답장은 의료진 화면의 보호 담당자 창에 바로 뜹니다.</span>
             </span>
             {pending.kind === 'access_request' && (
-              <button type="button" className="btn-secondary btn-sm" aria-expanded={approveOpen} onClick={() => setApproveOpen((v) => !v)}>
+              <button
+                type="button"
+                className="btn-secondary btn-sm"
+                aria-expanded={approveOpen}
+                onClick={() => {
+                  setApproveSeed(null);
+                  setApproveOpen((v) => !v);
+                }}
+              >
                 <ShieldCheck className="h-3.5 w-3.5" aria-hidden />
                 값 공개 승인
               </button>
@@ -310,11 +326,42 @@ export function SessionDetail({ detail: d, onReveal, onReview, onMessage, onDeta
             </button>
           </div>
         )}
-        {approveOpen && pending && !archived && <ApprovePanel d={d} caseRef={pending.case} onCancel={() => setApproveOpen(false)} onDetail={onDetail} />}
         {r.awaiting_clinician && !pending && <p className="mt-2 text-xs text-ink-3">의료진에게 확인 요청을 보냈고 답을 기다리는 중입니다.</p>}
       </header>
 
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
+        {pending && pending.kind === 'access_request' && !archived && (
+          <section aria-label="세부 정보 요청 검토" className="border-b border-line px-5 pb-4 pt-1">
+            <AssistPanel
+              d={d}
+              requestId={pending.id}
+              onApprove={(ids, reason) => {
+                setApproveSeed({ ids, reason });
+                setApproveOpen(true);
+              }}
+              onReply={(text) => {
+                setComposer({ kind: 'reply', text });
+                window.setTimeout(() => composerRef.current?.focus(), 0);          // 답장 칸이 이미 열려 있어도 그 칸으로 간다
+              }}
+            />
+            {approveOpen && (
+              <div ref={approveRef} className="scroll-mt-3">
+                <ApprovePanel
+                  key={approveSeed ? `seed:${approveSeed.ids.join(',')}` : 'plain'}
+                  d={d}
+                  caseRef={pending.case}
+                  onCancel={() => {
+                    setApproveOpen(false);
+                    setApproveSeed(null);
+                  }}
+                  onDetail={onDetail}
+                  initialPick={approveSeed?.ids}
+                  initialReason={approveSeed?.reason}
+                />
+              </div>
+            )}
+          </section>
+        )}
         {(messages.length > 0 || composer) && (
           <section aria-label="의료진과 주고받은 메시지" className="border-b border-line px-5 py-4">
             <h3 className="mb-2.5 flex items-center gap-1.5 text-[13px] font-bold text-ink-2">

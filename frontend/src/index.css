@@ -254,6 +254,10 @@
   .kbd {
     @apply inline-flex h-5 min-w-5 items-center justify-center rounded-[5px] border border-line bg-surface-2 px-1 font-mono text-[11px] text-ink-2;
   }
+  /* 로그인 화면의 '비공개' 막대 (어두운 머리 판 위) */
+  .login-hatch {
+    background: repeating-linear-gradient(135deg, #5fd3c7 0 1.5px, transparent 1.5px 5px), rgba(95, 211, 199, 0.08);
+  }
   .redact {
     display: inline-block;
     vertical-align: middle;

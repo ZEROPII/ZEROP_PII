@@ -18,6 +18,7 @@
 #     GET  /api/watch/{대화}/…                           그 대화의 의료진 화면 계약을 숫자 그대로 (위와 같은 경로, 읽기 전용)
 #     GET  /api/monitor/overview · /policy · /sessions/{sid} · /audit
 #     POST /api/monitor/sessions/{sid}/reveal {reason} · /review {action, note} · /messages {kind, text, case}   GET …/messages
+#     GET · POST /api/monitor/sessions/{sid}/assist   검토 보조 초안 (세부 정보 요청이 오면 뒤에서 만든다. 보내지는 않는다)
 #     POST /api/redteam · GET /api/redteam/{id} · GET /api/poc     평가 지표 대시보드 GET /eval/
 #   로그인 (운영 모드)
 #     POST /api/auth/login {username, password} · /api/auth/logout     GET /api/auth/me
@@ -43,18 +44,20 @@ from core.llm_client import LLMError
 from medical.config import ROOT
 from medical.terminology_api import terminology_router
 from webdemo.backend import redact
+from webdemo.backend.assist import ReviewAssistant
 from webdemo.backend.auth import COOKIE, ROLE_KO, SESSION_TTL, Auth, LoginBlocked, roles_for, route_path, user_view
 from webdemo.backend.clinic import ArchivedConversation, ClinicConversation, ClinicDesk, Conflict, DeskRegistry, NotFound
 from webdemo.backend.engine import ARMS, DemoError, Engine, summarize
 from webdemo.backend.fhir import FEATURED, OutpatientEmr, fhir_router, find_trial, worklist
 from webdemo.backend.monitor import REVIEW_KO, Monitor
 from webdemo.backend.persist import Persist
+from webdemo.backend.review import RELEASE_VERSION
 
 HERE = Path(__file__).resolve().parent
 DIST = Path(os.environ.get("WEBDEMO_DIST") or ROOT / "frontend" / "dist")
 POC_FILE = HERE.parent / "data" / "poc_summary.json"
 EVAL_DIR = ROOT / "eval_demo"
-PRODUCT_LOCATION = "MediCloak 가상 EMR (Synthea 합성 환자)"
+PRODUCT_LOCATION = "MediCloak 외래 진료 지원"
 # 운영 모드: 의료진 대화는 EMR에서 환자를 열 때 시작한다 (기본 환자를 저절로 열지 않음). 열린 대화가 없으면 409와 이 머리글.
 NO_CONVERSATION = "열린 진료 지원 AI 대화가 없습니다. 외래 진료 목록에서 환자를 열어 주세요."
 NO_CONVERSATION_HEADERS = {"X-MediCloak-State": "no-conversation"}
@@ -166,6 +169,7 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
         store = product.store if product else None
         persist = Persist(store, eng) if store is not None else None
         mon = Monitor(eng, store, on_session_change=persist.save_session if persist else None)
+        mon.assistant = ReviewAssistant(eng, mon.log)          # 세부 정보 요청이 오면 검토 초안을 만든다 (assist.py)
         registry = DeskRegistry(eng, trial=trial or os.environ.get("WEBDEMO_TRIAL") or "T0014",
                                 llm_mode="live" if eng.live_ctx is not None else "oracle",
                                 compare=product.compare if product else True,
@@ -362,7 +366,7 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
     def health() -> dict[str, Any]:
         e = eng()
         live = e.live_ctx is not None
-        out = dict(status="ok", backend="medicloak" if state["store"] is not None else "webdemo", product="MediCloak",
+        out = dict(status="ok", backend="medicloak" if state["store"] is not None else "webdemo", product="MediCloak", release=RELEASE_VERSION,
                    target=e.live_label if live else "결정적 응답기 (LLM 없음)", monitor=True, simulations=mon().sim_status,
                    auth=state["auth"] is not None,
                    llm=dict(mode="live" if live else "oracle", label=e.live_label, live=live,
@@ -470,7 +474,7 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
         d = opened(request)
         tid = (body.trialId if body else None) or d.session.trial_id
         guard(lambda: d.start(tid))
-        mon().log("clinic_start", d.session, user=user_of(request), actor="의료진 (데모)")
+        mon().log("clinic_start", d.session, user=user_of(request), actor="의료진")
         return dict(status="ok", workspaceId=d.workspace_id, trialId=tid)
 
     @r.get("/clinic/messages")
@@ -526,7 +530,7 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
     # ── 가상 EMR (운영 모드) ─────────────────────────────
     def emr() -> OutpatientEmr:
         if state["emr"] is None:
-            raise HTTPException(404, "가상 EMR은 운영 모드(python -m medicloak)에서만 켜집니다.")
+            raise HTTPException(404, "EMR 연동은 운영 모드(python -m medicloak)에서만 켜집니다.")
         return state["emr"]
 
     @r.get("/emr/worklist")
@@ -728,6 +732,16 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
         ap = guard(lambda: mon().approve(s, conv, body.items, body.reason, user=user_of(request)))
         shown = dict(ap, items=[dict(x, value=None) for x in ap["items"]])          # 값은 열람 뒤 상세에서만
         return dict(approval=shown, detail=mon().detail(s))
+
+    # ── 검토 보조: 세부 정보 요청의 검토 초안 (assist.py). 보내는 일은 하지 않는다 ──
+    @r.get("/monitor/sessions/{sid}/assist")
+    def assist_state(sid: str) -> dict[str, Any]:
+        return mon().assist_state(sess(sid))
+
+    @r.post("/monitor/sessions/{sid}/assist")
+    def assist_run(sid: str) -> dict[str, Any]:
+        s = sess(sid)
+        return guard(lambda: mon().assist_run(s))
 
     @r.get("/monitor/audit")
     def audit() -> list[dict[str, Any]]:
