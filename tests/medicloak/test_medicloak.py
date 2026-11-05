@@ -819,6 +819,97 @@ def test_answer_style_off_is_one_switch_and_does_not_reuse_styled_first_answers(
     assert not any("[검색된 사례]" in k for k in eng.turn0_cache.answers)
 
 
+def test_live_suggestions_follow_the_query_purpose_without_reidentification_probes(world):
+    """실제 LLM 대화의 예시 질문은 조회 목적(처방 참고)에 맞는 진료 질문이다. 나이 · 성별 · 거주 지역을 그대로 묻는 연구용 문장은 없다."""
+    add_user(world["store"], "doctor_sg", "예시", "clinician", "내과", PW)
+    doc = login(world, "doctor_sg")
+    launch(doc, "T0014")
+    sug = doc.get("/api/cases/case-2/suggestions").json()
+    assert [x["scope"] for x in sug] == ["case"] * 4 + ["all"]
+    assert all("사례2" in x["question"] for x in sug if x["scope"] == "case")
+    text = " ".join(x["question"] for x in sug)
+    assert "처방" in text and not any(w in text for w in ("거주", "성별", "연령", "나이"))
+
+
+def test_all_cases_question_goes_without_case_prefix_and_is_marked(world):
+    """'찾은 사례 전체'로 물으면 고른 사례 표기를 붙이지 않고 보내고, 메시지에 범위가 남는다. 판정은 그대로 사례마다 한다."""
+    fake: FakeAnthropic = world["fake"]
+    add_user(world["store"], "doctor_all", "전체질문", "clinician", "내과", PW)
+    doc = login(world, "doctor_all")
+    _, sid = launch(doc, "T0014")
+    n0 = len(fake.calls)
+    q = "찾은 사례들에서 공통으로 쓴 약과 사례마다 다른 약을 정리해 주세요."
+    r = doc.post("/api/cases/case-1/messages", json=dict(sessionId=sid, question=q, clientMessageId="all1", scope="all"))
+    assert r.status_code == 200, r.text
+    target = next(c for c in fake.calls[n0:] if c["payload"].get("system"))
+    assert target["payload"]["messages"][-1]["content"] == f"검색된 사례 전체에 대한 질문: {q}"
+    assert r.json()["userMessage"]["scope"] == "all"
+    assert doc.get("/api/cases/case-1/session").json()["messages"][-2]["scope"] == "all"
+    bad = doc.post("/api/cases/case-1/messages", json=dict(sessionId=sid, question="약을 알려 주세요", clientMessageId="bad", scope="nope"))
+    assert bad.status_code == 422
+
+
+def test_question_progress_reports_live_calls_while_answering(world):
+    """질문에 답하는 동안 /api/clinic/progress가 지금 단계와 실제 LLM 호출 수를 알려 준다 (화면 갈래의 호출만)."""
+    fake: FakeAnthropic = world["fake"]
+    add_user(world["store"], "doctor_pg", "진행표시", "clinician", "내과", PW)
+    doc = login(world, "doctor_pg")
+    _, sid = launch(doc, "T0014")
+    assert doc.get("/api/clinic/progress").json() == {"active": False}
+    got: list = []
+    snaps: list = []
+    fake.delay = 0.2
+    try:
+        t = threading.Thread(target=lambda: got.append(doc.post("/api/cases/case-1/messages",
+                                                                 json=dict(sessionId=sid, question=Q_DRUG, clientMessageId="pg1"))))
+        t.start()
+        watcher = login(world, "doctor_pg")
+        deadline = time.time() + 30
+        while t.is_alive() and time.time() < deadline:
+            p = watcher.get("/api/clinic/progress").json()
+            if p["active"]:
+                snaps.append(p)
+            time.sleep(0.05)
+        t.join(30)
+    finally:
+        fake.delay = 0.0
+    assert got and got[0].status_code == 200, got and got[0].text
+    assert snaps and max(x["calls"] for x in snaps) >= 2
+    assert {x["label"] for x in snaps} & {"진료 지원 AI가 답을 쓰고 있습니다", "답에서 환자를 알아볼 수 있는 단서를 찾고 있습니다"}
+    assert doc.get("/api/clinic/progress").json() == {"active": False}
+
+
+def test_residence_is_hidden_for_every_query_purpose(world):
+    """거주 지역은 어느 조회 목적에도 진료 판단에 쓰지 않아, 후보 수와 관계없이 가린다 (조회 목적 규칙)."""
+    fake: FakeAnthropic = world["fake"]
+    add_user(world["store"], "doctor_rg", "지역질문", "clinician", "내과", PW)
+    doc = login(world, "doctor_rg")
+    _, sid = launch(doc, "T0014")
+    q = "사례1 환자의 거주 지역을 알려 주세요"
+    fake.regions = {"사례1": "Boston, Massachusetts"}
+    try:
+        r = doc.post("/api/cases/case-1/messages", json=dict(sessionId=sid, question=q, clientMessageId="rg1"))
+    finally:
+        fake.regions = {}
+    assert r.status_code == 200, r.text
+    msg = r.json()["assistantMessage"]
+    assert "Boston" not in "".join(x["text"] for x in msg["segments"])
+    region = [t for t in msg["protection"]["transformations"] if t["attribute"] == "REGION"]
+    assert region and all(t["action"] == "suppress" and t["purpose"] for t in region)
+    ents = doc.get("/api/cases/case-1/disclosures").json()["entries"]
+    assert [e["action"] for e in ents if e["attribute"] == "REGION"] == ["suppress"]
+    # 보안 담당자: 판정 기록에 조회 목적이 남고, 공개 승인 목록에는 오르지 않는다
+    sec = login(world, "privacy1")
+    w = current_conv(sec, "지역질문")
+    rec = world["eng"].sessions[w].logs["C1"][-1]
+    region_d = [d for p in rec["release_plans"] for d in p["decisions"] if d["attribute"] == "REGION"]
+    assert region_d and all(d["action"] == "suppress" and d.get("purpose") for d in region_d)
+    assert "medicloak-release-v4" == world["eng"].sessions[w].runs["C1"].trial["versions"]["medicloak_release"]
+    hidden = sec.get(f"/api/monitor/sessions/{w}/hidden").json()
+    items = hidden["items"] if isinstance(hidden, dict) else hidden
+    assert not any(x["attribute"] == "REGION" for x in items)
+
+
 def test_redteam_with_every_llm_call_failing_ends_as_error(world):
     """LLM 호출이 모두 실패한 질의 환자는 '깨끗함'으로 세지 않는다. 처음 세 명이 모두 실패하면 결과 없이 오류로 끝난다."""
     eng = world["eng"]

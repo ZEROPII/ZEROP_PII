@@ -131,6 +131,14 @@ export function PatientBanner() {
             <UserRound className="h-3.5 w-3.5" aria-hidden />
           </span>
           진료 중 환자
+          {p && !state.noConversation && (
+            <span
+              className="hidden rounded-[5px] border border-line px-1.5 py-px text-[10.5px] font-semibold text-ink-3 lg:inline"
+              title="진료 지원 AI에는 이 요약(연령대 · 성별 · 주진단 · 동반질환 · 고려 중 처치 · 조회 목적)만 보냅니다. 이름 · 생년 · 주소는 보내지 않습니다."
+            >
+              AI에 보내는 요약
+            </span>
+          )}
         </span>
         {state.noConversation ? (
           <span className="flex min-w-0 flex-1 items-center gap-3 text-xs text-ink-3">

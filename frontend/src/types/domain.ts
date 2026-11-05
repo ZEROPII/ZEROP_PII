@@ -68,6 +68,8 @@ export interface PrivacyTransformation {
   dropped?: boolean;
   /** 위험 때문이 아니라 정해진 공개 단위로 바꾼 값 (나이 5세 구간 · 날짜 월, ADR-0024) */
   floor?: boolean;
+  /** 조회 목적에 필요 없는 단서라 가린 값 (거주 지역, ADR-0026) */
+  purpose?: boolean;
 }
 
 /** 응답 본문 조각. 보호 조치가 걸린 조각은 transformationId로 메타데이터를 가리킨다. */
@@ -129,6 +131,8 @@ export interface ChatMessage {
   status: MessageDeliveryStatus;
   /** 데모 백엔드만: 대화 전체의 턴 번호 (공개 이력 turn과 같은 번호). 답할 기록이 없었으면 null. */
   engineTurn?: number | null;
+  /** user 메시지: 질문 범위 (all이면 찾은 사례 전체에 물은 질문) */
+  scope?: QuestionScope;
 }
 
 export interface ConversationSession {
@@ -194,6 +198,8 @@ export interface ProtectionPolicy {
   /** 로그 눈금 막대의 최대 후보 수 (모집단 규모). 의료진 화면 API에서는 null */
   populationSize: number | null;
   source: DataSource;
+  /** 실제 LLM 대화인지 (모든 사례에 묻기 · 진행 표시는 실제 LLM 대화에서만) */
+  live?: boolean;
 }
 
 export interface WorkspaceEnvironment {
@@ -206,7 +212,12 @@ export interface WorkspaceEnvironment {
 export interface SuggestedQuestion {
   label: string;
   question: string;
+  /** case: 고른 사례에 묻기 · all: 찾은 사례 전체에 묻기 */
+  scope?: QuestionScope;
 }
+
+/** 질문 범위: 고른 사례 하나(case) · 찾은 사례 전체(all) */
+export type QuestionScope = 'case' | 'all';
 
 export interface PreflightRiskAssessment {
   caseId: CaseId;
@@ -288,6 +299,7 @@ export interface SendQuestionRequest {
   question: string;
   /** 클라이언트 쪽 임시 메시지와 응답을 잇는 키 */
   clientMessageId: string;
+  scope?: QuestionScope;
 }
 
 export interface SendQuestionResponse {

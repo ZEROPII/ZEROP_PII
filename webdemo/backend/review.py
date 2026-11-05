@@ -20,6 +20,8 @@
 #   사례 단위로 빼기 : 재작성 · 값 치환이 모두 다시 확인을 통과하지 못하면 연구 모듈은 답 전체를 거절 문장으로 바꾼다.
 #                     그 전에 통과하지 못한 사례만 답에서 빼고(그 사례를 가리키는 머리줄 묶음 · 문장) 한 번 더 확인한다.
 #                     통과하면 그 답을 내고(CASE_DROPPED) 뺀 사례의 판정은 모두 가림으로 남긴다. 통과하지 못하면 거절 그대로.
+#   조회 목적 (ADR-0026) : 어느 조회 목적(처방 · 시술·치료 · 경과·관리)에도 거주 지역은 진료 판단에 쓰지 않는다. 실제 LLM 갈래에서는
+#                     후보 수와 관계없이 늘 가린다 (목적 외 이용 금지). 보안 담당자 규칙과 같은 길(blocked)로 계획 · 다시 확인에 건다.
 #   최소 공개 단위 (ADR-0024) : 나이는 5세 구간(93세 → 90~94세), 날짜는 월(2018-03-24 → 2018-03)보다 자세히 내지 않는다.
 #                     온톨로지의 넓힘 사슬(정확한 값 → 5세 구간 → 10세 구간, 일 → 월 → 분기 → 연)을 따른다. 또 답의 글자가 후보를
 #                     센 노드보다 자세하면(예: 노드 90~99세로 센 '93-98세') 그 노드 이름으로 바꾼다. 내보낸 글자와 센 값이 늘 같다.
@@ -40,8 +42,10 @@ from medical.session import ArmRun, Release
 from medical.tracking import view_of
 
 CASE_DROPPED = "CASE_DROPPED"                 # 통과하지 못한 사례를 뺀 답
-ROUNDED = "ROUNDED"                           # 나이 · 날짜를 최소 공개 단위로만 바꾼 답 (재작성기 없이)
-RELEASE_VERSION = "medicloak-release-v3"       # 재작성 지시 보강 · 사례 단위로 빼기 · 최소 공개 단위 (실제 LLM 갈래의 versions에 남긴다)
+ROUNDED = "ROUNDED"
+#: 조회 목적마다 진료 판단에 쓰지 않는 단서 (실제 LLM 갈래에서 늘 가림)
+PURPOSE_UNNEEDED: dict[str, frozenset[str]] = {q: frozenset({"REGION"}) for q in ("PRESCRIPTION", "TREATMENT_PROCEDURE", "COURSE_CARE")}                           # 나이 · 날짜를 최소 공개 단위로만 바꾼 답 (재작성기 없이)
+RELEASE_VERSION = "medicloak-release-v4"       # 재작성 지시 보강 · 사례 단위로 빼기 · 최소 공개 단위 · 조회 목적 (실제 LLM 갈래의 versions에 남긴다)
 
 # 최소 공개 단위: 이 노드보다 자세한 값은 내지 않는다 (온톨로지 노드 이름 규칙: AGE_Y93 · AGE5_90 · AGE10_90, …_DAY_ · _MONTH_ …)
 FLOOR_ATTRS = ("AGE", "PERIOD")
@@ -329,12 +333,14 @@ class RuledArmRun(ArmRun):
         self.rules = rules
         self.live = live
         self._retry_note: str | None = None          # 다시 확인에 떨어진 뒤 다음 재작성에 알려 줄 것 (실제 LLM)
+        # 조회 목적에 필요 없는 단서: 사례와 관계없이 늘 가림 (실제 LLM 갈래, 의료진 대화 · 레드팀 같음)
+        self.purpose_blocked = PURPOSE_UNNEEDED.get(getattr(prefix, "query_type", ""), frozenset()) if live else frozenset()
         super().__init__(ctx, prefix, arm, log)
         if live:
             self.trial["versions"] = dict(self.trial.get("versions") or {}, medicloak_release=RELEASE_VERSION)
 
     def blocked(self, ref: str) -> set[str]:
-        return {a for r, a in self.rules() if r == ref}
+        return {a for r, a in self.rules() if r == ref} | set(self.purpose_blocked)
 
     @property
     def ctx(self) -> Any:
@@ -364,7 +370,15 @@ class RuledArmRun(ArmRun):
         return self._drop_failing(query, rel)
 
     def _mark_floor(self, rel: Release) -> Release:
-        """기록의 판정에 '최소 공개 단위로 바꿈(floor)'을 남긴다 (화면 설명 · 감사용). 계획과 판정 순서는 연구 모듈과 같다."""
+        """
+        기록의 판정에 '최소 공개 단위로 바꿈(floor)'과 '조회 목적에 필요 없어 가림(purpose)'을 남긴다 (화면 설명 · 감사용).
+        계획과 판정 순서는 연구 모듈과 같다. 보안 담당자 규칙으로도 막힌 단서는 규칙이 먼저다.
+        """
+        ruled = set(self.rules())
+        for pd in rel.plans:
+            for xd in pd["decisions"]:
+                if xd["action"] == SUPPRESS and xd["attribute"] in self.purpose_blocked and (pd["ref"], xd["attribute"]) not in ruled:
+                    xd["purpose"] = True
         plans = getattr(self._ctx.defender, "last_plans", None) or []
         if len(plans) != len(rel.plans):
             return rel
@@ -519,8 +533,8 @@ def hidden_items(logs: list[dict[str, Any]], approvals: list[dict[str, Any]]) ->
         for p in rec.get("release_plans") or []:
             for i, d in enumerate(p["decisions"]):
                 action = SUPPRESS if refusal else d["action"]
-                if action == ALLOW:
-                    continue
+                if action == ALLOW or (d.get("purpose") and not refusal):
+                    continue                              # 조회 목적에 필요 없어 가린 값은 공개 승인 대상이 아니다
                 out.append(dict(id=f"{rec['turn']}:{p['ref']}:{i}", turn=rec["turn"], case=p["ref"], index=i, attribute=d["attribute"],
                                 action=action, kIfRaw=d.get("k_raw"), released=(rec["turn"], p["ref"], i) in released,
                                 dropped=bool(d.get("dropped"))))

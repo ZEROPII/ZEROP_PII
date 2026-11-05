@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, type ReactNode } from 'react';
 import { api as defaultApi, type ClinicalCaseApi } from '../api';
 import { isNoConversation } from '../api/types';
-import type { CaseId, ChatMessage } from '../types/domain';
+import type { CaseId, ChatMessage, QuestionScope } from '../types/domain';
 import { initialWorkspaceState, workspaceReducer, type WorkspaceState } from './workspaceReducer';
 
 export interface WorkspaceActions {
@@ -9,7 +9,7 @@ export interface WorkspaceActions {
   selectCase(caseId: CaseId): void;
   loadSession(caseId: CaseId, force?: boolean): void;
   loadDisclosures(caseId: CaseId, force?: boolean): void;
-  sendQuestion(caseId: CaseId, question: string): Promise<boolean>;
+  sendQuestion(caseId: CaseId, question: string, scope?: QuestionScope): Promise<boolean>;
   retryMessage(caseId: CaseId, message: ChatMessage): void;
   discardMessage(caseId: CaseId, messageId: string): void;
   /** 새 대화로 다시 시작 (trialId를 주면 그 질의 환자로). 백엔드가 지원할 때만. */
@@ -121,7 +121,7 @@ export function WorkspaceProvider({ children, api = defaultApi }: { children: Re
   }, [api]);
 
   const sendQuestion = useCallback(
-    async (caseId: CaseId, question: string): Promise<boolean> => {
+    async (caseId: CaseId, question: string, scope: QuestionScope = 'case'): Promise<boolean> => {
       const text = question.trim();
       const slot = stateRef.current.sessions[caseId];
       if (!text || !slot?.data || slot.sending) return false;
@@ -135,10 +135,11 @@ export function WorkspaceProvider({ children, api = defaultApi }: { children: Re
         createdAt: new Date().toISOString(),
         segments: [{ kind: 'text', text }],
         status: 'pending',
+        scope,
       };
       dispatch({ type: 'send/start', caseId, pending });
       try {
-        const response = await api.sendQuestion({ caseId, sessionId: slot.data.sessionId, question: text, clientMessageId });
+        const response = await api.sendQuestion({ caseId, sessionId: slot.data.sessionId, question: text, clientMessageId, scope });
         // 응답은 요청한 사례에만 반영한다 (그 사이 다른 사례를 골랐어도 섞이지 않음).
         dispatch({ type: 'send/success', caseId, clientMessageId, response });
         return true;
@@ -158,7 +159,7 @@ export function WorkspaceProvider({ children, api = defaultApi }: { children: Re
     (caseId: CaseId, message: ChatMessage) => {
       const text = message.segments.map((s) => s.text).join('');
       dispatch({ type: 'message/discard', caseId, messageId: message.messageId });
-      void sendQuestion(caseId, text);
+      void sendQuestion(caseId, text, message.scope ?? 'case');
     },
     [sendQuestion],
   );

@@ -65,12 +65,14 @@ export function protectionNote(p: ProtectionResult): Notice | null {
   if (mode === 'REFUSAL_EXTRACTION_FAILED') return { tone: 'info', text: '답을 확인하지 못해 보내지 않았습니다. 질문을 조금 바꿔 다시 물어보세요.' };
   if (mode.startsWith('REFUSAL')) return { tone: 'lock', text: '이 질문에는 개인정보 보호를 위해 답하지 않았습니다.' };
   if (mode === 'CASE_DROPPED') return { tone: 'lock', text: '환자를 알아볼 위험이 있는 사례는 이 답에서 뺐습니다.' };
-  const sup = p.transformations.some((t) => t.action === 'suppress');
+  const sup = p.transformations.some((t) => t.action === 'suppress' && !t.purpose);
   const gen = p.transformations.some((t) => t.action === 'generalize' && !t.floor);
   const unit = p.transformations.some((t) => t.action === 'generalize' && t.floor);
+  const off = p.transformations.some((t) => t.action === 'suppress' && t.purpose);
   if (sup && gen) return { tone: 'lock', text: '개인을 알아볼 수 있는 값은 범위로 바꾸거나 비공개로 표시했습니다.' };
   if (sup) return { tone: 'lock', text: '개인을 알아볼 수 있는 값은 비공개로 표시했습니다.' };
   if (gen) return { tone: 'range', text: '개인을 알아볼 수 있는 값은 정확한 값 대신 범위로 표시했습니다.' };
+  if (off) return { tone: 'lock', text: '이번 조회 목적에 필요하지 않은 정보는 답에서 뺐습니다.' };
   if (unit) return { tone: 'range', text: '나이 · 날짜는 정해진 공개 단위로 표시했습니다.' };
   return null;
 }
@@ -78,7 +80,8 @@ export function protectionNote(p: ProtectionResult): Notice | null {
 /** '왜 그런가요?'를 눌렀을 때의 설명. */
 export function whyText(p: ProtectionResult, caseLabel: string): string[] {
   const kept = p.transformations.filter((t) => !t.dropped);
-  const sup = joinNames(kept.filter((t) => t.action === 'suppress').map(attrName));
+  const sup = joinNames(kept.filter((t) => t.action === 'suppress' && !t.purpose).map(attrName));
+  const off = joinNames(kept.filter((t) => t.action === 'suppress' && t.purpose).map(attrName));
   const gen = joinNames(kept.filter((t) => t.action === 'generalize' && !t.floor).map(attrName));
   const unit = joinNames(kept.filter((t) => t.action === 'generalize' && t.floor).map(attrName));
   const dropped = joinNames(p.transformations.filter((t) => t.dropped && t.caseRef).map((t) => refLabel(t.caseRef!)));
@@ -95,8 +98,16 @@ export function whyText(p: ProtectionResult, caseLabel: string): string[] {
     out.push(`${josa(gen, '은', '는')} 정확한 값이면 해당하는 환자가 적어, 뜻은 유지하면서 한 단계 넓은 범위로 바꿔 보여 드렸습니다.`);
   if (unit)
     out.push(`${josa(unit, '은', '는')} 위험과 관계없이 정해진 공개 단위로만 보여 드립니다. 나이는 5세 구간, 날짜는 월 단위보다 자세히 보이지 않습니다.`);
+  if (off) out.push(`${josa(off, '은', '는')} 이번 조회 목적(처방 · 시술 · 경과 참고)에 쓰지 않는 정보라, 위험과 관계없이 답에서 뺐습니다.`);
   out.push('앞선 질문에서 나온 내용과 함께 판단하므로, 같은 값도 대화가 이어지면 다르게 보일 수 있습니다.');
   return out;
+}
+
+/** 진료 기록에 붙일 글: 출처(진료 지원 AI · 사례) 머리와 보호 처리 꼬리를 붙인다. */
+export function chartCopyText(text: string, caseLabel: string, opts: { all?: boolean; protectedCount?: number } = {}): string {
+  const head = `[진료 지원 AI · 유사 사례 참고 · ${opts.all ? '찾은 사례 전체' : caseLabel}]`;
+  const tail = opts.protectedCount ? '\n(MediCloak: 개인을 알아볼 수 있는 일부 값은 범위로 바꾸거나 비공개로 처리됨)' : '';
+  return `${head}\n${text.trim()}${tail}`;
 }
 
 /** 세부 정보가 제한된 사례를 골랐을 때의 안내. */

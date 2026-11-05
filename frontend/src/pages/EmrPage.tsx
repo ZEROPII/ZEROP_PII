@@ -5,6 +5,7 @@ import { emrApi, fhirDate, fhirLabel, type FhirResource } from '../api/emrApi';
 import { ErrorState, LoadingState } from '../components/common/StatusViews';
 import { useToast } from '../components/layout/Toast';
 import { useWorkspace } from '../state/WorkspaceContext';
+import { koreanNames } from '../lib/koTerms';
 import type { LaunchProgress, WorklistPatient } from '../types/domain';
 
 const SEX_KO = { male: '남', female: '여', unknown: '성별 미상' } as const;
@@ -117,9 +118,10 @@ export function EmrPage() {
     if (!list) return [];
     const inTab = tab === 'ALL' ? list : list.filter((p) => p.status === tab);
     if (!t) return inTab;
+    // 진단 이름이 영어라 한국어 이름(기관지염 · 치은염 …)도 함께 찾는다
     return inTab.filter((p) =>
       [p.identifier, ...p.conditions, ...p.purposes.map((x) => `${x.mainDx ?? ''} ${x.item ?? ''} ${x.purposeLabel}`)].some((s) =>
-        s.toLowerCase().includes(t),
+        `${s} ${koreanNames(s)}`.toLowerCase().includes(t),
       ),
     );
   }, [list, q, tab]);
@@ -190,6 +192,9 @@ export function EmrPage() {
   }
 
   const sel = patient?.purposes.find((x) => x.purpose === purpose) ?? null;
+  // 진료 목적이 모두 같은 날 기준이면 날짜를 한 번만 보인다
+  const days = [...new Set((patient?.purposes ?? []).map((x) => x.visitDate))];
+  const sameDay = days.length === 1 ? days[0] : null;
   const selIsCurrent = !!sel && sel.trialId === currentTrial;
   const switching = !!current && !!sel && !selIsCurrent;
 
@@ -219,7 +224,7 @@ export function EmrPage() {
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="환자 번호, 진단, 처치"
+              placeholder="환자 번호, 진단(한글 · 영문), 처치"
               className="h-9 w-full rounded-control border border-line-input bg-surface pl-8 pr-3 text-[13px] text-ink outline-none placeholder:text-ink-3 focus:border-focus"
             />
           </label>
@@ -330,8 +335,13 @@ export function EmrPage() {
                 </p>
               </header>
               <div className="border-t border-line px-4 py-3.5">
-                <p id="purpose-label" className="text-xs font-semibold text-ink-3">
+                <p id="purpose-label" className="flex items-baseline justify-between gap-2 text-xs font-semibold text-ink-3">
                   진료 목적
+                  {sameDay && (
+                    <span className="num font-normal" title="진료 지원 AI는 이 날의 진료를 기준으로 환자 요약(연령대 · 주진단 · 고려 중인 처치)을 만듭니다">
+                      {sameDay} 진료 기준
+                    </span>
+                  )}
                 </p>
                 <div role="radiogroup" aria-labelledby="purpose-label" className="mt-2 space-y-1.5">
                   {patient.purposes.map((x) => {
@@ -344,9 +354,11 @@ export function EmrPage() {
                         <input type="radio" name="purpose" className="mt-1 accent-[var(--zp-iris)]" checked={on} onChange={() => setPurpose(x.purpose)} />
                         <span className="min-w-0 text-[13px]">
                           <span className="font-semibold text-ink">{x.purposeLabel}</span>
-                          <span className="num ml-2 text-xs text-ink-3" title="진료 지원 AI는 이 날의 진료를 기준으로 환자 요약(연령대 · 주진단 · 고려 중인 처치)을 만듭니다">
-                            {x.visitDate} 진료 기준
-                          </span>
+                          {!sameDay && (
+                            <span className="num ml-2 text-xs text-ink-3" title="진료 지원 AI는 이 날의 진료를 기준으로 환자 요약(연령대 · 주진단 · 고려 중인 처치)을 만듭니다">
+                              {x.visitDate} 진료 기준
+                            </span>
+                          )}
                           <span className="mt-0.5 block text-ink-2">
                             {x.mainDx}
                             {x.item ? ` · 고려 중: ${x.item}` : ''}

@@ -39,6 +39,43 @@ MAX_QUESTION = 1000                     # 의료진 질문 한 건의 최대 글
 _REF = re.compile(r"사례(\d+)")
 
 
+
+# ── 진료 목적별 예시 질문 (실제 LLM 대화) ─────────────────────────
+# 연구용 질문 목록(나이 · 성별 · 거주 지역을 그대로 묻는 재식별 시험 문장)은 레드팀 · 데모 응답기에만 쓰고, 의료진 화면에는
+# 조회 목적에 맞는 진료 질문을 보인다. '{ref}'는 고른 사례 표기(사례1)로 바꾼다.
+CLINICAL_QUESTIONS: dict[str, list[tuple[str, str]]] = {
+    "PRESCRIPTION": [
+        ("처방 약", "{ref} 환자에게 처방된 약과 복용 기간을 알려 주세요."),
+        ("함께 쓴 약", "{ref} 환자에게 같은 시기에 함께 처방된 약이 있었나요?"),
+        ("처방 변경", "{ref} 환자가 처방을 바꾸거나 중단한 기록이 있나요?"),
+        ("처방 이유", "{ref} 환자에게 그 약이 어떤 진단으로 처방되었나요?"),
+    ],
+    "TREATMENT_PROCEDURE": [
+        ("시술 · 치료", "{ref} 환자는 어떤 시술이나 치료를 받았나요?"),
+        ("시술 전후 약", "{ref} 환자가 시술 전후로 쓴 약이 있나요?"),
+        ("시술 뒤 관리", "{ref} 환자의 시술 뒤 관리 계획은 무엇이었나요?"),
+        ("관련 진단", "{ref} 환자가 그 시술을 받게 된 진단은 무엇인가요?"),
+    ],
+    "COURSE_CARE": [
+        ("관리 계획", "{ref} 환자는 어떤 관리 계획을 받았나요?"),
+        ("경과", "{ref} 환자의 진단이 이후 어떻게 바뀌었나요?"),
+        ("다시 진료", "{ref} 환자가 같은 문제로 다시 진료받은 기록이 있나요?"),
+        ("관리 중 약", "{ref} 환자가 관리 기간에 쓴 약을 알려 주세요."),
+    ],
+}
+ALL_CASE_QUESTIONS: dict[str, list[tuple[str, str]]] = {
+    "PRESCRIPTION": [("공통 처방", "찾은 사례들에서 공통으로 쓴 약과 사례마다 다른 약을 정리해 주세요.")],
+    "TREATMENT_PROCEDURE": [("공통 시술", "찾은 사례들에서 공통으로 받은 시술과 사례마다 다른 점을 정리해 주세요.")],
+    "COURSE_CARE": [("관리 비교", "찾은 사례들의 관리 계획을 비교해 공통점과 차이를 정리해 주세요.")],
+}
+
+
+def clinical_questions(qtype: str, ref: str) -> list[dict[str, Any]]:
+    """조회 목적(qtype)에 맞는 진료 질문: 고른 사례 질문 넷 + 모든 사례 질문 하나."""
+    one = [dict(label=label, question=text.format(ref=ref), scope="case") for label, text in CLINICAL_QUESTIONS.get(qtype, CLINICAL_QUESTIONS["PRESCRIPTION"])]
+    every = [dict(label=label, question=text, scope="all") for label, text in ALL_CASE_QUESTIONS.get(qtype, ALL_CASE_QUESTIONS["PRESCRIPTION"])]
+    return one + every
+
 class NotFound(KeyError):
     pass
 
@@ -186,7 +223,7 @@ class ClinicConversation:
         d = self.session.ctx.defender
         mode = self.eng.live_label if self.live else "데모 응답기 (LLM 없음)"
         return dict(modeLabel=mode, arm=self.arm, stateModeLabel=STATE_MODE_LABEL[self.arm], minK=d.g, suppressK=d.s,
-                    populationSize=self.session.ctx.p_ref, source="backend")
+                    populationSize=self.session.ctx.p_ref, source="backend", live=self.live)
 
     def patient_context(self) -> dict[str, Any]:
         b, data, p = self.session.prefix.binding, self.session.ctx.data, self.session.prefix
@@ -282,11 +319,18 @@ class ClinicConversation:
                     planned, warn = SUPPRESS, True
                     msg = f"이 대화에서 {label}의 {ATTR_KO.get(seed['target_qi'], seed['target_qi'])}은(는) 보안 담당자 규칙으로 가리고 답합니다."
                 # targetCase*: 질문이 가리킨 사례 (고른 탭이 사례 1이어도 '사례5 환자의 나이'면 사례 5)
+                purpose = getattr(self.session.runs.get(self.arm), "purpose_blocked", frozenset())
+                if seed["target_qi"] in purpose:
+                    # 조회 목적에 필요 없는 단서: 후보 수와 관계없이 가린다
+                    planned, warn = SUPPRESS, True
+                    msg = f"{ATTR_KO.get(seed['target_qi'], seed['target_qi'])}은(는) 이번 조회 목적에 필요하지 않아 답에서 뺍니다."
+                alt = ([dict(label=x["label"], question=x["question"]) for x in clinical_questions(self.session.qtype, focus)][:2] if self.live else
+                       [dict(label=f"{x['label']} 묻기", question=x["question"])
+                        for x in self._ranked(focus, skip=(seed["target_qi"], "PERIOD", "AGE", "SEX", "REGION"))][:2])
                 return dict(base, requiresWarning=warn, understood=True, currentK=mine["k_now"], projectedK=mine["k_if_raw"], message=msg,
                             affectedAttributes=mine["attributes"], plannedAction=planned,
                             targetCaseId=self.case_of_ref(mine["ref"]), targetCaseLabel=label,
-                            suggestions=[dict(label=f"{x['label']} 묻기", question=x["question"])
-                                         for x in self._ranked(focus, skip=(seed["target_qi"], "PERIOD", "AGE", "SEX", "REGION"))][:2] if warn else [])
+                            suggestions=alt if warn else [])
             return dict(base, understood=True)
 
     def _ranked(self, ref: str, skip: tuple[str, ...] = ()) -> list[dict[str, Any]]:
@@ -301,15 +345,25 @@ class ClinicConversation:
         return out
 
     def suggestions(self, case_id: str) -> list[dict[str, Any]]:
+        """
+        예시 질문. 실제 LLM 대화는 조회 목적에 맞는 진료 질문(사례 하나 · 모든 사례)을, 데모(결정적 응답기)는 응답기가 알아듣는
+        연구 질문 목록에서 단서 종류마다 하나씩 준다.
+        """
         with self.eng.lock:
             s = self.slot(case_id)
-            return [dict(label=x["label"], question=x["question"]) for x in self._ranked(s.ref)][:6]
+            if self.live:
+                return clinical_questions(self.session.qtype, s.ref)
+            return [dict(label=x["label"], question=x["question"], scope="case") for x in self._ranked(s.ref)][:6]
 
     # ── 질문 ──
-    def ask(self, case_id: str, session_id: str, question: str, client_message_id: str) -> dict[str, Any]:
+    def ask(self, case_id: str, session_id: str, question: str, client_message_id: str, scope: str = "case") -> dict[str, Any]:
         question = question.strip()
         if not question:
             raise ValueError("질문이 비어 있습니다.")
+        if scope not in ("case", "all"):
+            raise ValueError("질문 범위는 case(고른 사례) 또는 all(모든 사례)입니다.")
+        if scope == "all" and not self.live:
+            raise ValueError("모든 사례에 묻기는 실제 LLM 대화에서만 됩니다.")
         if len(question) > MAX_QUESTION:
             raise ValueError(f"질문은 {MAX_QUESTION}자 이하로 써 주세요.")
         with self.eng.lock:
@@ -319,7 +373,7 @@ class ClinicConversation:
             rec = None
             if self.live:
                 # 의료진 문장을 그대로 LLM에 보낸다. LLM 오류(LLMError)는 State를 바꾸기 전에 나므로 그대로 올린다.
-                rec = self.session.ask_text(s.ref, question, self.arm, compare=self.compare)
+                rec = self.session.ask_text(s.ref, question, self.arm, compare=self.compare, scope=scope)
             elif it.understood:
                 focus = it.case or s.ref
                 for seed in self._seed_for(it):
@@ -328,7 +382,7 @@ class ClinicConversation:
                         break
             self.version += 1
             self.updated_at = _iso()
-            return self._reply(s, question, client_message_id, rec, k_before, it)
+            return self._reply(s, question, client_message_id, rec, k_before, it, scope)
 
     # ── 응답 만들기 ──
     @staticmethod
@@ -352,6 +406,7 @@ class ClinicConversation:
         refusal = rec["release_mode"].startswith("REFUSAL")
         cand = rec.get("cases_candidate_k") or {}
         ruled = {(r["case"], r["attribute"]) for r in getattr(self.session, "rules", []) if r["from_turn"] <= rec["turn"]} if self.arm == "C1" else set()
+        purpose = getattr(self.session.runs.get(self.arm), "purpose_blocked", frozenset())
         released = self._released(rec)
         used: set[tuple[str, str, str]] = set()
         turn = rec["turn"] if turn_for_entries is None else turn_for_entries
@@ -383,6 +438,8 @@ class ClinicConversation:
                         desc = "이 사례 내용을 답에서 뺌"
                     elif (p["ref"], x["attribute"]) in ruled:
                         desc = "보안 담당자 규칙으로 가림"
+                    elif x["attribute"] in purpose:
+                        desc = "조회 목적에 필요 없는 값이라 가림"
                     else:
                         desc = f"가림 (그대로면 후보 {k_raw}명)" if k_raw is not None else "가림"
                 else:
@@ -391,7 +448,8 @@ class ClinicConversation:
                 tf.append(dict(id=self._id("tf"), attribute=x["attribute"], attributeLabel=(f"{p['ref'].replace('사례', '사례 ')} {label}"),
                                action=action, disclosedValue=value, levelDescription=desc, caseRef=p["ref"], kIfRaw=k_raw,
                                rule=(p["ref"], x["attribute"]) in ruled and action == SUPPRESS and not refusal,
-                               dropped=bool(x.get("dropped")) and not refusal, floor=floor))
+                               dropped=bool(x.get("dropped")) and not refusal, floor=floor,
+                               purpose=x["attribute"] in purpose and action == SUPPRESS and not refusal and (p["ref"], x["attribute"]) not in ruled))
                 if not cid:
                     continue
                 self.slots[cid].decisions.append(dict(x, action=action, turn=turn))
@@ -424,7 +482,8 @@ class ClinicConversation:
                 sl.last_action = SUPPRESS if SUPPRESS in acts else GENERALIZE if GENERALIZE in acts else ALLOW
         return tf, entries
 
-    def _reply(self, s: Slot, question: str, cmid: str, rec: dict[str, Any] | None, k_before: dict[str, int], it: I.Intent) -> dict[str, Any]:
+    def _reply(self, s: Slot, question: str, cmid: str, rec: dict[str, Any] | None, k_before: dict[str, int], it: I.Intent,
+               scope: str = "case") -> dict[str, Any]:
         turn_no = s.questions + 1
         created = _iso()
         if rec is None:
@@ -446,7 +505,7 @@ class ClinicConversation:
         # engineTurn: 대화 전체의 턴 번호. 공개 이력(entries.turn)과 관제 화면이 이 번호를 쓰므로 의료진 화면이 질문과 이력을 잇는 데 쓴다.
         et = rec["turn"] if rec else None
         user = dict(messageId=cmid, caseId=s.case_id, role="user", turn=turn_no, createdAt=created, segments=[dict(kind="text", text=question)],
-                    status="sent", engineTurn=et)
+                    status="sent", engineTurn=et, scope=scope)
         asst = dict(messageId=self._id("msg"), caseId=s.case_id, role="assistant", turn=turn_no, createdAt=_iso(), segments=segments,
                     protection=protection, status="sent", engineTurn=et)
         s.messages += [user, asst]
@@ -683,10 +742,10 @@ class ClinicDesk:
             self._evict()
             return conv
 
-    def ask(self, case_id: str, session_id: str, question: str, client_message_id: str) -> dict[str, Any]:
+    def ask(self, case_id: str, session_id: str, question: str, client_message_id: str, scope: str = "case") -> dict[str, Any]:
         with self.lock:
             conv = self.current
-            out = conv.ask(case_id, session_id, question, client_message_id)
+            out = conv.ask(case_id, session_id, question, client_message_id, scope)
             self._changed(conv, "ask")
             return out
 

@@ -3,8 +3,20 @@ import { useEffect, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { requestDraft } from '../../lib/clinicianCopy';
 import { formatTime } from '../../lib/format';
+import { REQUEST_STATE_KO, statusOf } from '../../lib/requests';
 import { useClinicMessages } from '../../state/ClinicMessages';
 import { useSelectedCase, useWorkspace } from '../../state/WorkspaceContext';
+
+/** 내 세부 정보 요청 아래 처리 상태 한 줄 */
+function RequestLine({ status }: { status: ReturnType<typeof statusOf> }) {
+  const tone = status.state === 'released' ? 'text-safe-text' : status.state === 'answered' ? 'text-iris-text' : 'text-ink-3';
+  return (
+    <p className={`mt-1 text-right text-[11px] font-semibold ${tone}`}>
+      {REQUEST_STATE_KO[status.state]}
+      {status.doneAt ? <span className="num font-normal text-ink-3"> · {formatTime(status.doneAt)}</span> : <span className="font-normal text-ink-3"> · 보호 담당자가 확인하면 여기에 답이 옵니다</span>}
+    </p>
+  );
+}
 
 /** 주고받은 메시지와 보내기 칸. 창이 열려 있는 동안 새 메시지를 읽음으로 표시한다. */
 function DeskThread({ focusNonce }: { focusNonce: number }) {
@@ -88,6 +100,7 @@ function DeskThread({ focusNonce }: { focusNonce: number }) {
               >
                 {m.text}
               </p>
+              {mine && m.kind === 'access_request' && <RequestLine status={statusOf(msgs.messages, m)} />}
             </li>
           );
         })}

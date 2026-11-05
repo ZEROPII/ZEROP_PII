@@ -117,6 +117,7 @@ export function PrivacyExplanation({ protection }: { protection: ProtectionResul
                     {t.rule && <span className="text-ink-3">규칙</span>}
                     {t.dropped && <span className="text-ink-3">사례째로 뺌</span>}
                     {t.floor && <span className="text-ink-3" title="후보 수와 관계없이 나이는 5세 구간, 날짜는 월 단위로만 낸다">공개 단위</span>}
+                    {t.purpose && <span className="text-ink-3" title="조회 목적에 필요 없는 단서라 후보 수와 관계없이 가린다">조회 목적</span>}
                   </span>
                 </td>
                 <td className="num border-b border-line/70 py-1.5 pl-2 text-right">

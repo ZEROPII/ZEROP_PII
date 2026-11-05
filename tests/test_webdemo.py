@@ -282,7 +282,7 @@ def test_clinic_unknown_question_and_session_conflict(client):
     assert client.post("/api/cases/case-1/messages", json=dict(sessionId="ws-old:case-1", question="나이는?", clientMessageId="c3")).status_code == 409
     assert client.post("/api/cases/case-1/messages", json=dict(sessionId=sid, question="  ", clientMessageId="c4")).status_code == 422
     sug = client.get("/api/cases/case-1/suggestions").json()
-    assert sug and all(set(x) == {"label", "question"} for x in sug)
+    assert sug and all(set(x) == {"label", "question", "scope"} and x["scope"] == "case" for x in sug)      # 데모 응답기는 사례 하나 질문만
 
 
 def test_intent_parse_rules():

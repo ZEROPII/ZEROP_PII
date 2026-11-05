@@ -82,7 +82,7 @@ def serve(a: argparse.Namespace) -> None:
     from webdemo.backend.live import make_live_llm
     cfg = MedicalConfig(mode="exploration")
     try:
-        live_llm, label = make_live_llm(a.llm, cfg, a.env_file)
+        live_llm, label = make_live_llm(a.llm, cfg, a.env_file, role_models=dict(extractor=a.extractor_model, rewriter=a.rewriter_model))
     except Exception as exc:          # core.config.ConfigError (변수 이름만 담김) 등
         raise SystemExit(f"[medicloak] 대상 AI를 준비하지 못했습니다: {exc}\n"
                          f"  .env에 LLM_API_KEY · LLM_API_BASE · LLM_MODEL이 있는지 확인하세요 (python -m medicloak check-llm).\n"
@@ -208,13 +208,16 @@ def _serve_args(p: argparse.ArgumentParser, top: bool = False) -> None:
     p.add_argument("--cookie-secure", action="store_true", **(kw or {}), help="https로만 로그인 쿠키를 보낸다 (https 운영)")
     p.add_argument("--no-rule-extract", action="store_true", **(kw or {}),
                    help="실제 LLM 대화에서 나이 · 날짜 규칙 추출을 끈다 (기본은 켬, ADR-0021)")
+    p.add_argument("--extractor-model", **(kw or dict(default=None)), help="추출기(단서 뽑기 · 다시 확인)만 다른 모델로 (빠른 모델 권장, 기본: .env LLM_MODEL)")
+    p.add_argument("--rewriter-model", **(kw or dict(default=None)), help="재작성기만 다른 모델로 (기본: .env LLM_MODEL)")
     p.add_argument("--answer-style", choices=("on", "off"), **(kw or dict(default="on")),
                    help="실제 LLM 대상 AI에 짧은 답 형식을 붙인다: 의료진 대화와 레드팀에 같이 (기본 on, ADR-0025)")
 
 
 def _defaults(a: argparse.Namespace) -> argparse.Namespace:
     for k, v in dict(host="127.0.0.1", port=8000, llm="real", env_file=None, llm_concurrency=1, build=False,
-                     no_compare=False, keep=12, cookie_secure=False, no_rule_extract=False, answer_style="on").items():
+                     no_compare=False, keep=12, cookie_secure=False, no_rule_extract=False, answer_style="on",
+                     extractor_model=None, rewriter_model=None).items():
         if not hasattr(a, k):
             setattr(a, k, v)
     return a

@@ -98,6 +98,7 @@ class MessageIn(BaseModel):
     sessionId: str
     question: str
     clientMessageId: str
+    scope: str = "case"                     # case: 고른 사례에 묻기 · all: 찾은 사례 전체에 묻기 (실제 LLM 대화)
 
 
 class PreflightIn(BaseModel):
@@ -396,17 +397,52 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
     def conversation(case_id: str, request: Request) -> dict[str, Any]:
         return redact.conversation(guard(lambda: cur(request).conversation(case_id)))
 
+    # 질문을 보내고 답을 기다리는 동안의 진행 (의료진마다). 화면 갈래(C1)의 실제 LLM 호출만 센다 (live.CallWatchLLM).
+    asking: dict[str, dict[str, Any]] = {}
+    asking_lock = threading.Lock()
+    ask_step_ko = dict(target="진료 지원 AI가 답을 쓰고 있습니다", extractor="답에서 환자를 알아볼 수 있는 단서를 찾고 있습니다",
+                       recheck="고친 답을 다시 확인하고 있습니다", rewriter="가릴 값을 고쳐 쓰고 있습니다")
+
     @r.post("/cases/{case_id}/messages")
     def ask(case_id: str, body: MessageIn, request: Request) -> dict[str, Any]:
         if not body.question.strip():
             raise HTTPException(422, "질문이 비어 있습니다.")
         d = opened(request)
-        out = guard(lambda: d.ask(case_id, body.sessionId, body.question, body.clientMessageId))
+        key = launch_key(request)
+        st = dict(started=time.time(), label="질문을 보내고 있습니다", calls=0, extracted=False)
+
+        def on_call(role: str, n: int) -> None:
+            step = ("recheck" if st["extracted"] else "extractor") if role == "extractor" else role
+            st["extracted"] = st["extracted"] or role == "extractor"
+            st.update(label=ask_step_ko.get(step, st["label"]), calls=n)
+
+        watcher = getattr(getattr(d.peek(), "session", None), "watcher", None)
+        if watcher is not None:
+            watcher.watch, watcher.calls = on_call, 0
+        with asking_lock:
+            asking[key] = st
+        try:
+            out = guard(lambda: d.ask(case_id, body.sessionId, body.question, body.clientMessageId, body.scope))
+        finally:
+            if watcher is not None:
+                watcher.watch = None
+            with asking_lock:
+                if asking.get(key) is st:
+                    asking.pop(key)
         p = out["assistantMessage"]["protection"]
-        mon().log("clinic_question", d.current.session, user=user_of(request), actor="의료진 (데모)", case=d.current.ref_of(case_id),
-                  turn=out["assistantMessage"].get("engineTurn"), release=p.get("releaseMode"),
+        mon().log("clinic_question", d.current.session, user=user_of(request), actor="의료진", case=d.current.ref_of(case_id),
+                  turn=out["assistantMessage"].get("engineTurn"), release=p.get("releaseMode"), scope=body.scope,
                   protected=sum(t["action"] != "allow" for t in p.get("transformations", [])))
         return redact.send_result(out)
+
+    @r.get("/clinic/progress")
+    def clinic_progress(request: Request) -> dict[str, Any]:
+        """질문에 답하는 중이면 지금 단계 · 실제 LLM 호출 수 · 걸린 초. 엔진 잠금을 쓰지 않는다."""
+        with asking_lock:
+            st = asking.get(launch_key(request))
+            if st is None:
+                return dict(active=False)
+            return dict(active=True, label=st["label"], calls=st["calls"], elapsed=round(time.time() - st["started"], 1))
 
     @r.post("/cases/{case_id}/preflight")
     def preflight(case_id: str, body: PreflightIn, request: Request) -> dict[str, Any]:

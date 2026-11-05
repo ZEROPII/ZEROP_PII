@@ -49,6 +49,8 @@ export interface FhirBundle {
 export const emrApi = {
   worklist: (signal?: AbortSignal) => get<WorklistPatient[]>(`${API_BASE}/emr/worklist`, signal),
   launchProgress: (signal?: AbortSignal) => get<LaunchProgress>(`${API_BASE}/emr/launch/progress`, signal),
+  /** 질문에 답하는 중의 단계 (실제 LLM 대화) */
+  questionProgress: (signal?: AbortSignal) => get<LaunchProgress>(`${API_BASE}/clinic/progress`, signal),
   launch: async (fhirId: string, purpose: string): Promise<{ trialId: string; seconds?: number; calls?: number }> => {
     let res: Response;
     try {

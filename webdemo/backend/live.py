@@ -113,8 +113,11 @@ class LiveLLM:
                 self.lock.acquire()
 
 
-def make_live_llm(choice: str, cfg: Any, env_file: str | None = None) -> tuple[Any | None, str]:
-    """(LLM 또는 None, 화면 표시 이름). real은 .env를 읽는다 (없거나 비었으면 core.config.ConfigError, 메시지에 값 없음)."""
+def make_live_llm(choice: str, cfg: Any, env_file: str | None = None, *, role_models: dict[str, str] | None = None) -> tuple[Any | None, str]:
+    """
+    (LLM 또는 None, 화면 표시 이름). real은 .env를 읽는다 (없거나 비었으면 core.config.ConfigError, 메시지에 값 없음).
+    role_models: 역할별 모델 (예: 추출기 · 재작성기만 빠른 모델). 없는 역할은 .env의 LLM_MODEL.
+    """
     if choice == "oracle":
         return None, ORACLE_LABEL
     if choice == "dry-run":
@@ -126,7 +129,9 @@ def make_live_llm(choice: str, cfg: Any, env_file: str | None = None) -> tuple[A
     from core.llm_client import LLMClient
     from medical.llm import ClientRoleLLM
     s = get_settings(env_file)
-    return ClientRoleLLM(LLMClient(s), models=dict(cfg.models), temperature=cfg.temperature), f"실제 LLM ({s.llm_model})"
+    models = dict(cfg.models, **{r: m for r, m in (role_models or {}).items() if m})
+    extra = "".join(f" · {ROLE_KO.get(r, r)} {m}" for r, m in sorted(models.items()) if m != s.llm_model)
+    return ClientRoleLLM(LLMClient(s), models=models, temperature=cfg.temperature), f"실제 LLM ({s.llm_model}{extra})"
 
 
 # 실제 LLM 대상 AI에게 붙이는 답 형식 (진료 화면에서 읽기 쉽고, 생성 · 추출 · 재작성 호출이 짧아진다).
@@ -145,6 +150,9 @@ ANSWER_STYLE_ID = "short-v1:" + hashlib.sha256(ANSWER_STYLE.encode("utf-8")).hex
 def styled(role: str, system: str) -> str:
     """대상 AI(target) 지시문 끝에 답 형식을 붙인다. 다른 역할 · 이미 붙은 지시문은 그대로."""
     return f"{system}\n\n{ANSWER_STYLE}" if role == "target" and ANSWER_STYLE not in system else system
+
+
+ROLE_KO = {"extractor": "추출기", "rewriter": "재작성기", "target": "대상 AI", "mutator": "공격 질문", "checker": "질문 확인"}
 
 
 class AnswerStyleLLM:
@@ -191,6 +199,31 @@ class Turn0Cache:
         with self.lock:
             for k in keys:
                 self.answers.pop(k, None)
+
+
+class CallWatchLLM:
+    """
+    의료진 대화(화면 갈래 C1)의 실제 LLM을 감싼다. watch(role, n)가 걸려 있는 동안 실제로 부르기 직전에 알린다
+    (질문을 보내고 기다리는 동안의 진행 표시). 비교 갈래는 감싸지 않아 뒤에서 도는 호출이 섞이지 않는다.
+    """
+
+    def __init__(self, inner: Any) -> None:
+        self.inner = inner
+        self.watch: Any = None
+        self.calls = 0
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.inner, name)
+
+    def complete(self, role: str, system: str, messages: list[dict[str, str]], **kw: Any) -> str:
+        w = self.watch
+        if w is not None:
+            self.calls += 1
+            try:
+                w(role, self.calls)
+            except Exception:                                    # 진행 표시가 실패해도 호출은 한다
+                pass
+        return self.inner.complete(role, system, messages, **kw)
 
 
 def request_key(style: str, role: str, system: str, messages: list[dict[str, str]]) -> str:

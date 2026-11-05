@@ -35,7 +35,7 @@ class FakeResponse:
 class FakeAnthropic:
     def __init__(self, *, fail_status: int | None = None, delay: float = 0.0, drop_date: bool = True, period_in_med: bool = False,
                  drop_labels: bool = False, echo_lower: str | None = None, heed_retry: bool = False,
-                 ages: dict[str, str] | None = None, broken_extract: bool = False) -> None:
+                 ages: dict[str, str] | None = None, broken_extract: bool = False, regions: dict[str, str] | None = None) -> None:
         self.calls: list[dict[str, Any]] = []
         self.fail_status = fail_status
         self.delay = delay
@@ -46,6 +46,7 @@ class FakeAnthropic:
         self.echo_lower = echo_lower
         self.heed_retry = heed_retry                # 재작성기가 다시 고칠 때 알려 준 '남은 표현'을 지운다
         self.ages = dict(ages or {})                # '나이'를 물으면 사례마다 이 글자로 답한다 ('33-38세' 같은 범위)
+        self.regions = dict(regions or {})          # '거주'를 물으면 사례마다 이 지역으로 답한다 ('Boston, Massachusetts')
         self.broken_extract = broken_extract        # 추출기가 JSON이 아닌 답을 낸다 (첫 답 거절)
         self.lock = threading.Lock()
         self.active = 0
@@ -91,6 +92,8 @@ class FakeAnthropic:
             n = m.group(1) if m else "1"
             if "나이" in user and self.ages.get(f"사례{n}"):
                 return f"사례{n} 환자는 당시 {self.ages[f'사례{n}']}였습니다."
+            if "거주" in user and self.regions.get(f"사례{n}"):
+                return f"사례{n} 환자는 {self.regions[f'사례{n}']} 지역에 살았습니다."
             block = system.split(f"[사례{n}]")[1].split("\n\n[사례")[0]
             d = re.search(r"처방 약: (.+?)\.\n\[\d+\] 위 약 첫 처방 시작일: (\d{4}-\d{2}-\d{2})", block)
             if d:
@@ -109,6 +112,10 @@ class FakeAnthropic:
                     obs.append(dict(attribute="MED", raw_value=m.group(3), evidence_spans=[m.group(3)], inference_mode="EXPLICIT", confidence=5,
                                     case_ref=m.group(1), subject="TARGET_PATIENT", context_status="HISTORY", event_ref="e1",
                                     med_assertion="PRESCRIBED"))
+            for m in re.finditer(r"(사례\d+) 환자는 (.+?) 지역에 살았습니다", resp):
+                if m.group(2) != "(비공개)":
+                    obs.append(dict(attribute="REGION", raw_value=m.group(2), evidence_spans=[m.group(2)], inference_mode="EXPLICIT", confidence=5,
+                                    case_ref=m.group(1), subject="TARGET_PATIENT", context_status="HISTORY"))
             for m in re.finditer(r"(사례\d+) 환자는 당시 (\S+세)였습니다", resp):
                 obs.append(dict(attribute="AGE", raw_value=m.group(2), evidence_spans=[m.group(2)], inference_mode="EXPLICIT", confidence=5,
                                 case_ref=m.group(1), subject="TARGET_PATIENT", context_status="HISTORY"))

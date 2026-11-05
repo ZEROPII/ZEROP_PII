@@ -1,7 +1,10 @@
-import { Lock, MessageSquareText } from 'lucide-react';
+import { Lock, MessageSquareText, Table2 } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { matchReasons, overviewOf, splitItem } from '../../lib/caseOverview';
 import { useClinicMessages } from '../../state/ClinicMessages';
 import { useWorkspace } from '../../state/WorkspaceContext';
 import { EmptyState, ErrorState, LoadingState } from '../common/StatusViews';
+import { CaseCompareDialog } from './CaseCompareDialog';
 import { LockedText } from './ClinicValue';
 
 /**
@@ -12,18 +15,36 @@ export function EmrCaseList({ onSelected }: { onSelected?: () => void }) {
   const { state, actions } = useWorkspace();
   const { cases, riskStates, selectedCaseId, sessions } = state;
   const msgs = useClinicMessages();
+  const [comparing, setComparing] = useState(false);
+  const overview = useMemo(() => overviewOf(cases.data ?? []), [cases.data]);
+  const patient = state.patient.data;
+  const common = [
+    overview.commonDx ? `${overview.commonDx} ${overview.diagnoses[0].n}건` : null,
+    overview.commonItem ? `${splitItem(overview.commonItem)[1]} ${overview.items[0].n}건` : null,
+  ].filter(Boolean);
 
   return (
     <section aria-labelledby="emr-cases-title" className="panel flex min-h-0 flex-col overflow-hidden">
       <header className="border-b border-line px-4 py-3">
-        <div className="flex items-baseline justify-between gap-2">
+        <div className="flex items-center justify-between gap-2">
           <h2 id="emr-cases-title" className="text-[15px] font-bold text-ink">
-            비슷한 사례
+            비슷한 사례 {cases.data && <span className="num ml-1 text-xs font-normal text-ink-3">유사도 순 {cases.data.length}건</span>}
           </h2>
-          {cases.data && <span className="text-xs text-ink-3">유사도 순 {cases.data.length}건</span>}
+          {cases.data && cases.data.length > 1 && (
+            <button type="button" className="btn-ghost btn-sm h-7 gap-1 text-ink-2" onClick={() => setComparing(true)} title="사례마다 지금까지 답에 나온 값을 표로 보기">
+              <Table2 className="h-3.5 w-3.5" aria-hidden />
+              비교
+            </button>
+          )}
         </div>
         <p className="mt-0.5 text-[11px] leading-4 text-ink-3">사례 하나는 병원 과거 기록의 환자 한 명입니다.</p>
+        {common.length > 0 && (
+          <p className="mt-1.5 rounded-[6px] bg-surface-2 px-2 py-1 text-[11px] leading-4 text-ink-2" title="사례 목록에 보이는 진단 · 대표 항목 중 여러 사례에 같이 나온 값">
+            <span className="font-semibold text-ink">공통</span> {common.join(' · ')}
+          </p>
+        )}
       </header>
+      {comparing && <CaseCompareDialog onClose={() => setComparing(false)} />}
       {cases.status === 'error' ? (
         <ErrorState message={cases.error ?? '사례를 불러오지 못했습니다.'} onRetry={actions.reloadAll} />
       ) : !cases.data ? (
@@ -38,6 +59,8 @@ export function EmrCaseList({ onSelected }: { onSelected?: () => void }) {
             const restricted = risk ? !risk.disclosureAllowed : false;
             const asked = sessions[c.caseId]?.data?.questionCount ?? 0;
             const notes = msgs.messages.filter((m) => m.caseId === c.caseId).length;
+            const reasons = matchReasons(c, patient);
+            const differs = overview.commonItem !== null && c.description !== overview.commonItem && !/비공개|관련 항목 없음/.test(c.description);
             return (
               <li key={c.caseId} className="border-b border-line last:border-b-0">
                 <button
@@ -62,9 +85,19 @@ export function EmrCaseList({ onSelected }: { onSelected?: () => void }) {
                     <span className="block truncate text-[13px] text-ink" title={c.diagnosis}>
                       {c.diagnosis}
                     </span>
-                    <span className="block truncate text-xs text-ink-3" title={c.description.replace('(비공개)', '비공개')}>
+                    <span className={`block truncate text-xs ${differs ? 'font-medium text-ink' : 'text-ink-3'}`} title={c.description.replace('(비공개)', '비공개')}>
+                      {differs && <span className="mr-1 rounded-[4px] bg-caution-tint px-1 text-[10.5px] font-semibold text-caution-text">다른 항목</span>}
                       <LockedText text={c.description} />
                     </span>
+                    {reasons.length > 0 && (
+                      <span className="mt-1 flex flex-wrap gap-1 text-[10.5px]">
+                        {reasons.map((r) => (
+                          <span key={r} className="rounded-[4px] border border-line px-1 text-ink-3">
+                            {r}
+                          </span>
+                        ))}
+                      </span>
+                    )}
                     {(restricted || asked > 0 || notes > 0) && (
                       <span className="mt-1.5 flex flex-wrap gap-1.5 text-[11px]">
                         {restricted && (

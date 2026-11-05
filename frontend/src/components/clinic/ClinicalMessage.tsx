@@ -1,7 +1,8 @@
 import { AlertCircle, Check, CircleHelp, Copy, Loader2, Lock, MailQuestion, RotateCw, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { parseAnswer, type AnswerBlock, type Inline } from '../../lib/answerLines';
-import { answerPlainText, attrName, protectionNote, refLabel, requestDraft, whyText } from '../../lib/clinicianCopy';
+import { answerPlainText, attrName, chartCopyText, protectionNote, refLabel, requestDraft, whyText } from '../../lib/clinicianCopy';
+import { latestRequest, REQUEST_STATE_KO } from '../../lib/requests';
 import { formatTime } from '../../lib/format';
 import { useClinicMessages } from '../../state/ClinicMessages';
 import { useTermDetect } from '../../state/TermContext';
@@ -22,6 +23,8 @@ interface Props {
   flash?: boolean;
   onRetry?: (message: ChatMessage) => void;
   onDiscard?: (message: ChatMessage) => void;
+  /** 이 답 다음 질문을 보낸 때. 그 전에 보낸 세부 정보 요청만 이 답의 요청으로 본다 */
+  until?: string;
 }
 
 function caseIdOfRef(ref: string | undefined, cases: CaseSummary[]): string | null {
@@ -162,7 +165,7 @@ function AnswerBody({ message, caseLabel }: { message: ChatMessage; caseLabel: s
   );
 }
 
-function ProtectionFooter({ message, caseLabel, cases }: { message: ChatMessage; caseLabel: string; cases: CaseSummary[] }) {
+function ProtectionFooter({ message, caseLabel, cases, until }: { message: ChatMessage; caseLabel: string; cases: CaseSummary[]; until?: string }) {
   const p = message.protection!;
   const note = protectionNote(p);
   const msgs = useClinicMessages();
@@ -172,15 +175,16 @@ function ProtectionFooter({ message, caseLabel, cases }: { message: ChatMessage;
   const [sent, setSent] = useState(false);
   if (!note) return null;
 
-  const changed = p.transformations.filter((t) => t.action !== 'allow');
+  // 조회 목적에 필요 없어 뺀 값(거주 지역)은 세부 정보 요청 대상이 아니다
+  const changed = p.transformations.filter((t) => t.action !== 'allow' && !t.purpose);
   const refs = [...new Set(changed.map((t) => t.caseRef).filter((r): r is string => !!r))];
   const who = refs.length === 1 ? refLabel(refs[0]) : refs.length > 1 ? '해당 사례' : caseLabel;
   const requestCase = caseIdOfRef(refs[0], cases) ?? message.caseId;
   const requestLabel = refs.length ? refLabel(refs[0]) : caseLabel;
   const canRequest = msgs.supported === true && changed.length > 0;
-  // 이 답 뒤에 같은 사례로 보낸 요청이 있으면 '요청함' (사례를 바꿨다 돌아와 다시 그려도 유지)
-  const requested =
-    sent || msgs.messages.some((m) => m.sender === 'clinician' && m.kind === 'access_request' && m.caseId === requestCase && m.createdAt >= message.createdAt);
+  // 이 답 뒤에 같은 사례로 보낸 요청이 있으면 그 처리 상태 (사례를 바꿨다 돌아와 다시 그려도 유지)
+  const status = latestRequest(msgs.messages, requestCase, message.createdAt, until);
+  const requested = sent || status !== null;
 
   async function send() {
     if (!draft?.trim()) return;
@@ -216,9 +220,15 @@ function ProtectionFooter({ message, caseLabel, cases }: { message: ChatMessage;
             </button>
           )}
           {canRequest && requested && (
-            <span className="inline-flex items-center gap-1 px-2 text-xs font-semibold text-iris-text" title={`${requestLabel}에 대한 세부 정보 요청을 보냈습니다. 답장은 보호 담당자 창에 옵니다.`}>
-              <Check className="h-3.5 w-3.5" aria-hidden /> 요청함
-            </span>
+            <button
+              type="button"
+              onClick={msgs.requestOpen}
+              className={`btn-ghost btn-sm h-7 gap-1 text-xs font-semibold ${status?.state === 'released' ? 'text-safe-text' : 'text-iris-text'}`}
+              title={`${requestLabel}에 대한 세부 정보 요청${status?.doneAt ? ` · ${formatTime(status.doneAt)} 처리` : ''}. 눌러서 보호 담당자 창 열기`}
+            >
+              <Check className="h-3.5 w-3.5" aria-hidden />
+              요청함 · {REQUEST_STATE_KO[status?.state ?? 'pending']}
+            </button>
           )}
         </span>
       </div>
@@ -266,13 +276,18 @@ function ProtectionFooter({ message, caseLabel, cases }: { message: ChatMessage;
   );
 }
 
-export function ClinicalMessage({ message, caseLabel, cases, flash = false, onRetry, onDiscard }: Props) {
+export function ClinicalMessage({ message, caseLabel, cases, flash = false, onRetry, onDiscard, until }: Props) {
   const toast = useToast();
   if (message.role === 'user') {
     return (
       <div id={`m-${message.messageId}`} className={`rounded-control ${flash ? 'jump-flash' : ''}`}>
         <div className="flex items-baseline gap-2.5">
           <span className="num shrink-0 text-xs font-semibold text-iris-text">질문 {message.turn}</span>
+          {message.scope === 'all' && (
+            <span className="shrink-0 rounded-[5px] bg-iris-tint px-1.5 py-px text-[11px] font-semibold text-iris-text" title="찾은 사례 전체에 물은 질문">
+              사례 전체
+            </span>
+          )}
           <p className={`min-w-0 flex-1 whitespace-pre-wrap break-words text-[15px] font-semibold leading-snug text-ink ${message.status !== 'sent' ? 'opacity-70' : ''}`}>
             {message.segments.map((s) => s.text).join('')}
           </p>
@@ -308,8 +323,10 @@ export function ClinicalMessage({ message, caseLabel, cases, flash = false, onRe
 
   async function copy() {
     try {
-      await navigator.clipboard.writeText(answerPlainText(message.segments, message.protection?.transformations ?? []));
-      toast('답을 복사했습니다. 가린 값은 (비공개)로 들어갑니다.');
+      const tf = message.protection?.transformations ?? [];
+      const body = answerPlainText(message.segments, tf);
+      await navigator.clipboard.writeText(chartCopyText(body, caseLabel, { protectedCount: tf.filter((t) => t.action !== 'allow').length }));
+      toast('진료 기록에 붙일 수 있게 출처와 함께 복사했습니다. 가린 값은 (비공개)로 들어갑니다.');
     } catch {
       toast('복사하지 못했습니다. 글을 직접 선택해 복사하세요.');
     }
@@ -328,7 +345,7 @@ export function ClinicalMessage({ message, caseLabel, cases, flash = false, onRe
         </button>
       </header>
       <AnswerBody message={message} caseLabel={caseLabel} />
-      {message.protection && <ProtectionFooter message={message} caseLabel={caseLabel} cases={cases} />}
+      {message.protection && <ProtectionFooter message={message} caseLabel={caseLabel} cases={cases} until={until} />}
     </article>
   );
 }

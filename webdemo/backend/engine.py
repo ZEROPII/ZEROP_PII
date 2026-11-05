@@ -41,7 +41,7 @@ from medical.session import ARMS, Context, extract, make_prefix
 from medical.simulate import SUPPRESSED, OracleRoleLLM, plan_all
 from medical.tracking import Case, known_cases_json, view_of
 from medical.validate import validate_case
-from webdemo.backend.live import ANSWER_STYLE_ID, ORACLE_LABEL, AnswerStyleLLM, LiveLLM, Turn0Cache, Turn0LLM, background_calls, styled
+from webdemo.backend.live import ANSWER_STYLE_ID, ORACLE_LABEL, AnswerStyleLLM, CallWatchLLM, LiveLLM, Turn0Cache, Turn0LLM, background_calls, styled
 from webdemo.backend.review import RELEASE_VERSION, RuledArmRun, decision_of, hidden_items
 
 PROFILES = ("staged", "full")
@@ -298,9 +298,11 @@ class Session:
         self.owner: dict[str, Any] | None = None             # 의료진 대화: 계정 (user_id, username, label)
         self.launch: dict[str, Any] | None = None            # EMR에서 연 대화: {fhirId, purpose}
         self.compare_pending = 0                             # 뒤에서 계산할 비교 갈래 턴 수 (실제 LLM 대화)
+        self.watcher: CallWatchLLM | None = None             # 의료진 질문의 진행 표시 (화면 갈래 C1의 호출만)
         if live_ctx is not None:
-            for r in self.runs.values():
-                r.ctx = live_ctx
+            self.watcher = CallWatchLLM(live_ctx.llm)
+            for a, r in self.runs.items():
+                r.ctx = replace(live_ctx, llm=self.watcher) if a == "C1" else live_ctx
             first = self.logs["C1"][0] if self.logs["C1"] else None
             if first is None or first["release_mode"].startswith("REFUSAL"):
                 ctx0.llm.forget()                            # 거절된 첫 답은 나눠 쓰지 않는다 (다시 열면 새로 부른다)
@@ -603,10 +605,11 @@ class Session:
         self.eng._trim_usage()
         return dict(turn=turn, seed_id=seed["seed_id"], picked_by=picked_by, arms=self.steps[-1]["arms"])
 
-    def ask_text(self, case: str, text: str, primary: str = "C1", compare: bool = True) -> dict[str, Any]:
+    def ask_text(self, case: str, text: str, primary: str = "C1", compare: bool = True, scope: str = "case") -> dict[str, Any]:
         """
         live LLM 세션: 의료진이 쓴 문장을 Seed 없이 그대로 보낸다 (api_server와 같은 방식).
-        문장에 '사례N'이 없으면 고른 사례를 가리키도록 '사례N에 대한 질문: '을 붙인다 (화면에는 원문).
+        scope='case'이고 문장에 '사례N'이 없으면 고른 사례를 가리키도록 '사례N에 대한 질문: '을 붙인다 (화면에는 원문).
+        scope='all'(모든 사례에 묻기)이면 '검색된 사례 전체에 대한 질문: '을 붙인다. 공개 판정은 그대로 사례마다 한다.
         화면 갈래(primary, C1)만 LLM에 묻고, 비교 갈래(C0 · C1S)는 같은 원 응답과 추출 결과를 함께 써서 방어만 다르게 한다
         (ADR-0009 --paired와 같음). LLM 오류는 State를 바꾸기 전에 나므로 그대로 올린다.
         """
@@ -615,8 +618,11 @@ class Session:
         if self.turn >= self.budget:
             raise DemoError(f"이 대화의 질문 예산 {self.budget}턴을 다 썼습니다. 새 환자로 다시 시작하세요.")
         turn = self.turn + 1
-        query = text if _MENTIONS_CASE.search(text) else f"{case}에 대한 질문: {text}"
-        meta = dict(seed_id=None, picked_by="clinician", source="clinic", case=case, user_question=text, free_text=True)
+        if scope == "all":
+            query = f"검색된 사례 전체에 대한 질문: {text}"
+        else:
+            query = text if _MENTIONS_CASE.search(text) else f"{case}에 대한 질문: {text}"
+        meta = dict(seed_id=None, picked_by="clinician", source="clinic", case=case, user_question=text, free_text=True, scope=scope)
         rec = self.runs[primary]._turn(turn, query, None, None, None, 0, meta)
         arms = {primary: dict(status="ANSWERED")}
         shared = (rec["raw_response_text"], rec["raw_observations"], rec["extraction_ok"], rec["extraction_tries"])

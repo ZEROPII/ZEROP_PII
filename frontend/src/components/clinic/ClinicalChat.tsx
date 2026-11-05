@@ -1,11 +1,13 @@
 import { CornerDownLeft, Info, Loader2, Lock, MessageSquareReply, Ruler, Sparkles } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { emrApi } from '../../api/emrApi';
+import { overviewOf, splitItem } from '../../lib/caseOverview';
 import { preflightNotice, preflightStatusLine, restrictedNotice } from '../../lib/clinicianCopy';
 import { useClinicMessages } from '../../state/ClinicMessages';
 import { usePreflight } from '../../state/usePreflight';
 import { useSuggestions } from '../../state/useSuggestions';
 import { useSelectedCase, useWorkspace } from '../../state/WorkspaceContext';
-import type { CaseId, SuggestedQuestion } from '../../types/domain';
+import type { CaseId, CaseSummary, LaunchProgress, QuestionScope, SuggestedQuestion } from '../../types/domain';
 import { LogoMark } from '../brand/Logo';
 import { ChatInput } from '../chat/ChatInput';
 import { EmptyState, ErrorState, LoadingState } from '../common/StatusViews';
@@ -30,23 +32,52 @@ function clinicalFirst(items: SuggestedQuestion[]): SuggestedQuestion[] {
 
 const NOTICE_ICON = { lock: Lock, range: Ruler, info: Info } as const;
 
-function SuggestionChips({ items, onPick, compact = false }: { items: SuggestedQuestion[]; onPick(q: string): void; compact?: boolean }) {
+function SuggestionChips({ items, onPick, compact = false }: { items: SuggestedQuestion[]; onPick(s: SuggestedQuestion): void; compact?: boolean }) {
   return (
-    <div className={compact ? 'flex gap-1.5 overflow-x-auto pb-0.5' : 'flex flex-wrap gap-1.5'}>
+    <div className={compact ? 'flex gap-1.5 overflow-x-auto pb-0.5' : 'flex flex-wrap justify-center gap-1.5'}>
       {items.map((s) => (
         <button
           key={s.question}
           type="button"
-          onClick={() => onPick(s.question)}
-          title={s.question}
-          className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border border-line bg-surface text-ink-2 hover:border-iris hover:text-ink ${
-            compact ? 'h-7 px-2.5 text-xs' : 'h-8 max-w-full px-3 text-[13px]'
-          }`}
+          onClick={() => onPick(s)}
+          title={s.scope === 'all' ? `찾은 사례 전체에 묻기: ${s.question}` : s.question}
+          className={`inline-flex shrink-0 items-center gap-1.5 rounded-full border bg-surface text-ink-2 hover:border-iris hover:text-ink ${
+            s.scope === 'all' ? 'border-dashed border-iris' : 'border-line'
+          } ${compact ? 'h-7 px-2.5 text-xs' : 'h-8 max-w-full px-3 text-[13px]'}`}
         >
           <span className="font-semibold text-ink">{s.label}</span>
+          {s.scope === 'all' && <span className="text-[10.5px] font-semibold text-iris-text">전체</span>}
           {!compact && <span className="truncate">{s.question === s.label ? '' : s.question}</span>}
         </button>
       ))}
+    </div>
+  );
+}
+
+/** 찾은 사례 한눈에: 사례 목록에 보이는 진단 · 대표 항목을 센다 (새 값을 드러내지 않는다). */
+function FoundCases({ cases }: { cases: CaseSummary[] }) {
+  const o = useMemo(() => overviewOf(cases), [cases]);
+  if (o.total === 0) return null;
+  const line = (xs: { value: string; n: number }[], short = false) =>
+    xs
+      .slice(0, 3)
+      .map((x) => `${short ? splitItem(x.value)[1] : x.value} ${x.n}건`)
+      .join(', ');
+  const itemName = o.items[0] ? splitItem(o.items[0].value)[0] || '대표 항목' : '대표 항목';
+  return (
+    <div className="mx-auto mb-4 w-full max-w-[560px] rounded-control border border-line bg-surface px-4 py-3 text-left text-[13px] leading-6 text-ink-2">
+      <p className="font-semibold text-ink">비슷한 사례 {o.total}건을 찾았습니다</p>
+      {o.diagnoses.length > 0 && (
+        <p>
+          <span className="text-ink-3">진단</span> {line(o.diagnoses)}
+        </p>
+      )}
+      {o.items.length > 0 && (
+        <p>
+          <span className="text-ink-3">{itemName}</span> {line(o.items, true)}
+        </p>
+      )}
+      <p className="mt-1 text-xs text-ink-3">사례 하나는 과거 환자 한 명입니다. 공통점이나 차이는 '찾은 사례 전체'로 물어보세요.</p>
     </div>
   );
 }
@@ -65,7 +96,11 @@ export function ClinicalChat({ jump, onJumpDone, onOpenMessages }: { jump: JumpT
 
   const data = session?.data;
   const sending = session?.sending ?? false;
-  const preflight = usePreflight(caseId, data?.sessionId, draft);
+  const live = state.policy.data?.live === true;
+  // 묻는 범위: 고른 사례(case) · 찾은 사례 전체(all, 실제 LLM 대화). 보내기 전 미리 세기는 고른 사례 질문에만 한다.
+  const [scope, setScope] = useState<QuestionScope>('case');
+  const preflight = usePreflight(caseId, data?.sessionId, scope === 'all' ? '' : draft);
+  const [progress, setProgress] = useState<LaunchProgress | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const messageCount = data?.messages.length ?? 0;
   const rawSuggestions = useSuggestions(caseId, messageCount);
@@ -96,11 +131,38 @@ export function ClinicalChat({ jump, onJumpDone, onOpenMessages }: { jump: JumpT
     return () => window.clearTimeout(t);
   }, [flashId]);
 
+  // 답을 기다리는 동안 서버가 알려 주는 지금 단계 (실제 LLM 호출이 차례로 이어진다)
+  useEffect(() => {
+    if (!sending || !live) {
+      setProgress(null);
+      return;
+    }
+    let stop = false;
+    let timer = 0;
+    const tick = () => {
+      emrApi.questionProgress().then(
+        (p) => !stop && setProgress(p),
+        () => undefined,
+      );
+      if (!stop) timer = window.setTimeout(tick, 700);
+    };
+    timer = window.setTimeout(tick, 200);
+    return () => {
+      stop = true;
+      window.clearTimeout(timer);
+    };
+  }, [sending, live]);
+
+  function pick(s: SuggestedQuestion) {
+    setDraft(s.question);
+    if (live) setScope(s.scope ?? 'case');
+  }
+
   async function submit(text?: string) {
     if (!caseId) return;
     const question = text ?? draft;
     if (!text) setDraft('');
-    const ok = await actions.sendQuestion(caseId, question);
+    const ok = await actions.sendQuestion(caseId, question, live ? scope : 'case');
     if (!ok) setDrafts((d) => (d[caseId] ? d : { ...d, [caseId]: question }));
   }
 
@@ -155,20 +217,23 @@ export function ClinicalChat({ jump, onJumpDone, onOpenMessages }: { jump: JumpT
         ) : session.status === 'error' ? (
           <ErrorState message={session.error ?? '대화를 불러오지 못했습니다.'} onRetry={() => actions.loadSession(caseId, true)} />
         ) : data && data.messages.length === 0 ? (
-          <EmptyState message={`${label}에 대해 아직 묻지 않았습니다. 처방, 시술, 관리 계획처럼 진료에 필요한 내용을 물어보세요. 개인을 알아볼 수 있는 세부 값은 범위로 보이거나 비공개로 표시됩니다.`}>
+          <div className="flex flex-col items-center px-2 py-6 text-center">
+            {live && <FoundCases cases={cases} />}
+            <p className="max-w-[520px] text-[13px] leading-6 text-ink-2">
+              {label}에 대해 아직 묻지 않았습니다. 처방, 시술, 관리 계획처럼 진료에 필요한 내용을 물어보세요. 개인을 알아볼 수 있는 세부 값은 범위로
+              보이거나 비공개로 표시됩니다.
+            </p>
             {suggestions.length > 0 && (
-              <div className="mt-3 w-full">
+              <div className="mt-4 w-full">
                 <p className="mb-2 inline-flex items-center gap-1 text-xs text-ink-3">
-                  <Sparkles className="h-3.5 w-3.5" aria-hidden /> 예시 질문 (눌러서 입력칸에 넣기)
+                  <Sparkles className="h-3.5 w-3.5" aria-hidden /> {live ? '조회 목적에 맞는 질문 (눌러서 입력칸에 넣기)' : '예시 질문 (눌러서 입력칸에 넣기)'}
                 </p>
-                <div className="flex justify-center">
-                  <SuggestionChips items={suggestions} onPick={setDraft} />
-                </div>
+                <SuggestionChips items={suggestions} onPick={pick} />
               </div>
             )}
-          </EmptyState>
+          </div>
         ) : (
-          data?.messages.map((m) => (
+          data?.messages.map((m, i) => (
             <ClinicalMessage
               key={m.messageId}
               message={m}
@@ -177,15 +242,21 @@ export function ClinicalChat({ jump, onJumpDone, onOpenMessages }: { jump: JumpT
               flash={flashId === m.messageId}
               onRetry={(msg) => actions.retryMessage(caseId, msg)}
               onDiscard={(msg) => actions.discardMessage(caseId, msg.messageId)}
+              until={data.messages.slice(i + 1).find((x) => x.role === 'user')?.createdAt}
             />
           ))
         )}
         {sending && (
           <div className="flex items-center gap-2.5 text-[13px] text-ink-3" role="status">
             <LogoMark size={18} className="text-iris-text" />
-            <span className="inline-flex items-center gap-2 rounded-control border border-line bg-surface px-3 py-2">
+            <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-0.5 rounded-control border border-line bg-surface px-3 py-2">
               <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
-              사례 기록에서 답을 찾아 개인정보 보호 기준으로 확인하는 중
+              {progress?.active ? progress.label : '사례 기록에서 답을 찾아 개인정보 보호 기준으로 확인하는 중'}
+              {progress?.active && (
+                <span className="num text-[11px] text-ink-3">
+                  {Math.round(progress.elapsed ?? 0)}초 · 실제 LLM 호출 {progress.calls ?? 0}번
+                </span>
+              )}
             </span>
           </div>
         )}
@@ -224,7 +295,31 @@ export function ClinicalChat({ jump, onJumpDone, onOpenMessages }: { jump: JumpT
         )}
         {data && data.messages.length > 0 && suggestions.length > 0 && !draft && (
           <div className="mb-2">
-            <SuggestionChips items={suggestions.slice(0, 5)} onPick={setDraft} compact />
+            <SuggestionChips items={suggestions.slice(0, 5)} onPick={pick} compact />
+          </div>
+        )}
+        {live && summary && (
+          <div role="radiogroup" aria-label="묻는 범위" className="mb-2 flex items-center gap-2 text-xs">
+            <span className="text-ink-3">묻는 범위</span>
+            <span className="flex rounded-[9px] bg-surface-2 p-0.5">
+              {(
+                [
+                  ['case', summary.label],
+                  ['all', `찾은 사례 전체 (${cases.length}건)`],
+                ] as [QuestionScope, string][]
+              ).map(([k, l]) => (
+                <button
+                  key={k}
+                  type="button"
+                  role="radio"
+                  aria-checked={scope === k}
+                  onClick={() => setScope(k)}
+                  className={`h-6 rounded-[7px] px-2.5 font-semibold ${scope === k ? 'bg-surface text-ink shadow-sm' : 'text-ink-3 hover:text-ink'}`}
+                >
+                  {l}
+                </button>
+              ))}
+            </span>
           </div>
         )}
         <ChatInput
@@ -233,7 +328,9 @@ export function ClinicalChat({ jump, onJumpDone, onOpenMessages }: { jump: JumpT
           onSubmit={() => void submit()}
           disabled={!data}
           sending={sending}
-          placeholder={summary ? `${summary.label}에 대해 질문하세요` : '사례를 고르세요'}
+          placeholder={
+            !summary ? '사례를 고르세요' : scope === 'all' && live ? '찾은 사례 전체에 대해 질문하세요 (공통점 · 차이 비교)' : `${summary.label}에 대해 질문하세요`
+          }
         />
         <p className="mt-1.5 flex flex-wrap items-center justify-between gap-x-2 text-[11px] text-ink-3">
           <span>

@@ -55,7 +55,7 @@ export function createHttpApi(baseUrl: string): ClinicalCaseApi {
     sendQuestion: (req: SendQuestionRequest, signal) =>
       request(`${c(req.caseId)}/messages`, {
         method: 'POST',
-        body: JSON.stringify({ sessionId: req.sessionId, question: req.question, clientMessageId: req.clientMessageId }),
+        body: JSON.stringify({ sessionId: req.sessionId, question: req.question, clientMessageId: req.clientMessageId, scope: req.scope ?? 'case' }),
         signal,
       }),
     assessPreflight: (caseId, sessionId, question, signal) =>
