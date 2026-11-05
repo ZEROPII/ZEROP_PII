@@ -430,7 +430,7 @@ def test_first_answer_is_shared_across_clinicians_and_shows_progress(world):
         th.join(30)
     finally:
         fake.delay = 0.0
-    assert seen and any(p["label"].startswith("진료 지원 AI가") for p in seen) and max(p["calls"] for p in seen) >= 2
+    assert seen and any(p["label"] == "비슷한 사례를 정리하는 중" for p in seen) and max(p["calls"] for p in seen) >= 2
     assert watcher.get("/api/emr/launch/progress").json() == {"active": False}
     n0 = len(fake.calls)
     launch(b, "T0016")
@@ -965,9 +965,9 @@ def test_live_rewrite_retry_is_told_what_was_left(world):
     prompts = [c["payload"]["messages"][-1]["content"] for c, r in zip(fake.calls[n0:], fake.roles()[n0:]) if r == "rewriter"]
     head = [x.rsplit("\n[바꿀 표현]\n", 1)[0] for x in prompts]
     assert len(head) == 2
-    assert "6. 바꿀 값은 그 자리만이 아니라 답 전체에서 고친다" in head[0] and "'cetirizine'(사례4)" in head[0] and "9. 앞서" not in head[0]
-    assert "8. 값을 빼서 내용이 없어진 줄" in head[0]
-    assert "9. 앞서 고친 답을 다시 확인하니" in head[1] and "남은 표현: 'cetirizine hydrochloride 5 mg oral tablet'" in head[1]
+    assert "6. 바꿀 값은 그 자리만이 아니라 답 전체에서 고친다" in head[0] and "'cetirizine'(사례4)" in head[0] and "10. 앞서" not in head[0]
+    assert "8. 값을 빼서 내용이 없어진 줄" in head[0] and "9. 날짜를 빼더라도 기간" in head[0]
+    assert "10. 앞서 고친 답을 다시 확인하니" in head[1] and "남은 표현: 'cetirizine hydrochloride 5 mg oral tablet'" in head[1]
     sec = login(world, "privacy1")
     w = current_conv(sec, "재시도의사")
     assert sec.get(f"/api/monitor/sessions/{w}").json()["arms"]["C1"]["turns"][0]["mode"] == "REWRITTEN"
@@ -1172,7 +1172,7 @@ def test_question_progress_reports_live_calls_while_answering(world):
         fake.delay = 0.0
     assert got and got[0].status_code == 200, got and got[0].text
     assert snaps and max(x["calls"] for x in snaps) >= 2
-    assert {x["label"] for x in snaps} & {"진료 지원 AI가 답을 쓰고 있습니다", "답에서 환자를 알아볼 수 있는 단서를 찾고 있습니다"}
+    assert {x["label"] for x in snaps} & {"답을 쓰는 중", "답에 환자를 알아볼 수 있는 값이 있는지 확인하는 중"}
     assert doc.get("/api/clinic/progress").json() == {"active": False}
 
 
@@ -1201,7 +1201,7 @@ def test_residence_is_hidden_for_every_query_purpose(world):
     rec = world["eng"].sessions[w].logs["C1"][-1]
     region_d = [d for p in rec["release_plans"] for d in p["decisions"] if d["attribute"] == "REGION"]
     assert region_d and all(d["action"] == "suppress" and d.get("purpose") for d in region_d)
-    assert "medicloak-release-v4" == world["eng"].sessions[w].runs["C1"].trial["versions"]["medicloak_release"]
+    assert "medicloak-release-v5" == world["eng"].sessions[w].runs["C1"].trial["versions"]["medicloak_release"]
     hidden = sec.get(f"/api/monitor/sessions/{w}/hidden").json()
     items = hidden["items"] if isinstance(hidden, dict) else hidden
     assert not any(x["attribute"] == "REGION" for x in items)
@@ -1341,7 +1341,7 @@ def test_drop_cases_and_rewrite_rules_unit():
           dict(case_ref="사례5", attribute="MED", raw_value="fexofenadine hydrochloride 30 MG Oral Tablet", action="generalize")]
     r1, r2 = rewrite_rules(prompt, ch), rewrite_rules(prompt, ch, "- 사례2 환자를 알아볼 수 있는 표현이 아직 남았다.")
     assert r1.index("6. 바꿀 값은") < r1.rindex("\n[바꿀 표현]\n") and "'naproxen'(사례2)" in r1 and "fexofenadine'(" not in r1
-    assert "9. 앞서" not in r1 and r2.index("9. 앞서 고친 답을") < r2.rindex("\n[바꿀 표현]\n")
+    assert "10. 앞서" not in r1 and r2.index("10. 앞서 고친 답을") < r2.rindex("\n[바꿀 표현]\n")
     assert r1.endswith("[원 답변]\n원 답") and rewrite_rules("다른 지시문", ch) == "다른 지시문"
 
 def test_redact_unit():
@@ -1428,3 +1428,208 @@ def test_session_idle_timeout_and_inactive_account(world):
     assert a.user_of(token) is None                       # 60초 넘게 쓰지 않은 세션은 끝남
     st.x("UPDATE app_user SET active = 0 WHERE username = 'idletest'")
     assert a.login("idletest", PW) is None                # 쓰지 않는 계정은 맞는 비밀번호로도 못 들어온다
+
+
+# ── 의료진 체험 반영 (2026-11-05, ADR-0029) ─────────────────────
+
+def _case_blocks(system: str) -> dict[int, str]:
+    return {int(n): b for n, b in re.findall(r"\[사례(\d+)\]\n(.*?)(?=\n\n\[사례|\Z)", system.split("[검색된 사례]", 1)[1], re.S)}
+
+
+def _med_of(block: str) -> str | None:
+    m = re.search(r"\] 처방 약: (.+?)\.\n", block)
+    return m.group(1) if m else None
+
+
+def test_case_missing_from_first_answer_is_not_called_hidden_and_all_scope_values_are_counted(world):
+    """
+    첫 답이 말하지 않은 사례는 '비공개'가 아니라 '첫 답에 나오지 않음'으로 보인다. '찾은 사례 전체' 질문 답에 그 사례의 약이 나오고
+    추출기가 그 사례를 빠뜨려도, 사례 문서 대조(textguard)가 관측을 더해 판정 · 사례 노트 · 사례 목록 제목에 들어간다.
+    """
+    fake: FakeAnthropic = world["fake"]
+    fresh_first_answers(world)
+    picked: dict[str, int] = {}
+
+    def hook(system: str, user: str, messages: list) -> str | None:
+        blocks = _case_blocks(system)
+        with_med = [n for n, b in sorted(blocks.items()) if _med_of(b)]
+        if len(with_med) < 2:
+            return None
+        hide = with_med[-1]
+        picked["n"] = hide
+        if len(messages) == 1 and not re.search(r"사례\s*\d", user):            # 첫 답: 이 사례만 말하지 않는다
+            return "\n".join(f"사례{n} 환자의 진단은 {re.search(r'] 진단: (.+?)\.', b).group(1)}이고, {_med_of(b)}를 처방받았습니다."
+                             for n, b in sorted(blocks.items()) if n != hide and _med_of(b) and re.search(r"] 진단: (.+?)\.", b))
+        if user.startswith("검색된 사례 전체에 대한 질문"):                    # 추출기(가짜)는 '사례N은 …만' 꼴을 뽑지 못한다
+            return f"검색된 사례의 약을 정리했습니다. 사례{hide}은 {_med_of(blocks[hide])}만 처방받았고 다른 약은 없습니다."
+        return None
+
+    fake.target_hook = hook
+    try:
+        add_user(world["store"], "doctor_g1", "문서대조", "clinician", "내과", PW)
+        doc = login(world, "doctor_g1")
+        _, sid = launch(doc, "T0014")
+        n = picked["n"]
+        ctx_id = doc.get("/api/patient-context").json()["contextId"]
+        cards = {c["caseId"]: c for c in doc.get(f"/api/cases?patientContextId={ctx_id}").json()}
+        assert cards[f"case-{n}"]["diagnosis"] == "첫 답에 나오지 않음" and cards[f"case-{n}"]["mentioned"] is False
+        assert "비공개" not in cards[f"case-{n}"]["description"]
+        r = doc.post("/api/cases/case-1/messages", json=dict(sessionId=sid, question="찾은 사례들에서 쓴 약을 정리해 주세요.",
+                                                             clientMessageId="g1", scope="all"))
+        assert r.status_code == 200, r.text
+    finally:
+        fake.target_hook = None
+        fresh_first_answers(world)
+    sec = login(world, "privacy1")
+    w = current_conv(sec, "문서대조")
+    rec = world["eng"].sessions[w].logs["C1"][-1]
+    added = [o for o in rec["raw_observations"] if o.get("source") == "DOC_MATCH"]
+    assert any(o["case_ref"] == f"사례{n}" and o["attribute"] == "MED" for o in added)
+    assert all(isinstance(o.get("evidence_spans"), list) for o in rec["raw_observations"])
+    assert any(p["ref"] == f"사례{n}" and any(d["attribute"] == "MED" for d in p["decisions"]) for p in rec["release_plans"])
+    ents = doc.get(f"/api/cases/case-{n}/disclosures").json()["entries"]
+    assert any(e["attribute"] == "MED" and e["turn"] == rec["turn"] for e in ents)
+    cards = {c["caseId"]: c for c in doc.get(f"/api/cases?patientContextId={ctx_id}").json()}
+    assert cards[f"case-{n}"]["description"].startswith("처방 약") or "비공개" in cards[f"case-{n}"]["description"]
+
+
+def test_durations_show_as_ranges_whatever_the_scope_and_go_to_the_case_note(world):
+    """일수 · 주 같은 상대 기간은 묻는 범위와 상관없이 범위로만 나가고(방어 갈래), 사례 노트에 '기간'으로 남는다. 방어 없음(C0)은 그대로."""
+    fake: FakeAnthropic = world["fake"]
+
+    def hook(system: str, user: str, messages: list) -> str | None:
+        if user.startswith("검색된 사례 전체에 대한 질문"):
+            return "진단 기간을 보면 사례1은 약 12일, 사례2는 약 17일 동안 진단이 유지되었습니다."
+        if "복용 기간" in user:
+            return "사례1 환자는 약 12일 동안 약을 복용했습니다."
+        return None
+
+    fake.target_hook = hook
+    try:
+        add_user(world["store"], "doctor_du", "기간범위", "clinician", "내과", PW)
+        doc = login(world, "doctor_du")
+        _, sid = launch(doc, "T0014")
+        a = doc.post("/api/cases/case-1/messages", json=dict(sessionId=sid, question="사례들이 보통 얼마나 걸렸나요?", clientMessageId="d1", scope="all")).json()
+        b = doc.post("/api/cases/case-1/messages", json=dict(sessionId=sid, question="사례1 환자의 복용 기간은?", clientMessageId="d2", scope="case")).json()
+    finally:
+        fake.target_hook = None
+    text_a = "".join(x["text"] for x in a["assistantMessage"]["segments"])
+    text_b = "".join(x["text"] for x in b["assistantMessage"]["segments"])
+    assert "약 1~2주" in text_a and "약 2~4주" in text_a and "12일" not in text_a and "17일" not in text_a
+    assert "약 1~2주" in text_b and "12일" not in text_b
+    tf = a["assistantMessage"]["protection"]["transformations"]
+    assert {(t["caseRef"], t["disclosedValue"]) for t in tf if t["attribute"] == "DURATION"} == {("사례1", "약 1~2주"), ("사례2", "약 2~4주")}
+    assert any(s.get("kind") == "disclosure" and s["text"] == "약 2~4주" for s in a["assistantMessage"]["segments"])
+    notes = doc.get("/api/cases/case-1/disclosures").json()["entries"]
+    assert [e["value"] for e in notes if e["attribute"] == "DURATION"] == ["약 1~2주", "약 1~2주"]
+    sec = login(world, "privacy1")
+    w = current_conv(sec, "기간범위")
+    s = world["eng"].sessions[w]
+    assert "12일" in s.logs["C0"][-1]["response_text"] and "12일" not in s.logs["C1"][-1]["response_text"]
+
+
+def test_extraction_guard_unit():
+    """추출기 출력 바로잡기 · 문서 대조 · 기간 범위 · 사례 귀속 (textguard)."""
+    from medical.defense import apply_changes_deterministic
+    from webdemo.backend import textguard as G
+    resp = "검색된 5개 사례 모두에서 쓴 약은 acetaminophen 325 MG Oral Tablet입니다.\n\n사례3은 acetaminophen만 처방받았고 다른 약은 없습니다. 이 환자는 여성입니다."
+    docs = [dict(doc_id=f"D{i}", text=f"t{i}", fact_rows=[dict(attribute="MED", span_text="acetaminophen 325 MG Oral Tablet", node_id="X"),
+                                                        dict(attribute="SEX", span_text="여성", node_id="SEX_FEMALE")]) for i in range(1, 6)]
+    found = [dict(attribute="MED", raw_value="acetaminophen 325 MG Oral Tablet", evidence_spans="acetaminophen 325 MG Oral Tablet입니다",
+                  case_ref="사례1", subject="TARGET_PATIENT")]
+    out = json.loads(G.fix_extraction(json.dumps(found, ensure_ascii=False), resp, docs))
+    assert out[0]["evidence_spans"] == ["acetaminophen 325 MG Oral Tablet입니다"]
+    added = {(o["case_ref"], o["attribute"]) for o in out if o.get("source") == "DOC_MATCH"}
+    assert added == {("사례2", "MED"), ("사례3", "MED"), ("사례4", "MED"), ("사례5", "MED")}       # 사례1은 이미 있음, 성별은 그 사례 문장에서만
+    assert G.fix_extraction("추출 못 함", resp, docs) == "추출 못 함"
+    assert G.clean_spans("ab") == ["ab"] and G.clean_spans(["a", " xy "]) == ["xy"] and G.clean_spans(None) == []
+    # 글자열 근거를 쪼개지 않으므로 값 치환이 글자 하나씩 바꾸지 않는다
+    text = "사례1 환자는 lisinopril 10 MG Oral Tablet을 복용했습니다."
+    ch = [dict(raw_value="simvastatin 20 MG Oral Tablet", evidence_spans=G.clean_spans("simvastatin 20 MG Oral Tablet"), action="suppress", to_label=None)]
+    assert len(apply_changes_deterministic(text, ch)) == len(text)
+    assert G.case_numbers("사례1, 2, 4는 같은 약") == [1, 2, 4] and G.case_numbers("사례1, 2021-05-27부터") == [1] and G.case_numbers("사례1, 2회") == [1]
+    for raw, want in [("약 12일 동안", "약 1~2주 동안"), ("이틀 동안 입원", "3일 이내 입원"), ("3월 15일", "3월 15일"), ("1일 2회", "1일 2회"),
+                      ("2019년", "2019년"), ("2주 간격", "2주 간격"), ("10일 만에", "1~2주 만에"), ("약 1년 동안", "약 1년 동안")]:
+        assert G.coarsen_durations(raw)[0] == want, raw
+    assert G.duration_mentions("사례1은 약 1~2주, 사례2는 약 2~4주 동안 유지되었습니다.", 5) == [("사례1", "약 1~2주"), ("사례2", "약 2~4주")]
+
+
+def test_front_calls_do_not_wait_for_background_calls():
+    """의료진 질문 호출은 뒤에서 이미 보낸 비교 갈래 · 미리 준비 호출이 끝나기를 기다리지 않는다. 뒤 호출은 앞 호출에 양보한다."""
+    from webdemo.backend.live import _Slots
+    s = _Slots(1)
+    s.acquire(back=True)                                  # 뒤 호출 하나가 나가 있다
+    done = threading.Event()
+    threading.Thread(target=lambda: (s.acquire(back=False), done.set())).start()
+    assert done.wait(1.0)                                 # 앞 호출은 바로 나간다
+    late = threading.Event()
+    threading.Thread(target=lambda: (s.acquire(back=True), late.set())).start()
+    assert not late.wait(0.2)                             # 앞 호출이 나가 있는 동안 새 뒤 호출은 기다린다
+    s.release(back=False)
+    s.release(back=True)
+    assert late.wait(1.0)
+    s.release(back=True)
+
+
+def test_recent_visit_binding_uses_latest_visit_and_active_comorbidities(world):
+    """운영 모드 진료 기준은 가장 최근 진료다: 진료일 · 주진단 · 그날 이어지던 동반질환이 환자 요약과 검색 기준일에 들어간다."""
+    import random as _r
+
+    from webdemo.backend.clinic import ClinicConversation
+    from webdemo.backend.visit import visit_binding
+    eng = world["eng"]
+    pid = next(p for p in eng.data.by_pat if p.startswith("0e7fe2c7"))
+    b = visit_binding(eng.data, pid, "PRESCRIPTION", _r.Random(0))
+    assert b["index_date"] == max(e["start"][:10] for e in eng.data.by_pat[pid] if e["event_type"] == "CONDITION")
+    assert "Essential (primary) hypertension" in b["active"] and b["panel"]["PANEL_COMORBIDITY"] != "없음"
+    tid = next(t for t, (p, q) in eng.trial_of.items() if p == pid and q == "PRESCRIPTION")
+    old = eng.binding(tid)
+    eng.recent_visit = True
+    try:
+        assert eng.binding(tid)["index_date"] == b["index_date"] and old["index_date"] < b["index_date"]
+        s = eng.new_session(tid, source="clinic", llm_mode="live")
+        pc = ClinicConversation(eng, s).patient_context()
+    finally:
+        eng.recent_visit = False
+    assert s.prefix.binding["visit"] == "recent" and pc["visitDate"] == b["index_date"]
+    assert "Essential (primary) hypertension" in pc["comorbidities"]
+    assert [x["label"] for x in pc["aiSummary"]] == ["연령 / 성별", "주진단", "동반질환", "고려 중인 처치", "조회 목적"]
+    assert pc["searchBasis"]["until"] == b["index_date"] and pc["searchBasis"]["medications"] >= 2
+
+
+def test_prefetch_makes_the_first_answer_ahead_and_launch_reuses_it(world):
+    """EMR에서 고른 환자 · 목적의 첫 답을 미리 만들어 두면, 열 때 LLM을 다시 부르지 않는다. 조회 기록에 환자 번호가 남는다."""
+    fake: FakeAnthropic = world["fake"]
+    fresh_first_answers(world)
+    add_user(world["store"], "doctor_pf", "미리준비", "clinician", "내과", PW)
+    doc = login(world, "doctor_pf")
+    wl = doc.get("/api/emr/worklist").json()
+    row = next(x for x in wl if any(p["trialId"] == "T0016" for p in x["purposes"]))
+    purpose = next(p["purpose"] for p in row["purposes"] if p["trialId"] == "T0016")
+    r = doc.post("/api/emr/prefetch", json=dict(fhirId=row["fhirId"], purpose=purpose))
+    assert r.status_code == 200 and r.json()["status"] == "started"
+    th = next(iter(t for t in world["eng"]._prefetching.values()))
+    th.join(30)
+    n0 = len(fake.calls)
+    r = doc.post("/api/emr/launch", json=dict(fhirId=row["fhirId"], purpose=purpose))
+    assert r.status_code == 200, r.text
+    roles = fake.roles()[n0:]
+    assert roles == [], roles          # 첫 답 · 추출 · 공개 처리(재작성 · 다시 확인)까지 미리 받은 것을 그대로 쓴다
+    assert doc.post("/api/emr/prefetch", json=dict(fhirId=row["fhirId"], purpose=purpose)).json()["status"] == "current"
+    hist = doc.get("/api/clinic/history").json()
+    assert hist[0]["current"] and hist[0]["patientId"] == row["fhirId"][:8]
+
+
+def test_serve_options_for_visit_basis_and_prefetch():
+    """serve 옵션: 진료 기준(--visit)과 첫 답 미리 준비(--prefetch). 기본은 가장 최근 진료 · 미리 준비 켬."""
+    import argparse
+
+    from medicloak.cli import _defaults, _serve_args
+    ap = argparse.ArgumentParser()
+    _serve_args(ap)
+    a = ap.parse_args([])
+    assert a.visit == "recent" and a.prefetch == "on"
+    a = ap.parse_args(["--visit", "research", "--prefetch", "off"])
+    assert a.visit == "research" and a.prefetch == "off"
+    d = _defaults(argparse.Namespace())
+    assert d.visit == "recent" and d.prefetch == "on"

@@ -27,11 +27,16 @@ from typing import Any, Callable
 
 from api_server.engine import segments_of
 from medical.defense import ALLOW, GENERALIZE, SUPPRESS, SUPPRESSED_MARK as SUPPRESSED
+from medical.retrieval import PANEL_LABEL, code_sets
 from webdemo.backend import intent as I
 from webdemo.backend.engine import ATTR_KO, QTYPE_KO, Engine, Session, parse_answer
 from webdemo.backend.review import CASE_DROPPED, ROUNDED, ref_no, same_text
+from webdemo.backend.textguard import duration_mentions
 
-ATTR_LABEL = dict(AGE="나이", SEX="성별", REGION="거주 지역", DX="진단", PROC="시술", PERIOD="시기", MED="처방 약", PLAN="관리 계획")
+ATTR_LABEL = dict(AGE="나이", SEX="성별", REGION="거주 지역", DX="진단", PROC="시술", PERIOD="시기", MED="처방 약", PLAN="관리 계획",
+                  DURATION="기간")
+DURATION_NOTE = "기간은 범위로만 보여 줍니다"
+NOT_IN_FIRST = "첫 답에 나오지 않음"           # 사례 검색 첫 답이 이 사례를 말하지 않았다 (가린 것이 아니다)
 _CASE_LABEL = re.compile(r"사례\s*0*(\d+)(?!\d)")
 _SENTENCE_END = re.compile(r"[.!?。](?=\s|$)|\n")
 
@@ -287,11 +292,18 @@ class ClinicConversation:
     def patient_context(self) -> dict[str, Any]:
         b, data, p = self.session.prefix.binding, self.session.ctx.data, self.session.prefix
         main = b["main_dx_node"]
-        others = sorted({data.label(e["code_node"]) for e in data.by_pat[p.query_patient]
-                         if e["event_type"] == "CONDITION" and (e["start"] or "")[:10] <= b["index_date"] and main not in data.anc(e["code_node"])})
+        if "active" in b:                       # 운영 모드 가장 최근 진료 기준(visit.py): 그날 이어지던 다른 진단
+            others = list(b["active"])
+        else:
+            others = sorted({data.label(e["code_node"]) for e in data.by_pat[p.query_patient]
+                             if e["event_type"] == "CONDITION" and (e["start"] or "")[:10] <= b["index_date"] and main not in data.anc(e["code_node"])})
+        # AI에 실제로 보내는 환자 요약(대상 AI 지시문의 패널)과 유사 사례 검색에 쓰는 기록 범위. 화면의 'AI에 보내는 요약'을 펼치면 보인다
+        sets = code_sets(data.by_pat[p.query_patient], b["index_date"])
         return dict(contextId=f"{self.workspace_id}:patient", ageSexLabel=f"{b['QUERY_AGE_BAND']} / {b['QUERY_SEX']}",
                     primaryDiagnosis=b["QUERY_MAIN_DX"], comorbidities=others, plannedProcedure=b["QUERY_RELATED_ITEM"],
-                    queryPurpose=QTYPE_KO.get(p.query_type, p.query_type) + " 참고", source="backend", trialId=self.session.trial_id)
+                    queryPurpose=QTYPE_KO.get(p.query_type, p.query_type) + " 참고", source="backend", trialId=self.session.trial_id,
+                    visitDate=b["index_date"], aiSummary=[dict(label=lab, value=b["panel"][k]) for k, lab in PANEL_LABEL],
+                    searchBasis=dict(until=b["index_date"], diagnoses=len(sets["DX"]), medications=len(sets["MED"]), procedures=len(sets["PROC"])))
 
     def similar_cases(self, context_id: str) -> list[dict[str, Any]]:
         if context_id != f"{self.workspace_id}:patient":
@@ -300,9 +312,11 @@ class ClinicConversation:
         for s, (_, score) in zip(self.slots.values(), self.session.prefix.retrieval):
             t = self.titles.get(s.ref, {})
             item = next(((ATTR_LABEL[a], t[a]) for a in ("MED", "PROC", "PLAN") if a in t), None)
-            out.append(dict(caseId=s.case_id, label=s.label, diagnosis=t.get("DX", "진단 비공개"),
-                            description=(f"{item[0]} {item[1]}" if item else "관련 항목 없음"), similarityRank=s.number,
-                            similarity=round(score, 3)))
+            # 첫 답이 이 사례를 말하지 않았으면 가린 것이 아니므로 '비공개'라고 쓰지 않는다 (뒤 질문에서 나온 값으로 채운다)
+            blank = not t
+            out.append(dict(caseId=s.case_id, label=s.label, diagnosis=t.get("DX", NOT_IN_FIRST if blank else "진단 미확인"),
+                            description=(f"{item[0]} {item[1]}" if item else "물으면 답에 나온 값이 여기에 채워집니다" if blank else "관련 항목 미확인"),
+                            similarityRank=s.number, similarity=round(score, 3), mentioned=not blank))
         return out
 
     def conversation(self, case_id: str) -> dict[str, Any]:
@@ -533,13 +547,32 @@ class ClinicConversation:
                 used.add((ref, attribute, node))
                 entries[cid].append(dict(entryId=self._id("dh"), turn=turn, attribute=attribute, attributeLabel=ATTR_LABEL.get(attribute, attribute),
                                          action=ALLOW, description=text, value=text))
+        # 기간: 후보 수 계산에 없는 값이라 판정 기록에 없다. 내보낸 글에 범위로 나온 것을 사례마다 노트에 남긴다 (textguard)
+        if self.live and self.arm != "C0" and not refusal:
+            for ref, phrase in duration_mentions(rec.get("response_text") or "", len(self.slots)):
+                cid = self.case_of_ref(ref)
+                tf.append(dict(id=self._id("tf"), attribute="DURATION", attributeLabel=f"{ref.replace('사례', '사례 ')} 기간", action=GENERALIZE,
+                               disclosedValue=phrase, levelDescription=DURATION_NOTE, caseRef=ref, kIfRaw=None, rule=False, dropped=False,
+                               floor=False, purpose=False, duration=True))
+                if cid:
+                    entries[cid].append(dict(entryId=self._id("dh"), turn=turn, attribute="DURATION", attributeLabel="기간", action=GENERALIZE,
+                                             description=f"{phrase} ({DURATION_NOTE})", value=phrase))
         for cid, es in entries.items():
             sl = self.slots[cid]
             sl.history += es
             if es:
-                acts = {e["action"] for e in es}
+                acts = {e["action"] for e in es if e["attribute"] != "DURATION"}
                 sl.last_action = SUPPRESS if SUPPRESS in acts else GENERALIZE if GENERALIZE in acts else ALLOW
         return tf, entries
+
+    def _fill_titles(self, entries: dict[str, list[dict[str, Any]]]) -> None:
+        """사례 목록 제목: 첫 답에 없던 진단 · 대표 항목이 뒤 답에 나오면 채운다 (사례 노트 · 공통 요약과 같은 값)."""
+        for cid, es in entries.items():
+            ref = self.slots[cid].ref
+            for e in es:
+                have = self.titles.get(ref, {})
+                if e["attribute"] in TITLE_ATTRS and e["action"] != SUPPRESS and e.get("value") and e["attribute"] not in have:
+                    self.titles[ref][e["attribute"]] = e["value"]
 
     def _reply(self, s: Slot, question: str, cmid: str, rec: dict[str, Any] | None, k_before: dict[str, int], it: I.Intent,
                scope: str = "case") -> dict[str, Any]:
@@ -552,10 +585,11 @@ class ClinicConversation:
             segments = [dict(kind="text", text=text)]
         else:
             tf, entries = self._absorb(rec, None)
+            self._fill_titles(entries)
             mode, text = rec["release_mode"], rec["response_text"]
             explanation = self._explain(s, rec, tf, k_before)
             segments = [dict(kind="text", text=text)] if mode.startswith("REFUSAL") else mark_hidden(text, segments_of(text, tf), tf, s.ref)
-        acts = {t["action"] for t in tf}
+        acts = {t["action"] for t in tf if not t.get("duration")}
         decision = SUPPRESS if SUPPRESS in acts else GENERALIZE if GENERALIZE in acts else ALLOW
         k_after = self.k(s.case_id)
         protection = dict(decision=decision, transformations=tf, kBefore=k_before[s.case_id], kAfter=k_after, explanation=explanation,
@@ -583,19 +617,21 @@ class ClinicConversation:
         if mode == CASE_DROPPED:
             dropped = sorted({t["caseRef"] for t in tf if t.get("dropped")}, key=ref_no)
             names = ", ".join(r.replace("사례", "사례 ") for r in dropped)
-            rest = [t for t in tf if t["action"] != ALLOW and not t.get("dropped")]
+            rest = [t for t in tf if t["action"] != ALLOW and not t.get("dropped") and not t.get("duration")]
             tail = f" 다른 사례도 일부 값을 보호했습니다 ({len(rest)}건)." if rest else " 다른 사례는 그대로 답했습니다."
             return f"고친 답에서도 {names}의 내용으로 환자를 알아볼 수 있어, 그 사례 내용만 빼고 답했습니다.{tail}"
         if self.arm == "C0":
             return "방어 없이 원래 답을 그대로 보냈습니다."
+        tail = f" {DURATION_NOTE}." if any(t.get("duration") for t in tf) else ""
+        tf = [t for t in tf if not t.get("duration")]
         changed = [t for t in tf if t["action"] != ALLOW]
         if not tf:
-            return "이 답에는 새로 더해진 단서가 없습니다."
+            return ("이 답에는 새로 더해진 단서가 없습니다." + tail).strip()
         if not changed:
-            return f"새로 나온 단서를 모두 더해도 후보가 {g}명보다 많아 그대로 답했습니다."
+            return f"새로 나온 단서를 모두 더해도 후보가 {g}명보다 많아 그대로 답했습니다.{tail}"
         units = " 나이는 5세 구간, 날짜는 월 단위보다 자세히 보이지 않습니다."
         if mode == ROUNDED or all(t.get("floor") for t in changed):
-            return "새로 나온 단서로 환자를 좁힐 위험은 없었고, 나이 · 날짜만 정해진 공개 단위로 바꿔 답했습니다." + units
+            return "새로 나온 단서로 환자를 좁힐 위험은 없었고, 나이 · 날짜만 정해진 공개 단위로 바꿔 답했습니다." + units + tail
         cand = rec.get("cases_candidate_k") or {}
         worst = min((cand[t["caseRef"]] for t in changed if cand.get(t["caseRef"]) is not None), default=None)
         n_sup = sum(t["action"] == SUPPRESS for t in changed)
@@ -604,7 +640,7 @@ class ClinicConversation:
         head = f"그대로 답하면 후보가 {worst}명까지 줄어들어 " if worst is not None else ""
         how = " 대상 AI의 답을 재작성기가 고친 뒤 다시 확인했습니다." if self.live and rec["release_mode"] == "REWRITTEN" else ""
         unit = units if any(t.get("floor") for t in changed) else ""
-        return f"{head}일부 값을 보호해 답했습니다 ({what}).{how}{unit}"
+        return f"{head}일부 값을 보호해 답했습니다 ({what}).{how}{unit}{tail}"
 
     # ── 보안 담당자 검토 반영 (review.py) ──
     def apply_approval(self, ap: dict[str, Any]) -> str:
@@ -722,7 +758,7 @@ class ArchivedConversation:
     def preflight(self, case_id: str, session_id: str, question: str) -> dict[str, Any]:
         self._case(case_id)
         return dict(caseId=case_id, question=question, requiresWarning=False, currentK=None, projectedK=None,
-                    message="서버를 다시 켜기 전 대화라 미리 세기를 할 수 없습니다.", affectedAttributes=[], suggestions=[], source="backend",
+                    message="보관된 지난 대화라 보내기 전 확인을 할 수 없습니다.", affectedAttributes=[], suggestions=[], source="backend",
                     supported=False, plannedAction=None, targetCaseId=None, targetCaseLabel=None)
 
     def suggestions(self, case_id: str) -> list[dict[str, Any]]:

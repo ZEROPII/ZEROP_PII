@@ -75,6 +75,7 @@ class Product:
     location_label: str = PRODUCT_LOCATION
     auto_redteam: str = "off"               # change: 설정(판정 규칙 판 · 답 형식 · 모델 · 규칙 추출)이 마지막 점검과 다르면 켤 때 점검을 돌린다
     auto_daily: str | None = None           # 'HH:MM': 매일 그 시각에도 점검 (autocheck.py)
+    prefetch: bool = True                   # EMR에서 환자 · 목적을 고르면 첫 답을 뒤에서 미리 만들어 둔다 (engine.prefetch)
 
 
 class NewSession(BaseModel):
@@ -414,8 +415,8 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
     # 질문을 보내고 답을 기다리는 동안의 진행 (의료진마다). 화면 갈래(C1)의 실제 LLM 호출만 센다 (live.CallWatchLLM).
     asking: dict[str, dict[str, Any]] = {}
     asking_lock = threading.Lock()
-    ask_step_ko = dict(target="진료 지원 AI가 답을 쓰고 있습니다", extractor="답에서 환자를 알아볼 수 있는 단서를 찾고 있습니다",
-                       recheck="고친 답을 다시 확인하고 있습니다", rewriter="가릴 값을 고쳐 쓰고 있습니다")
+    ask_step_ko = dict(target="답을 쓰는 중", extractor="답에 환자를 알아볼 수 있는 값이 있는지 확인하는 중",
+                       recheck="고친 답을 한 번 더 확인하는 중", rewriter="알아볼 수 있는 값을 고쳐 쓰는 중")
 
     @r.post("/cases/{case_id}/messages")
     def ask(case_id: str, body: MessageIn, request: Request) -> dict[str, Any]:
@@ -423,7 +424,7 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
             raise HTTPException(422, "질문이 비어 있습니다.")
         d = opened(request)
         key = launch_key(request)
-        st = dict(started=time.time(), label="질문을 보내고 있습니다", calls=0, extracted=False)
+        st = dict(started=time.time(), label="질문을 보내는 중", calls=0, extracted=False)
 
         def on_call(role: str, n: int) -> None:
             step = ("recheck" if st["extracted"] else "extractor") if role == "extractor" else role
@@ -523,7 +524,7 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
                 pc = conv.patient_context()
                 out.append(dict(id=s.id, trialId=s.trial_id, startedAt=s.created, lastActive=s.last_active, questions=s.turn,
                                 patient=f"{pc['ageSexLabel']} · {pc['primaryDiagnosis']}", purpose=pc["queryPurpose"],
-                                current=conv is d.peek(), archived=False))
+                                patientId=((s.launch or {}).get("fhirId") or s.patient_id)[:8], current=conv is d.peek(), archived=False))
                 seen.add(s.id)
         store, u = state["store"], user_of(request)
         if store is not None and u is not None:
@@ -533,7 +534,7 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
                 pc = c["clinic"]["patient"]
                 out.append(dict(id=c["conv_id"], trialId=c["trial_id"], startedAt=c["started_at"], lastActive=c["last_active"],
                                 questions=c["turns"], patient=f"{pc['ageSexLabel']} · {pc['primaryDiagnosis']}", purpose=pc["queryPurpose"],
-                                current=False, archived=True))
+                                patientId=(c.get("patient_fhir_id") or "")[:8] or None, current=False, archived=True))
         out.sort(key=lambda x: (not x["current"], -(x["lastActive"] or 0)))
         return out
 
@@ -554,8 +555,8 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
     # 진료 지원 AI를 여는 동안의 진행 (의료진마다). 첫 답은 실제 LLM을 차례로 여러 번 부르므로 화면이 지금 단계를 보여 준다.
     launching: dict[str, dict[str, Any]] = {}
     launching_lock = threading.Lock()
-    step_ko = dict(target="진료 지원 AI가 비슷한 사례를 정리하고 있습니다", extractor="답에서 환자를 알아볼 수 있는 단서를 찾고 있습니다",
-                   recheck="고친 답을 다시 확인하고 있습니다", rewriter="가릴 값을 고쳐 쓰고 있습니다")
+    step_ko = dict(target="비슷한 사례를 정리하는 중", extractor="답에 환자를 알아볼 수 있는 값이 있는지 확인하는 중",
+                   recheck="고친 답을 한 번 더 확인하는 중", rewriter="알아볼 수 있는 값을 고쳐 쓰는 중")
 
     def launch_key(request: Request) -> str:
         u = user_of(request)
@@ -584,6 +585,21 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
                     launching.pop(key)
         mon().log("emr_launch", d.session, user=user_of(request), actor="의료진", purpose=body.purpose)
         return dict(status="ok", workspaceId=d.workspace_id, trialId=tid, seconds=round(time.time() - st["started"], 1), calls=st["calls"])
+
+    @r.post("/emr/prefetch")
+    def emr_prefetch(body: LaunchIn, request: Request) -> dict[str, Any]:
+        """
+        진료 목적을 고른 채 잠시 머물면 화면이 부른다. 첫 답(대상 AI 답 · 추출)을 뒤에서 미리 만들어 '열기'를 짧게 한다 (engine.prefetch).
+        대화 · 기록은 만들지 않는다. 지금 연 환자 · 목적이면 하지 않는다. serve --prefetch off면 off.
+        """
+        emr()
+        if product is not None and not product.prefetch:
+            return dict(status="off")
+        tid = find_trial(eng(), body.fhirId, body.purpose)
+        cur_conv = desk(request).peek()
+        if cur_conv is not None and cur_conv.session.trial_id == tid:
+            return dict(status="current")
+        return dict(status=eng().prefetch(tid, launch_key(request)))
 
     @r.get("/emr/launch/progress")
     def emr_launch_progress(request: Request) -> dict[str, Any]:

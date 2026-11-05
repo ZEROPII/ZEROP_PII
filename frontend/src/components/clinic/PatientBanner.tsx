@@ -1,11 +1,30 @@
 import { ChevronDown, ChevronUp, ClipboardList, RefreshCw, UserRound } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { type RefObject, useCallback, useEffect, useRef, useState } from 'react';
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../../state/AuthContext';
 import { useWorkspace } from '../../state/WorkspaceContext';
-import type { PatientOption } from '../../types/domain';
+import type { PatientContext, PatientOption } from '../../types/domain';
 import { MockBadge } from '../common/MockBadge';
 import { useToast } from '../layout/Toast';
+
+/** 바깥을 누르거나 Esc를 누르면 닫는다 */
+function useDismiss(open: boolean, box: RefObject<HTMLDivElement | null>, close: () => void) {
+  useEffect(() => {
+    if (!open) return;
+    function onDown(e: MouseEvent) {
+      if (box.current && !box.current.contains(e.target as Node)) close();
+    }
+    function onKey(e: KeyboardEvent) {
+      if (e.key === 'Escape') close();
+    }
+    document.addEventListener('mousedown', onDown);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open, box, close]);
+}
 
 /** 데모 서버에서만: 다른 질의 환자로 새 대화를 시작한다 (실제 EMR에서는 진료 중 환자가 바뀌는 자리). */
 function DemoPatientSwitcher() {
@@ -27,21 +46,8 @@ function DemoPatientSwitcher() {
   useEffect(() => {
     if (current) setPick(current);
   }, [current]);
-  useEffect(() => {
-    if (!open) return;
-    function onDown(e: MouseEvent) {
-      if (box.current && !box.current.contains(e.target as Node)) setOpen(false);
-    }
-    function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') setOpen(false);
-    }
-    document.addEventListener('mousedown', onDown);
-    document.addEventListener('keydown', onKey);
-    return () => {
-      document.removeEventListener('mousedown', onDown);
-      document.removeEventListener('keydown', onKey);
-    };
-  }, [open]);
+  const close = useCallback(() => setOpen(false), []);
+  useDismiss(open, box, close);
 
   if (!api.resetSession || !options.length) return null;
   const featured = options.filter((o) => o.featured);
@@ -103,6 +109,55 @@ function DemoPatientSwitcher() {
 }
 
 /**
+ * 'AI에 보내는 요약': 누르면 진료 지원 AI에 실제로 보내는 환자 요약 줄과, 유사 사례 검색에 쓰는 기록 범위를 펼친다.
+ * 의사가 보내는 내용을 직접 확인할 수 있게 한다 (예: 동반질환이 빠졌는지).
+ */
+function AiSummaryButton({ p }: { p: PatientContext }) {
+  const [open, setOpen] = useState(false);
+  const box = useRef<HTMLDivElement>(null);
+  const close = useCallback(() => setOpen(false), []);
+  useDismiss(open, box, close);
+  const lines = p.aiSummary ?? [];
+  const basis = p.searchBasis;
+  return (
+    <div ref={box} className="relative hidden lg:block">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen((o) => !o)}
+        className="inline-flex items-center gap-0.5 rounded-[5px] border border-line px-1.5 py-px text-[10.5px] font-semibold text-ink-3 hover:border-line-input hover:text-ink-2"
+      >
+        AI에 보내는 요약
+        <ChevronDown className="h-3 w-3" aria-hidden />
+      </button>
+      {open && (
+        <div className="absolute left-0 top-7 z-40 w-[340px] rounded-control border border-line bg-surface p-3 text-xs font-normal shadow-overlay">
+          <p className="leading-5 text-ink-2">진료 지원 AI에는 아래 요약만 보냅니다. 이름 · 생년 · 주소는 보내지 않습니다.</p>
+          {lines.length > 0 ? (
+            <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 rounded-cell bg-surface-2 px-2.5 py-2">
+              {lines.map((l) => (
+                <div key={l.label} className="contents">
+                  <dt className="text-ink-3">{l.label}</dt>
+                  <dd className="break-words font-semibold text-ink">{l.value}</dd>
+                </div>
+              ))}
+            </dl>
+          ) : (
+            <p className="mt-2 text-ink-3">연령 / 성별 · 주진단 · 동반질환 · 고려 중 처치 · 조회 목적</p>
+          )}
+          {p.visitDate && <p className="mt-2 leading-5 text-ink-2">기준 진료일: {p.visitDate}</p>}
+          {basis && (
+            <p className="mt-1 leading-5 text-ink-2">
+              유사 사례 검색에는 {basis.until}까지의 진단 {basis.diagnoses}개 · 약 {basis.medications}개 · 시술 {basis.procedures}개 기록을 씁니다.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/**
  * EMR 환자 띠: 지금 진료 중인 환자. 이 값은 의료진 화면에만 쓰고, 질문 전송 · AI 답 · 사례 데이터 어디에도 섞지 않는다.
  * 좁은 화면에서는 주진단만 보이고 눌러서 펼친다.
  */
@@ -131,14 +186,7 @@ export function PatientBanner() {
             <UserRound className="h-3.5 w-3.5" aria-hidden />
           </span>
           진료 중 환자
-          {p && !state.noConversation && (
-            <span
-              className="hidden rounded-[5px] border border-line px-1.5 py-px text-[10.5px] font-semibold text-ink-3 lg:inline"
-              title="진료 지원 AI에는 이 요약(연령대 · 성별 · 주진단 · 동반질환 · 고려 중 처치 · 조회 목적)만 보냅니다. 이름 · 생년 · 주소는 보내지 않습니다."
-            >
-              AI에 보내는 요약
-            </span>
-          )}
+          {p && !state.noConversation && <AiSummaryButton p={p} />}
         </span>
         {state.noConversation ? (
           <span className="flex min-w-0 flex-1 items-center gap-3 text-xs text-ink-3">

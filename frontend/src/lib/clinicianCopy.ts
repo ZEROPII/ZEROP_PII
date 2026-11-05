@@ -14,6 +14,7 @@ export const ATTR_LABEL: Record<string, string> = {
   PERIOD: '시기',
   MED: '처방 약',
   PLAN: '관리 계획',
+  DURATION: '기간',
 };
 
 /** 조치 하나의 항목 이름. 데모 백엔드는 attributeLabel에 '사례 1 '을 붙여 보내므로 떼어 낸다. */

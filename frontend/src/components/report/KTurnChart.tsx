@@ -35,12 +35,6 @@ export function KTurnChart({ series, kReq, max: maxIn, height = 318, markTurn = 
     <svg viewBox={`0 0 ${W} ${height}`} className="block h-auto w-full" role="img" aria-label="턴별 후보 수 중앙값 그래프">
       <rect x={m.l} y={y(kReq - 0.5)} width={W - m.l - m.r} height={y(1) - y(kReq - 0.5)} fill="var(--zp-danger-tint)" />
       <rect x={m.l} y={y(kReq + 0.5)} width={W - m.l - m.r} height={y(kReq - 0.5) - y(kReq + 0.5)} fill="var(--zp-caution-tint)" />
-      <text x={m.l + 8} y={y(1) - 7} fontSize={11} fontWeight={650} fill="var(--zp-danger-text)">
-        기준 미달 {kReq - 1}명 이하
-      </text>
-      <text x={W - m.r - 8} y={y(kReq) + 4} fontSize={11} fontWeight={650} textAnchor="end" fill="var(--zp-caution-text)">
-        경계 {kReq}명
-      </text>
       {[1, 3, 5, 10, 30, 100, 300].filter((v) => v <= max).map((v) => (
         <g key={v}>
           <line x1={m.l} x2={W - m.r} y1={y(v)} y2={y(v)} stroke="var(--zp-line)" />
@@ -90,6 +84,34 @@ export function KTurnChart({ series, kReq, max: maxIn, height = 318, markTurn = 
           {s.name} {s.values[s.values.length - 1]}명
         </text>
       ))}
+      {/* 구간 이름은 눈금선 · 선 그래프 위에 그린다. 글자 둘레를 바탕 띠 색으로 덧칠해 지나가는 선에 가리지 않게 한다 */}
+      <text
+        x={m.l + 8}
+        y={y(1) - 7}
+        fontSize={11}
+        fontWeight={650}
+        fill="var(--zp-danger-text)"
+        stroke="var(--zp-danger-tint)"
+        strokeWidth={4}
+        strokeLinejoin="round"
+        style={{ paintOrder: 'stroke' }}
+      >
+        기준 미달 {kReq - 1}명 이하
+      </text>
+      <text
+        x={W - m.r - 8}
+        y={y(kReq) + 4}
+        fontSize={11}
+        fontWeight={650}
+        textAnchor="end"
+        fill="var(--zp-caution-text)"
+        stroke="var(--zp-caution-tint)"
+        strokeWidth={5}
+        strokeLinejoin="round"
+        style={{ paintOrder: 'stroke' }}
+      >
+        경계 {kReq}명
+      </text>
     </svg>
   );
 }

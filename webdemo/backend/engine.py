@@ -43,6 +43,7 @@ from medical.tracking import Case, known_cases_json, view_of
 from medical.validate import validate_case
 from webdemo.backend.live import ANSWER_STYLE_ID, ORACLE_LABEL, AnswerStyleLLM, CallWatchLLM, LiveLLM, Turn0Cache, Turn0LLM, background_calls, styled
 from webdemo.backend.review import RELEASE_VERSION, RuledArmRun, decision_of, hidden_items
+from webdemo.backend.visit import make_prefix_with, visit_binding
 
 PROFILES = ("staged", "full")
 FUZZERS = ("uniform", "feedback")
@@ -107,7 +108,7 @@ class Engine:
 
     def __init__(self, workdir: Path | None = None, log: Callable[[str], None] = print, *, paths: MedicalPaths | None = None,
                  live_llm: Any = None, live_label: str | None = None, first_id: int = 1, llm_concurrency: int = 1,
-                 live_rule_extract: bool = True, answer_style: bool = True) -> None:
+                 live_rule_extract: bool = True, answer_style: bool = True, recent_visit: bool = False) -> None:
         t0 = time.time()
         self.lock = threading.RLock()                                # kcalc 캐시·응답기 상태를 세션끼리 나눠 쓰므로 한 번에 한 요청
         self.workdir = Path(workdir or ROOT / "runs" / "webdemo")
@@ -118,7 +119,10 @@ class Engine:
         base, self.split = build_context(self.cfg, self.llm["staged"], self.workdir / "engine", data=self.data, paths=self.paths)
         self.ctx: dict[str, Context] = {"staged": base, "full": replace(base, llm=self.llm["full"])}
         # 의료진 대화 LLM은 네트워크 호출 동안 엔진 잠금을 푸는 포장(LiveLLM)을 씌운다 (live.py)
-        self.live_llm = LiveLLM(live_llm, self.lock, concurrency=llm_concurrency) if live_llm is not None else None
+        self.live_llm = LiveLLM(live_llm, self.lock, concurrency=llm_concurrency, data=self.data) if live_llm is not None else None
+        # 운영 모드: 의료진 대화의 진료 기준을 가장 최근 진료로 (visit.py). 연구 계획 · 레드팀은 연구 기준 그대로
+        self.recent_visit = recent_visit
+        self._prefetching: dict[str, threading.Thread] = {}
         # 실제 LLM 추출기는 날짜를 따로 된 단서(PERIOD)로 내지 않고 약 항목의 period_start 칸에만 적을 때가 있다.
         # 그러면 공개 계획이 날짜를 세지 않고, 고친 답을 다시 뽑을 때에야 날짜가 단서로 나와 답 전체가 거절된다.
         # 그래서 실제 LLM 대화에는 규칙 추출(medical/rule_extract.py: 답에 적힌 나이 · 날짜를 정규식으로 보탬)을 켠다.
@@ -151,11 +155,17 @@ class Engine:
                     profiles=PROFILE_KO, fuzzers=FUZZER_KO, qtypes=QTYPE_KO, attributes=ATTR_KO,
                     target="결정적 응답기 (질문받은 단서를 검색 문서의 기록값으로 답함, LLM 호출 없음)")
 
+    def binding(self, trial_id: str) -> dict[str, Any] | None:
+        """의료진 대화가 쓸 진료 기준 (환자 요약 · 검색 기준일). 운영 모드는 가장 최근 진료, 아니면 연구 기준. make_prefix와 같은 난수."""
+        pid, qt = self.trial_of[trial_id]
+        rng = random.Random(f"{self.cfg.seed}-{trial_id}")
+        return visit_binding(self.data, pid, qt, rng) if self.recent_visit else query_binding(self.data, pid, qt, rng)
+
     def patients(self) -> list[dict[str, Any]]:
         """질의 환자 목록 (trial 단위: 같은 환자가 조회 유형마다 따로 나온다)."""
         out = []
         for tid, pid, qt, _ in self.plan:
-            b = query_binding(self.data, pid, qt, random.Random(f"{self.cfg.seed}-{tid}"))   # make_prefix와 같은 난수 → 같은 패널
+            b = self.binding(tid)
             out.append(dict(trial_id=tid, patient=pid[:8], qtype=qt, qtype_label=QTYPE_KO[qt],
                             panel=[dict(label=lab, value=b["panel"][k]) for k, lab in PANEL_LABEL]))
         return out
@@ -215,6 +225,52 @@ class Engine:
                         print(f"[medicloak] 비교 갈래 저장 실패 ({s.id}): {type(exc).__name__}: {exc}")
             finally:
                 self._compare_q.task_done()
+
+    # ── 첫 답 미리 준비 (운영 모드, 실제 LLM) ──
+    def prefetch(self, trial_id: str, key: str) -> str:
+        """
+        EMR에서 환자 · 진료 목적을 고르면 '진료 지원 AI 열기'를 누르기 전에 첫 답을 뒤에서 만들어 둔다:
+        대상 AI 답 · 추출, 그리고 화면 갈래(C1)의 첫 답 공개 처리(재작성 · 다시 확인).
+        대화를 열 때 같은 요청을 Turn0Cache에서 꺼내 쓰고, 아직 부르는 중이면 끝나기를 기다린다 (같은 호출을 두 번 하지 않는다).
+        호출은 의료진 질문에 자리를 양보한다(background_calls). key(의료진)마다 한 번에 하나. 돌려주는 값: started · busy · off.
+        대화(Session) · 기록은 만들지 않는다 (공개 처리 갈래 객체는 버린다). 열기 전에는 의료진에게 아무것도 보이지 않는다.
+        """
+        if self.live_ctx is None or trial_id not in self.trial_of:
+            return "off"
+        pid, qt = self.trial_of[trial_id]
+        with self.lock:
+            t = self._prefetching.get(key)
+            if t is not None and t.is_alive():
+                return "busy"
+
+            def run() -> None:
+                background_calls()
+                try:
+                    with self.lock:                      # 대화를 열 때(new_session)와 같은 잠금. 네트워크 호출 동안은 LiveLLM이 푼다
+                        live_ctx = replace(self.live_ctx, llm=AnswerStyleLLM(self.live_ctx.llm)) if self.answer_style else self.live_ctx
+                        llm0 = Turn0LLM(live_ctx.llm, self.ctx["staged"].llm, cache=self.turn0_cache)
+                        ctx0 = replace(live_ctx, llm=llm0)
+                        if self.recent_visit:
+                            p = make_prefix_with(ctx0, trial_id, pid, qt, "DOCTOR", visit_binding)
+                        else:
+                            p = make_prefix(ctx0, trial_id, pid, qt, "DOCTOR")
+                        # 화면 갈래(C1)의 첫 답 공개 처리를 대화와 똑같이 한 번 돌려 재작성 · 다시 확인 요청도 Turn0Cache에 남긴다.
+                        # 새 대화는 아직 보안 담당자 규칙이 없으므로(rules=[]) 열 때의 C1과 요청이 같다. 거절이면 나눠 쓰지 않는다.
+                        recs: list[dict[str, Any]] = []
+                        llm0.next_arm()
+                        RuledArmRun(ctx0, p, "C1", recs.append, list, live=True)._turn(
+                            0, p.q0, p.raw0, p.obs0, p.extract_ok0, p.extract_tries0,
+                            dict(seed_id=None, case_query_id=p.case_query_id, operator=p.op0, realization_fallback=p.realization_fallback,
+                                 checks=p.tries0, regenerations=max(len(p.tries0) - 1, 0)))
+                        if not recs or str(recs[0].get("release_mode", "")).startswith("REFUSAL"):
+                            llm0.forget()
+                except Exception as exc:                 # 미리 준비가 실패해도 열 때 다시 부른다
+                    print(f"[medicloak] 첫 답 미리 준비 실패 ({trial_id}): {type(exc).__name__}: {exc}")
+
+            t = threading.Thread(target=run, daemon=True, name="medicloak-prefetch")
+            self._prefetching[key] = t
+            t.start()
+            return "started"
 
     def compare_pending(self) -> int:
         return self._compare_q.unfinished_tasks
@@ -282,7 +338,10 @@ class Session:
             live_ctx = replace(eng.live_ctx, llm=AnswerStyleLLM(eng.live_ctx.llm)) if eng.answer_style else eng.live_ctx
         ctx0 = (replace(live_ctx, llm=Turn0LLM(live_ctx.llm, self.ctx.llm, cache=eng.turn0_cache, on_call=on_call))
                 if live_ctx is not None else self.ctx)
-        p = self.prefix = make_prefix(ctx0, trial_id, pid, qt, "DOCTOR")
+        if eng.recent_visit and source == "clinic":         # 운영 모드 의료진 대화: 가장 최근 진료 기준 (visit.py)
+            p = self.prefix = make_prefix_with(ctx0, trial_id, pid, qt, "DOCTOR", visit_binding)
+        else:
+            p = self.prefix = make_prefix(ctx0, trial_id, pid, qt, "DOCTOR")
         self.logs: dict[str, list[dict[str, Any]]] = {a: [] for a in ARMS}
         self.runs = {a: RuledArmRun(ctx0, p, a, self._logger(a), lambda a=a: self.rules_for(a), live=llm_mode == "live") for a in ARMS}
         self.steps: list[dict[str, Any]] = []           # 세션 턴마다: 질문 Seed와 조건별 처리 결과

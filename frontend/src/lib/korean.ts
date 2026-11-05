@@ -19,10 +19,13 @@ export function josa(word: string, withFinal: string, withoutFinal: string): str
   return word + (hasFinalConsonant(word) ? withFinal : withoutFinal);
 }
 
-/** '(으)로'는 ㄹ 받침에서도 '로'를 쓴다. */
+/** ㄹ 받침으로 읽는 숫자 (일 · 칠 · 팔) */
+const NUMBER_RIEUL = new Set(['1', '7', '8']);
+
+/** '(으)로'는 ㄹ 받침에서도 '로'를 쓴다 ('사례 1로', '사례 3으로'). */
 export function josaRo(word: string): string {
   const last = word.trim().slice(-1);
   const code = last.charCodeAt(0);
-  const isRieul = code >= 0xac00 && code <= 0xd7a3 && (code - 0xac00) % 28 === 8;
+  const isRieul = (code >= 0xac00 && code <= 0xd7a3 && (code - 0xac00) % 28 === 8) || NUMBER_RIEUL.has(last);
   return word + (hasFinalConsonant(word) && !isRieul ? '으로' : '로');
 }

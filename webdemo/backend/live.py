@@ -8,11 +8,14 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import threading
 import time
-from typing import Any
+from typing import Any, Iterator
+
+from webdemo.backend.textguard import fix_extraction
 
 LLM_CHOICES = ("real", "dry-run", "oracle")
 ORACLE_LABEL = "결정적 응답기 (LLM 호출 없음)"
@@ -31,11 +34,16 @@ def background_calls() -> None:
 
 
 class _Slots:
-    """동시 호출 수 n. 의료진 질문(앞) 호출이 기다리고 있으면 비교 갈래(뒤) 호출은 자리가 나도 양보한다."""
+    """
+    동시 호출 수 n. 의료진 질문(앞) 호출은 앞 호출끼리만 n을 센다: 뒤에서 이미 보낸 비교 갈래 · 미리 준비 호출이 끝나기를 기다리지
+    않는다 (2026-11-05 의료진 체험: 답 하나에 20초). 뒤 호출은 앞 호출이 기다리거나 보내는 중이면 자리가 나도 양보한다.
+    그래서 같은 순간의 호출은 앞 n개 + 이미 보낸 뒤 호출까지다.
+    """
 
     def __init__(self, n: int) -> None:
         self.n = max(1, int(n))
         self.busy = 0
+        self.busy_front = 0
         self.waiting_front = 0
         self.waiting_back = 0
         self.cv = threading.Condition()
@@ -47,19 +55,44 @@ class _Slots:
             else:
                 self.waiting_front += 1
             try:
-                while self.busy >= self.n or (back and self.waiting_front > 0):
-                    self.cv.wait()
+                if back:
+                    while self.busy >= self.n or self.waiting_front > 0 or self.busy_front > 0:
+                        self.cv.wait()
+                else:
+                    while self.busy_front >= self.n:
+                        self.cv.wait()
                 self.busy += 1
+                if not back:
+                    self.busy_front += 1
             finally:
                 if back:
                     self.waiting_back -= 1
                 else:
                     self.waiting_front -= 1
 
-    def release(self) -> None:
+    def release(self, back: bool = False) -> None:
         with self.cv:
             self.busy -= 1
+            if not back:
+                self.busy_front -= 1
             self.cv.notify_all()
+
+
+@contextlib.contextmanager
+def lock_released(lock: Any) -> Iterator[None]:
+    """이 스레드가 잡은 엔진 잠금(RLock)을 모두 풀었다가 끝나면 같은 횟수만큼 다시 잡는다 (잡지 않았으면 그대로)."""
+    held = 0
+    while lock is not None:
+        try:
+            lock.release()
+        except RuntimeError:
+            break
+        held += 1
+    try:
+        yield
+    finally:
+        for _ in range(held):
+            lock.acquire()
 
 
 class LiveLLM:
@@ -71,13 +104,16 @@ class LiveLLM:
         잠금이 풀린 사이에 다른 요청이 보는 State는 늘 앞 턴까지의 것이다. 같은 대화의 질문은 ClinicDesk 잠금이 줄 세운다.
       - 동시 호출 수를 제한한다. 기본 1이면 .env LLM_MIN_INTERVAL_SEC 간격 제한(core.llm_client)이 그대로 지켜진다.
       - 비교 갈래(C1S) 계산 스레드의 호출은 의료진 질문 호출에 자리를 양보한다 (background_calls).
+      - 추출기 출력은 공개 판정에 넘기기 전에 바로잡는다 (textguard.fix_extraction: 근거 문장 목록 · 사례 문서 대조 보탬).
+        data(MedicalData)를 주면 약 성분 이름 · 진단 범주 이름까지 대조한다. 의료진 대화 · 실제 LLM 레드팀이 같이 지난다.
     """
 
-    def __init__(self, inner: Any, lock: Any, *, concurrency: int = 1) -> None:
+    def __init__(self, inner: Any, lock: Any, *, concurrency: int = 1, data: Any = None) -> None:
         self.inner = inner
         self.lock = lock
         self.concurrency = max(1, int(concurrency))
         self._slots = _Slots(self.concurrency)
+        self.data = data
 
     @property
     def usage(self) -> list[dict[str, Any]]:
@@ -86,7 +122,7 @@ class LiveLLM:
     def sibling(self, inner: Any) -> "LiveLLM":
         """같은 자리(동시 호출 수 · 의료진 질문 우선)를 나눠 쓰는 다른 LLM (레드팀 실행이 호출 수를 따로 세려고 씀)."""
         s = LiveLLM.__new__(LiveLLM)
-        s.inner, s.lock, s.concurrency, s._slots = inner, self.lock, self.concurrency, self._slots
+        s.inner, s.lock, s.concurrency, s._slots, s.data = inner, self.lock, self.concurrency, self._slots, self.data
         return s
 
     @property
@@ -95,22 +131,16 @@ class LiveLLM:
         return self._slots.waiting_front
 
     def complete(self, role: str, system: str, messages: list[dict[str, str]], **kw: Any) -> str:
-        held = 0
-        while True:                      # 이 스레드가 잡은 만큼 모두 푼다 (잡지 않았으면 RuntimeError로 바로 끝)
+        back = bool(getattr(_BACKGROUND, "low", False))
+        with lock_released(self.lock):
+            self._slots.acquire(back=back)
             try:
-                self.lock.release()
-            except RuntimeError:
-                break
-            held += 1
-        try:
-            self._slots.acquire(back=bool(getattr(_BACKGROUND, "low", False)))
-            try:
-                return self.inner.complete(role, system, messages, **kw)
+                out = self.inner.complete(role, system, messages, **kw)
             finally:
-                self._slots.release()
-        finally:
-            for _ in range(held):
-                self.lock.acquire()
+                self._slots.release(back=back)
+        if role == "extractor":
+            out = fix_extraction(out, kw.get("response"), kw.get("docs"), self.data)
+        return out
 
 
 def make_live_llm(choice: str, cfg: Any, env_file: str | None = None, *, role_models: dict[str, str] | None = None) -> tuple[Any | None, str]:
@@ -141,6 +171,7 @@ ANSWER_STYLE = """[답 형식]
 이 답은 진료 중인 의사의 화면에 그대로 보입니다.
 - 사례마다 짧은 문장 두세 개로 씁니다. 표, 머리글(#), 굵은 글씨(**)는 쓰지 않습니다.
 - 질문에 답하는 데 필요한 값만 씁니다. 묻지 않은 날짜 · 나이 · 지역 · 횟수는 덧붙이지 않습니다.
+- 기간(복용 기간, 진단이 이어진 기간 등)을 물으면 날짜 대신 '약 2주', '3~7일'처럼 걸린 기간으로 답합니다.
 - 기록에 없는 내용은 '-'로 채우지 말고 쓰지 않습니다."""
 
 
@@ -181,6 +212,26 @@ class Turn0Cache:
         self.cap = cap
         self.lock = threading.Lock()
         self.answers: dict[str, list[str]] = {}
+        # 지금 부르는 중인 요청 (미리 준비 · 다른 대화). 같은 요청이 오면 새로 부르지 않고 끝나기를 기다린다
+        self.pending: dict[tuple[str, int], threading.Event] = {}
+
+    def claim(self, key: str, n: int) -> threading.Event | None:
+        """같은 요청을 다른 쪽이 부르는 중이면 그 표지(Event), 아니면 None (이쪽이 부르는 것으로 적는다 · 이미 답이 있어도 None)."""
+        with self.lock:
+            got = self.answers.get(key)
+            if got is not None and n < len(got):
+                return None
+            ev = self.pending.get((key, n))
+            if ev is not None:
+                return ev
+            self.pending[(key, n)] = threading.Event()
+            return None
+
+    def done(self, key: str, n: int) -> None:
+        with self.lock:
+            ev = self.pending.pop((key, n), None)
+        if ev is not None:
+            ev.set()
 
     def get(self, key: str, n: int) -> str | None:
         with self.lock:
@@ -269,7 +320,18 @@ class Turn0LLM:
         self._used[key] = n + 1
         self.keys.add(key)
         hit = self.cache.get(key, n)
+        for _ in range(2):                                       # 같은 요청을 미리 준비 중이면 새로 부르지 않고 기다린다
+            if hit is not None:
+                return hit
+            ev = self.cache.claim(key, n)
+            hit = self.cache.get(key, n)
+            if ev is None:
+                break
+            with lock_released(getattr(self.live, "lock", None)):     # 기다리는 동안 다른 요청이 엔진을 쓰게
+                ev.wait(timeout=240)
+            hit = self.cache.get(key, n)
         if hit is not None:
+            self.cache.done(key, n)
             return hit
         self.calls += 1
         if self.on_call is not None:
@@ -277,8 +339,11 @@ class Turn0LLM:
                 self.on_call(role, self.calls)
             except Exception:                                    # 진행 표시가 실패해도 호출은 한다
                 pass
-        out = self.live.complete(role, system, messages, **kw)
-        self.cache.put(key, n, out)
+        try:
+            out = self.live.complete(role, system, messages, **kw)
+            self.cache.put(key, n, out)
+        finally:
+            self.cache.done(key, n)
         return out
 
 

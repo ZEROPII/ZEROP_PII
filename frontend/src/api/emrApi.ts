@@ -76,6 +76,24 @@ export const emrApi = {
     }
     return (await res.json()) as { trialId: string; seconds?: number; calls?: number };
   },
+  /**
+   * 고른 환자 · 진료 목적의 첫 답을 서버가 뒤에서 미리 만들어 두게 한다 (열기를 짧게). 실패해도 화면에는 알리지 않는다.
+   * status: started · busy(이미 준비 중) · current(지금 연 대화) · off(서버 설정)
+   */
+  prefetch: async (fhirId: string, purpose: string): Promise<string> => {
+    try {
+      const res = await fetch(`${API_BASE}/emr/prefetch`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fhirId, purpose }),
+      });
+      if (!res.ok) return 'error';
+      return ((await res.json()) as { status?: string }).status ?? 'error';
+    } catch {
+      return 'error';
+    }
+  },
   /** /fhir/{Condition|MedicationRequest|Procedure|CarePlan}?patient= */
   search: (resource: string, patientId: string, signal?: AbortSignal) =>
     get<FhirBundle>(`${FHIR_BASE}/${resource}?patient=${encodeURIComponent(patientId)}`, signal),

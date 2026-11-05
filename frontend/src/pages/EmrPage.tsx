@@ -198,6 +198,15 @@ export function EmrPage() {
   const selIsCurrent = !!sel && sel.trialId === currentTrial;
   const switching = !!current && !!sel && !selIsCurrent;
 
+  // 환자 · 진료 목적을 고르고 1초쯤 머물면 서버가 첫 답을 뒤에서 미리 만들어 둔다 ('열기'가 짧아진다). 결과는 화면에 알리지 않는다.
+  const prefetchFor = sel && !selIsCurrent && patient ? `${patient.fhirId}|${sel.purpose}` : null;
+  useEffect(() => {
+    if (!prefetchFor) return;
+    const [fhirId, why] = prefetchFor.split('|');
+    const t = window.setTimeout(() => void emrApi.prefetch(fhirId, why), 1000);
+    return () => window.clearTimeout(t);
+  }, [prefetchFor]);
+
   function onOpen() {
     if (selIsCurrent) {
       navigate('/');
@@ -338,7 +347,7 @@ export function EmrPage() {
                 <p id="purpose-label" className="flex items-baseline justify-between gap-2 text-xs font-semibold text-ink-3">
                   진료 목적
                   {sameDay && (
-                    <span className="num font-normal" title="진료 지원 AI는 이 날의 진료를 기준으로 환자 요약(연령대 · 주진단 · 고려 중인 처치)을 만듭니다">
+                    <span className="num font-normal" title="진료 지원 AI는 이 목적에 맞는 가장 최근 진료를 기준으로 환자 요약(나이 · 성별 · 주진단 · 동반질환 · 고려 중인 처치)을 만듭니다">
                       {sameDay} 진료 기준
                     </span>
                   )}
@@ -355,7 +364,7 @@ export function EmrPage() {
                         <span className="min-w-0 text-[13px]">
                           <span className="font-semibold text-ink">{x.purposeLabel}</span>
                           {!sameDay && (
-                            <span className="num ml-2 text-xs text-ink-3" title="진료 지원 AI는 이 날의 진료를 기준으로 환자 요약(연령대 · 주진단 · 고려 중인 처치)을 만듭니다">
+                            <span className="num ml-2 text-xs text-ink-3" title="진료 지원 AI는 이 목적에 맞는 가장 최근 진료를 기준으로 환자 요약(나이 · 성별 · 주진단 · 동반질환 · 고려 중인 처치)을 만듭니다">
                               {x.visitDate} 진료 기준
                             </span>
                           )}
@@ -363,6 +372,7 @@ export function EmrPage() {
                             {x.mainDx}
                             {x.item ? ` · 고려 중: ${x.item}` : ''}
                           </span>
+                          {x.comorbidity && <span className="mt-0.5 block text-xs text-ink-3">동반질환: {x.comorbidity}</span>}
                         </span>
                       </label>
                     );
@@ -407,13 +417,11 @@ export function EmrPage() {
                     <div className="h-full animate-pulse rounded-full bg-iris" style={{ width: `${Math.min(92, 18 + (progress?.calls ?? 0) * 12)}%` }} />
                   </div>
                   <p className="mt-1.5 text-xs leading-5 text-ink-2">{progress?.label ?? '비슷한 과거 사례를 찾고 있습니다'}</p>
-                  <p className="num text-[11px] text-ink-3">
-                    {Math.round(progress?.elapsed ?? 0)}초 지남 · 실제 LLM 호출 {progress?.calls ?? 0}번
-                  </p>
+                  <p className="num text-[11px] text-ink-3">{Math.round(progress?.elapsed ?? 0)}초 지남</p>
                 </div>
               )}
               <p className="mt-1 text-xs leading-5 text-ink-3">
-                AI에는 이 환자의 요약(연령대, 성별, 주진단, 고려 중인 처치)만 함께 보냅니다. MediCloak은 AI가 찾아 준 과거 사례 쪽에서 나오는 값을 보호합니다.
+                AI에는 이 환자의 요약(나이, 성별, 주진단, 동반질환, 고려 중인 처치)만 함께 보냅니다. MediCloak은 AI가 찾아 준 과거 사례 쪽에서 나오는 값을 보호합니다.
               </p>
             </footer>
           </>

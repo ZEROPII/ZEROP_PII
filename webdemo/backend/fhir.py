@@ -10,14 +10,13 @@
 from __future__ import annotations
 
 import collections
-import random
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse
 
 from medical.data import QUERY_POOL
-from medical.retrieval import PANEL_LABEL, query_binding
+from medical.retrieval import PANEL_LABEL
 from webdemo.backend.emr import CAPABILITY, FHIR_TYPE, Emr, FhirNotFound
 from webdemo.backend.engine import QTYPE_KO, Engine
 
@@ -80,17 +79,18 @@ def fhir_router(emr_of) -> APIRouter:
 
 def worklist(eng: Engine, emr: OutpatientEmr) -> list[dict[str, Any]]:
     """
-    외래 진료 목록: 연구 계획에 trial이 있는 외래 환자. 목적마다 진료일(index date) · 주진단 · 고려 중인 처치.
+    외래 진료 목록: 연구 계획에 trial이 있는 외래 환자. 목적마다 진료일(index date) · 주진단 · 고려 중인 처치 · 그날 이어지던 동반질환.
     유사 사례 검색 대상(과거 기록 환자 461명)과는 다른 환자들이다 (cohort QUERY_POOL만, OutpatientEmr).
     """
     by_pid: dict[str, list[dict[str, Any]]] = collections.defaultdict(list)
     for tid, pid, qt, _ in eng.plan:
-        b = query_binding(eng.data, pid, qt, random.Random(f"{eng.cfg.seed}-{tid}"))     # make_prefix와 같은 난수 → 같은 패널
+        b = eng.binding(tid)          # 대화가 쓸 진료 기준과 같다 (운영 모드: 가장 최근 진료, visit.py)
         if b is None:
             continue
         panel = {lab: b["panel"][k] for k, lab in PANEL_LABEL}
         by_pid[pid].append(dict(trialId=tid, purpose=qt, purposeLabel=QTYPE_KO[qt], visitDate=b["index_date"], band=b["QUERY_AGE_BAND"],
-                                mainDx=panel.get("주진단"), item=panel.get("고려 중인 처치")))
+                                mainDx=panel.get("주진단"), item=panel.get("고려 중인 처치"),
+                                comorbidity=None if panel.get("동반질환") in (None, "없음") else panel.get("동반질환")))
     out = []
     for pid, purposes in by_pid.items():
         try:

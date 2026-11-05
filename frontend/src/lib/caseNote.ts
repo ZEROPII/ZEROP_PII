@@ -8,7 +8,7 @@ import type { CaseId, CaseSummary, ChatMessage, ConversationSession, DisclosureH
 import { ATTR_LABEL } from './clinicianCopy';
 
 /** 노트에 속성을 보여 주는 순서 */
-const ORDER = ['DX', 'PROC', 'MED', 'PLAN', 'PERIOD', 'AGE', 'SEX', 'REGION'];
+const ORDER = ['DX', 'PROC', 'MED', 'PLAN', 'PERIOD', 'DURATION', 'AGE', 'SEX', 'REGION'];
 
 export interface NoteValue {
   /** 가린 값은 null */

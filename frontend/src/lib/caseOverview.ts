@@ -7,7 +7,8 @@ export interface ValueCount {
   n: number;
 }
 
-const UNKNOWN = /비공개|관련 항목 없음/;
+/** 진단 · 대표 항목을 모르는 사례 (가렸거나, 첫 답에 나오지 않아 아직 모름): 공통 · 다른 항목 세기에서 뺀다 */
+export const UNKNOWN = /비공개|관련 항목 없음|나오지 않음|미확인|채워집니다/;
 
 function counts(values: string[]): ValueCount[] {
   const m = new Map<string, number>();

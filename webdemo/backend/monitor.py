@@ -24,6 +24,7 @@ import collections
 import copy
 import itertools
 import re
+import sqlite3
 import threading
 import time
 from typing import Any, Callable
@@ -105,7 +106,15 @@ class Monitor:
         if len(self.audit) > AUDIT_LIMIT:
             del self.audit[: len(self.audit) - AUDIT_LIMIT]
         if self.store is not None:
-            self.store.add_audit(e, n)
+            try:
+                self.store.add_audit(e, n)
+            except sqlite3.IntegrityError:
+                # 같은 DB를 쓰는 다른 서버(또는 테스트의 다른 앱)가 같은 번호를 먼저 썼다: DB의 마지막 번호 다음부터 다시 센다
+                with self._seq_lock:
+                    self._ids = itertools.count(self.store.max_seq("audit") + 1)
+                    n = next(self._ids)
+                e["id"] = f"A{n:04d}"
+                self.store.add_audit(e, n)
         return e
 
     def audit_entries(self) -> list[dict[str, Any]]:

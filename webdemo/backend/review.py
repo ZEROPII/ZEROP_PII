@@ -40,12 +40,13 @@ from typing import Any, Callable
 from medical.defense import ALLOW, GENERALIZE, SUPPRESS, Decision, apply_changes_deterministic
 from medical.session import ArmRun, Release
 from medical.tracking import view_of
+from webdemo.backend.textguard import clean_spans, coarsen_durations
 
 CASE_DROPPED = "CASE_DROPPED"                 # 통과하지 못한 사례를 뺀 답
 ROUNDED = "ROUNDED"
 #: 조회 목적마다 진료 판단에 쓰지 않는 단서 (실제 LLM 갈래에서 늘 가림)
 PURPOSE_UNNEEDED: dict[str, frozenset[str]] = {q: frozenset({"REGION"}) for q in ("PRESCRIPTION", "TREATMENT_PROCEDURE", "COURSE_CARE")}                           # 나이 · 날짜를 최소 공개 단위로만 바꾼 답 (재작성기 없이)
-RELEASE_VERSION = "medicloak-release-v4"       # 재작성 지시 보강 · 사례 단위로 빼기 · 최소 공개 단위 · 조회 목적 (실제 LLM 갈래의 versions에 남긴다)
+RELEASE_VERSION = "medicloak-release-v5"       # v4(재작성 지시 보강 · 사례 단위로 빼기 · 최소 공개 단위 · 조회 목적) + 기간 범위 · 근거 문장 정리 (ADR-0029)
 
 # 최소 공개 단위: 이 노드보다 자세한 값은 내지 않는다 (온톨로지 노드 이름 규칙: AGE_Y93 · AGE5_90 · AGE10_90, …_DAY_ · _MONTH_ …)
 FLOOR_ATTRS = ("AGE", "PERIOD")
@@ -85,8 +86,11 @@ class RuleDefender:
     def change_lines(self, plans: list[Any]) -> list[dict[str, Any]]:
         changes = self.inner.change_lines(plans)
         flags = [bool(getattr(d, "floor", False)) for p in plans for d in p.changes]     # inner.change_lines와 같은 순서
-        for c, f in zip(changes, flags):
+        sources = [d.source for p in plans for d in p.changes]
+        for c, f, src in zip(changes, flags, sources):
             c["floor"] = f
+            # 근거 문장은 원 관측에서 다시 읽어 글자열 목록으로 (글자열 하나를 list()로 쪼개면 값 치환이 글자 하나씩 바꾼다)
+            c["evidence_spans"] = clean_spans(src.get("evidence_spans"))
         self.last_plans, self.last_changes = list(plans), list(changes)
         return changes
 
@@ -171,8 +175,9 @@ def rewrite_rules(prompt: str, changes: list[dict[str, Any]], retry: str | None 
            + (f" 이 답에서 줄여 쓸 수 있는 이름: {', '.join(dict.fromkeys(short))}." if short else ""),
            "7. 값을 뺀 사례를 다른 문장에서 다시 가리키며 그 값을 떠올리게 하지 않는다.",
            "8. 값을 빼서 내용이 없어진 줄(표의 빈 줄, '-'만 남은 줄, 빈 목록 항목)은 줄째 지운다."]
+    add.append("9. 날짜를 빼더라도 기간(며칠 · 몇 주 · 몇 달)은 '약 1~2주'처럼 범위로 남겨도 된다. 정확한 날짜와 일수는 쓰지 않는다.")
     if retry:
-        add.append("9. 앞서 고친 답을 다시 확인하니 아래가 남아 통과하지 못했다. 이번에는 이것까지 고친다.\n" + retry)
+        add.append("10. 앞서 고친 답을 다시 확인하니 아래가 남아 통과하지 못했다. 이번에는 이것까지 고친다.\n" + retry)
     return prompt[:at] + "\n" + "\n".join(add) + prompt[at:]
 
 
@@ -357,6 +362,20 @@ class RuledArmRun(ArmRun):
         self._ctx = c
 
     def release(self, query: str, raw: str, raw_obs: list[dict[str, Any]], raw_ok: bool) -> Release:
+        self._raw_len = len(raw or "")
+        return self._ranged(self._release(query, raw, raw_obs, raw_ok))
+
+    def _ranged(self, rel: Release) -> Release:
+        """
+        실제 LLM 방어 갈래(C1 · C1S): 내보낼 글의 상대 기간을 범위로 ('약 12일' → '약 1~2주', textguard.coarsen_durations).
+        기간은 후보 수 계산에 없는 값이라 묻는 범위(사례 하나 · 전체)와 상관없이 늘 같은 범위로만 보인다. 거절 문장 · C0는 그대로.
+        """
+        if not self.live or self.arm == "C0" or rel.mode.startswith("REFUSAL"):
+            return rel
+        text, changed = coarsen_durations(rel.text)
+        return replace(rel, text=text) if changed else rel
+
+    def _release(self, query: str, raw: str, raw_obs: list[dict[str, Any]], raw_ok: bool) -> Release:
         self._retry_note = None
         rel, pre, n_pre = self._rounded(query, raw, raw_obs, raw_ok) if self.live else (None, [], 0)
         self._retry_note = None
@@ -412,6 +431,11 @@ class RuledArmRun(ArmRun):
         return self._mark_floor(Release(text, v, ROUNDED, [p.as_dict() for p in plans], changes, [attempt], util, n)), [], 0
 
     def _verify(self, query: str, text: str):
+        if len(text) > max(6000, 4 * getattr(self, "_raw_len", 0)):
+            # 고친 답이 원 답보다 터무니없이 길면(값 치환 사고) 추출기에 보내지 않고 떨어뜨린다 (HTTP 400 · 토큰 낭비를 막는다)
+            if self.live:
+                self._retry_note = None
+            return False, None, [dict(ref=None, reason="TEXT_TOO_LONG", ok=False)], 0
         ok, v, checks, n = super()._verify(query, text)
         if ok and v is not None:
             for ref in v.case_refs:

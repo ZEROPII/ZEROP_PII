@@ -50,6 +50,8 @@ class FakeAnthropic:
         self.regions = dict(regions or {})          # '거주'를 물으면 사례마다 이 지역으로 답한다 ('Boston, Massachusetts')
         self.broken_extract = broken_extract        # 추출기가 JSON이 아닌 답을 낸다 (첫 답 거절)
         self.assist = assist                        # 검토 보조 초안: ok(JSON) · numbers(답장에 후보 수) · broken(JSON 아님)
+        # 대상 AI 답을 테스트가 정한다: hook(system, user, messages) → 답 글 (None이면 원래대로). 사례 문서 대조 · 기간 범위 시험에 쓴다
+        self.target_hook: Any = None
         self.lock = threading.Lock()
         self.active = 0
         self.max_active = 0
@@ -98,6 +100,10 @@ class FakeAnthropic:
             return "검토 초안입니다.\n" + json.dumps(dict(summary=f"{case} 요청 값 {len(rows)}개를 판정표대로 정리했습니다. 요청 사유는 복용 기간 판단입니다.",
                                                         reply=reply, reason_fit="구체적", reason_note="복용 기간 판단에 쓰겠다고 밝힘"), ensure_ascii=False)
         if "[검색된 사례]" in system:
+            if self.target_hook is not None:
+                out = self.target_hook(system, user, p["messages"])
+                if out is not None:
+                    return out
             m = re.search(r"사례\s*(\d+)", user)
             if m is None and len(p["messages"]) == 1:
                 return self._retrieval_answer(system, self.echo_lower)

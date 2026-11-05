@@ -27,6 +27,12 @@ export interface PatientContext {
   source: DataSource;
   /** 데모 백엔드만: 질의 환자 trial 번호 (POC와 같은 번호) */
   trialId?: string;
+  /** 환자 요약 · 유사 사례 검색의 기준 진료일 */
+  visitDate?: string;
+  /** AI(대상 AI 지시문)에 실제로 보내는 환자 요약 줄 */
+  aiSummary?: { label: string; value: string }[];
+  /** 유사 사례 검색에 쓰는 이 환자 기록: 기준일까지의 진단 · 약 · 시술 코드 수 */
+  searchBasis?: { until: string; diagnoses: number; medications: number; procedures: number };
 }
 
 // ── 검색된 사례 ────────────────────────────────────────────────────────────────
@@ -40,6 +46,8 @@ export interface CaseSummary {
   similarityRank: number;
   /** 검색 유사도 (있을 때만) */
   similarity?: number;
+  /** 사례 검색 첫 답에 이 사례가 나왔는지 (false면 진단 · 항목은 '가림'이 아니라 아직 모름) */
+  mentioned?: boolean;
 }
 
 // ── 보호 조치 ──────────────────────────────────────────────────────────────────
@@ -342,6 +350,8 @@ export interface WorklistPurpose {
   visitDate: string;
   mainDx?: string;
   item?: string;
+  /** 그 진료일에 이어지던 동반질환 (AI에 보내는 요약에 들어간다) */
+  comorbidity?: string | null;
 }
 
 /** EMR 외래 목록 한 줄. 생년 · 거주 지역은 넣지 않는다 (환자를 고르는 데 필요 없다). */
@@ -384,6 +394,8 @@ export interface ClinicHistoryItem {
   questions: number;
   patient: string;
   purpose: string;
+  /** 진료한 환자 번호 (EMR 환자 번호 앞 8자리) */
+  patientId?: string | null;
   current: boolean;
   archived: boolean;
 }

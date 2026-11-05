@@ -112,10 +112,11 @@ def serve(a: argparse.Namespace) -> None:
     first = Persist(store, None).next_id()          # type: ignore[arg-type]
     print(f"[medicloak] 위험 계산 엔진을 준비합니다 (10초 안팎) · 대상 AI: {label}")
     eng = Engine(db.parent / "engine", log=lambda s: print(s.replace("[webdemo]", "[medicloak]", 1)), paths=paths, live_llm=live_llm, live_label=label, first_id=first,
-                 llm_concurrency=a.llm_concurrency, live_rule_extract=not a.no_rule_extract, answer_style=a.answer_style == "on")
+                 llm_concurrency=a.llm_concurrency, live_rule_extract=not a.no_rule_extract, answer_style=a.answer_style == "on",
+                 recent_visit=a.visit == "recent")
     auto = a.auto_redteam if a.llm == "real" else "off"                 # 결정적 응답기 · 연결 점검 모드는 점검할 실제 LLM이 없다
     product = Product(store=store, compare=not a.no_compare, keep=a.keep, cookie_secure=a.cookie_secure,
-                      auto_redteam=auto, auto_daily=daily if a.llm == "real" else None)
+                      auto_redteam=auto, auto_daily=daily if a.llm == "real" else None, prefetch=a.prefetch == "on")
     app = create_app(eng, simulations=False, product=product)          # 운영 모드: 환자는 EMR에서 열 때 정해진다
     if not (DIST / "index.html").exists():
         print("[medicloak] 화면 파일(frontend/dist)이 없습니다. --build 를 붙여 한 번 빌드하세요. 지금은 API만 켭니다.", file=sys.stderr)
@@ -224,12 +225,19 @@ def _serve_args(p: argparse.ArgumentParser, top: bool = False) -> None:
                         "직전 점검과 비교한다 (기본, --llm real일 때만). off: 끔 (ADR-0028)")
     p.add_argument("--auto-redteam-daily", metavar="HH:MM", **(kw or dict(default=None)),
                    help="매일 이 시각(서버 시계)에도 '유형마다 1명' 레드팀을 돌린다 (기본: 안 함)")
+    p.add_argument("--prefetch", choices=("on", "off"), **(kw or dict(default="on")),
+                   help="on: 외래 목록에서 환자 · 진료 목적을 고르면 첫 답을 뒤에서 미리 만들어 '열기'를 짧게 한다 (기본, ADR-0029). "
+                        "off: 열 때만 부른다 (고르기만 하고 열지 않은 환자의 호출이 없다)")
+    p.add_argument("--visit", choices=("recent", "research"), **(kw or dict(default="recent")),
+                   help="의료진 대화의 진료 기준: recent(진료 목적마다 가장 최근 진료, 기본, ADR-0029) · "
+                        "research(연구 계획 기준: 가장 많이 나온 진단 범주의 첫 진료)")
 
 
 def _defaults(a: argparse.Namespace) -> argparse.Namespace:
     for k, v in dict(host="127.0.0.1", port=8000, llm="real", env_file=None, llm_concurrency=1, build=False,
                      no_compare=False, keep=12, cookie_secure=False, no_rule_extract=False, answer_style="on",
-                     extractor_model=None, rewriter_model=None, auto_redteam="change", auto_redteam_daily=None).items():
+                     extractor_model=None, rewriter_model=None, auto_redteam="change", auto_redteam_daily=None,
+                     prefetch="on", visit="recent").items():
         if not hasattr(a, k):
             setattr(a, k, v)
     return a

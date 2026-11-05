@@ -1,6 +1,6 @@
 import { Lock, MessageSquareText, Table2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { matchReasons, overviewOf, splitItem } from '../../lib/caseOverview';
+import { UNKNOWN, overviewOf, splitItem } from '../../lib/caseOverview';
 import { useClinicMessages } from '../../state/ClinicMessages';
 import { useWorkspace } from '../../state/WorkspaceContext';
 import { EmptyState, ErrorState, LoadingState } from '../common/StatusViews';
@@ -10,6 +10,7 @@ import { LockedText } from './ClinicValue';
 /**
  * 의료진 화면 왼쪽: AI가 찾은 비슷한 사례. 유사도 순서, 진단, 대표 항목만 보여 준다.
  * 후보 수는 보이지 않는다. 세부 정보가 제한된 사례에만 '세부 정보 제한' 표시를 붙인다.
+ * 첫 답에 나오지 않은 사례는 '비공개'가 아니라 '첫 답에 나오지 않음'으로 흐리게 보이고, 뒤 답에 나온 값으로 채워진다.
  */
 export function EmrCaseList({ onSelected }: { onSelected?: () => void }) {
   const { state, actions } = useWorkspace();
@@ -17,7 +18,6 @@ export function EmrCaseList({ onSelected }: { onSelected?: () => void }) {
   const msgs = useClinicMessages();
   const [comparing, setComparing] = useState(false);
   const overview = useMemo(() => overviewOf(cases.data ?? []), [cases.data]);
-  const patient = state.patient.data;
   const common = [
     overview.commonDx ? `${overview.commonDx} ${overview.diagnoses[0].n}건` : null,
     overview.commonItem ? `${splitItem(overview.commonItem)[1]} ${overview.items[0].n}건` : null,
@@ -59,8 +59,8 @@ export function EmrCaseList({ onSelected }: { onSelected?: () => void }) {
             const restricted = risk ? !risk.disclosureAllowed : false;
             const asked = sessions[c.caseId]?.data?.questionCount ?? 0;
             const notes = msgs.messages.filter((m) => m.caseId === c.caseId).length;
-            const reasons = matchReasons(c, patient);
-            const differs = overview.commonItem !== null && c.description !== overview.commonItem && !/비공개|관련 항목 없음/.test(c.description);
+            const differs = overview.commonItem !== null && c.description !== overview.commonItem && !UNKNOWN.test(c.description);
+            const unknown = c.mentioned === false && UNKNOWN.test(c.diagnosis);
             return (
               <li key={c.caseId} className="border-b border-line last:border-b-0">
                 <button
@@ -82,22 +82,13 @@ export function EmrCaseList({ onSelected }: { onSelected?: () => void }) {
                   </span>
                   <span className="min-w-0">
                     <span className={`block text-sm font-bold ${sel ? 'text-iris-text' : 'text-ink'}`}>{c.label}</span>
-                    <span className="block truncate text-[13px] text-ink" title={c.diagnosis}>
+                    <span className={`block truncate text-[13px] ${unknown ? 'text-ink-3' : 'text-ink'}`} title={c.diagnosis}>
                       {c.diagnosis}
                     </span>
                     <span className={`block truncate text-xs ${differs ? 'font-medium text-ink' : 'text-ink-3'}`} title={c.description.replace('(비공개)', '비공개')}>
                       {differs && <span className="mr-1 rounded-[4px] bg-caution-tint px-1 text-[10.5px] font-semibold text-caution-text">다른 항목</span>}
                       <LockedText text={c.description} />
                     </span>
-                    {reasons.length > 0 && (
-                      <span className="mt-1 flex flex-wrap gap-1 text-[10.5px]">
-                        {reasons.map((r) => (
-                          <span key={r} className="rounded-[4px] border border-line px-1 text-ink-3">
-                            {r}
-                          </span>
-                        ))}
-                      </span>
-                    )}
                     {(restricted || asked > 0 || notes > 0) && (
                       <span className="mt-1.5 flex flex-wrap gap-1.5 text-[11px]">
                         {restricted && (

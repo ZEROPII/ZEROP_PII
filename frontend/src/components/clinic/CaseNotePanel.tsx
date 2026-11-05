@@ -6,14 +6,17 @@ import {
   Hourglass,
   Lock,
   MapPin,
+  PanelRightClose,
   Pill,
   Stethoscope,
   Syringe,
+  Timer,
   UserRound,
   type LucideIcon,
 } from 'lucide-react';
 import { useEffect, useMemo } from 'react';
 import { buildCaseNote, type NoteValue } from '../../lib/caseNote';
+import { matchReasons } from '../../lib/caseOverview';
 import { useTermDetect, useTerms } from '../../state/TermContext';
 import { useSelectedCase, useWorkspace } from '../../state/WorkspaceContext';
 import type { CaseId, ConversationSession, DisclosureHistoryEntry } from '../../types/domain';
@@ -27,6 +30,7 @@ const ATTR_ICON: Record<string, LucideIcon> = {
   PLAN: ClipboardList,
   PERIOD: CalendarDays,
   DATE: CalendarDays,
+  DURATION: Timer,
   AGE: Hourglass,
   SEX: UserRound,
   REGION: MapPin,
@@ -77,6 +81,7 @@ function NoteView({ onJump }: { onJump(caseId: CaseId, messageId: string): void 
   const { state, actions } = useWorkspace();
   const { caseId, summary, disclosures, session } = useSelectedCase();
   const cases = useMemo(() => state.cases.data ?? [], [state.cases.data]);
+  const same = summary ? matchReasons(summary, state.patient.data) : [];
 
   // 같은 값 찾기에 다른 사례의 공개 이력도 쓴다 (아직 안 받았거나 다시 받아야 하면 받는다)
   useEffect(() => {
@@ -122,6 +127,7 @@ function NoteView({ onJump }: { onJump(caseId: CaseId, messageId: string): void 
       </div>
       <p className="mt-0.5 text-xs text-ink-3">
         과거 환자 한 명의 기록 · 유사도 {summary.similarityRank}위{asked ? ` · 질문 ${asked}회` : ''}
+        {same.length > 0 && ` · 내 환자와 같은 점: ${same.map((x) => x.replace(/와? 같음$/, '')).join(', ')}`}
       </p>
 
       <SectionTitle>지금까지 보인 내용</SectionTitle>
@@ -153,47 +159,53 @@ function NoteView({ onJump }: { onJump(caseId: CaseId, messageId: string): void 
       )}
       <p className="mt-1.5 text-[11px] leading-4 text-ink-3">AI 답에 실제로 보인 값만 모읍니다. 범위 · 비공개 값은 답과 같은 모양입니다.</p>
 
-      <SectionTitle count={note.backlinks.length}>질문별 기록</SectionTitle>
-      <ol className="relative ml-1 border-l border-line">
-        {note.backlinks.map((b) => {
-          const elsewhere = b.askedIn && b.askedIn !== caseId;
-          const content = (
-            <>
-              <span className="flex items-center gap-1.5 text-[11px] font-semibold text-iris-text">
-                {b.turn === 0 ? '사례 검색' : b.questionNo != null ? `질문 ${b.questionNo}` : '질문'}
-                {elsewhere && <span className="font-normal text-ink-3">{b.askedInLabel} 대화에서</span>}
-              </span>
-              <span className="mt-0.5 line-clamp-2 block text-[13px] leading-5 text-ink">{b.question}</span>
-              <span className="mt-1 flex flex-wrap gap-1">
-                {b.facts.map((f, i) => (
-                  <span key={i} className="inline-flex max-w-full items-center gap-1 truncate rounded-[5px] bg-surface-2 px-1.5 py-px text-[11px] text-ink-2">
-                    {f.label}
-                    {f.action === 'suppress' ? <Lock className="h-2.5 w-2.5 text-emr-lock" aria-label="비공개" /> : <span className="truncate text-ink">{f.text}</span>}
-                    {f.action === 'generalize' && <span className="text-iris-text">범위</span>}
-                  </span>
-                ))}
-              </span>
-            </>
-          );
-          return (
-            <li key={b.turn} className="relative pl-4">
-              <span aria-hidden className="absolute -left-[4.5px] top-[11px] h-2 w-2 rounded-full border-2 border-surface bg-iris" />
-              {b.messageId && b.askedIn ? (
-                <button
-                  type="button"
-                  onClick={() => onJump(b.askedIn!, b.messageId!)}
-                  className="block w-full rounded-control px-2 py-1.5 text-left hover:bg-surface-2"
-                  title="대화에서 이 질문으로 가기"
-                >
-                  {content}
-                </button>
-              ) : (
-                <div className="px-2 py-1.5">{content}</div>
-              )}
-            </li>
-          );
-        })}
-      </ol>
+      <details className="group mt-5">
+        <summary className="flex cursor-pointer list-none items-baseline gap-1.5 text-[13px] font-bold text-ink [&::-webkit-details-marker]:hidden">
+          <ChevronRight className="h-3.5 w-3.5 self-center text-ink-3 transition-transform group-open:rotate-90" aria-hidden />
+          질문별 기록
+          <span className="num text-xs font-medium text-ink-3">{note.backlinks.length}</span>
+        </summary>
+        <ol className="relative ml-1 mt-1.5 border-l border-line">
+          {note.backlinks.map((b) => {
+            const elsewhere = b.askedIn && b.askedIn !== caseId;
+            const content = (
+              <>
+                <span className="flex items-center gap-1.5 text-[11px] font-semibold text-iris-text">
+                  {b.turn === 0 ? '사례 검색' : b.questionNo != null ? `질문 ${b.questionNo}` : '질문'}
+                  {elsewhere && <span className="font-normal text-ink-3">{b.askedInLabel} 대화에서</span>}
+                </span>
+                <span className="mt-0.5 line-clamp-2 block text-[13px] leading-5 text-ink">{b.question}</span>
+                <span className="mt-1 flex flex-wrap gap-1">
+                  {b.facts.map((f, i) => (
+                    <span key={i} className="inline-flex max-w-full items-center gap-1 truncate rounded-[5px] bg-surface-2 px-1.5 py-px text-[11px] text-ink-2">
+                      {f.label}
+                      {f.action === 'suppress' ? <Lock className="h-2.5 w-2.5 text-emr-lock" aria-label="비공개" /> : <span className="truncate text-ink">{f.text}</span>}
+                      {f.action === 'generalize' && <span className="text-iris-text">범위</span>}
+                    </span>
+                  ))}
+                </span>
+              </>
+            );
+            return (
+              <li key={b.turn} className="relative pl-4">
+                <span aria-hidden className="absolute -left-[4.5px] top-[11px] h-2 w-2 rounded-full border-2 border-surface bg-iris" />
+                {b.messageId && b.askedIn ? (
+                  <button
+                    type="button"
+                    onClick={() => onJump(b.askedIn!, b.messageId!)}
+                    className="block w-full rounded-control px-2 py-1.5 text-left hover:bg-surface-2"
+                    title="대화에서 이 질문으로 가기"
+                  >
+                    {content}
+                  </button>
+                ) : (
+                  <div className="px-2 py-1.5">{content}</div>
+                )}
+              </li>
+            );
+          })}
+        </ol>
+      </details>
 
       {note.linked.length > 0 && (
         <details className="group mt-5 rounded-control border border-line bg-surface">
@@ -223,14 +235,22 @@ function NoteView({ onJump }: { onJump(caseId: CaseId, messageId: string): void 
   );
 }
 
-/** 의료진 화면 오른쪽: 사례 노트 (보호 담당자 메시지는 오른쪽 아래 상담 창으로 옮겼다) */
-export function CaseNotePanel({ onJump }: { onJump(caseId: CaseId, messageId: string): void }) {
+/**
+ * 의료진 화면 오른쪽: 사례 노트 (보호 담당자 메시지는 오른쪽 아래 상담 창으로 옮겼다).
+ * 넓은 화면에서는 기본으로 접혀 있고(ClinicalAssistPage), onCollapse가 있으면 머리에 접기 단추를 둔다.
+ */
+export function CaseNotePanel({ onJump, onCollapse }: { onJump(caseId: CaseId, messageId: string): void; onCollapse?: () => void }) {
   return (
     <section aria-labelledby="case-note-title" className="panel flex h-full min-h-0 flex-col overflow-hidden">
-      <header className="flex h-11 shrink-0 items-center border-b border-line px-4">
+      <header className="flex h-11 shrink-0 items-center justify-between border-b border-line px-4">
         <h2 id="case-note-title" className="text-[13px] font-semibold text-ink">
           사례 노트
         </h2>
+        {onCollapse && (
+          <button type="button" className="btn-ghost hidden h-7 w-7 px-0 lg:inline-flex" onClick={onCollapse} aria-label="사례 노트 접기" title="사례 노트 접기">
+            <PanelRightClose className="h-4 w-4" aria-hidden />
+          </button>
+        )}
       </header>
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
         <NoteView onJump={onJump} />

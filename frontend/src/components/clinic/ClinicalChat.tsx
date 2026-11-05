@@ -1,8 +1,10 @@
-import { CornerDownLeft, Info, Loader2, Lock, MessageSquareReply, Ruler, Sparkles } from 'lucide-react';
+import { CornerDownLeft, Info, Layers, Loader2, Lock, MessageSquareReply, Ruler, Sparkles } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { emrApi } from '../../api/emrApi';
 import { overviewOf, splitItem } from '../../lib/caseOverview';
 import { preflightNotice, preflightStatusLine, restrictedNotice } from '../../lib/clinicianCopy';
+import { josa, josaRo } from '../../lib/korean';
+import { caseNoOf, scopeHint } from '../../lib/scopeHint';
 import { useClinicMessages } from '../../state/ClinicMessages';
 import { usePreflight } from '../../state/usePreflight';
 import { useSuggestions } from '../../state/useSuggestions';
@@ -158,11 +160,34 @@ export function ClinicalChat({ jump, onJumpDone, onOpenMessages }: { jump: JumpT
     if (live) setScope(s.scope ?? 'case');
   }
 
-  async function submit(text?: string) {
+  // 질문 문장과 묻는 범위가 어긋나면 알린다. 사례 하나 범위에서 여러 사례 · 다른 사례를 물으면 Enter 한 번은 보내지 않고 안내를 강조한다.
+  const hint = live && summary ? scopeHint(draft, scope, caseNoOf(summary.label), cases.length) : null;
+  const [held, setHeld] = useState<string | null>(null);
+  const holding = hint?.hold === true && held === draft.trim();
+  const caseIdOf = (n: number) => cases.find((c) => caseNoOf(c.label) === n)?.caseId;
+
+  /** 입력한 질문을 다른 사례의 대화로 옮긴다 (그 사례 하나에 묻기) */
+  function moveDraft(n: number) {
+    const target = caseIdOf(n);
+    if (!caseId || !target) return;
+    const text = draft;
+    setDrafts((d) => ({ ...d, [caseId]: '', [target]: text }));
+    setScope('case');
+    actions.selectCase(target);
+  }
+
+  async function submit(text?: string, scopeOverride?: QuestionScope) {
     if (!caseId) return;
+    if (!text && !scopeOverride && hint?.hold && held !== draft.trim()) {
+      setHeld(draft.trim());
+      return;
+    }
     const question = text ?? draft;
+    const sc = scopeOverride ?? scope;
+    if (scopeOverride) setScope(scopeOverride);
     if (!text) setDraft('');
-    const ok = await actions.sendQuestion(caseId, question, live ? scope : 'case');
+    setHeld(null);
+    const ok = await actions.sendQuestion(caseId, question, live ? sc : 'case');
     if (!ok) setDrafts((d) => (d[caseId] ? d : { ...d, [caseId]: question }));
   }
 
@@ -252,11 +277,7 @@ export function ClinicalChat({ jump, onJumpDone, onOpenMessages }: { jump: JumpT
             <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-0.5 rounded-control border border-line bg-surface px-3 py-2">
               <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
               {progress?.active ? progress.label : '사례 기록에서 답을 찾아 개인정보 보호 기준으로 확인하는 중'}
-              {progress?.active && (
-                <span className="num text-[11px] text-ink-3">
-                  {Math.round(progress.elapsed ?? 0)}초 · 실제 LLM 호출 {progress.calls ?? 0}번
-                </span>
-              )}
+              {progress?.active && <span className="num text-[11px] text-ink-3">{Math.round(progress.elapsed ?? 0)}초</span>}
             </span>
           </div>
         )}
@@ -268,7 +289,8 @@ export function ClinicalChat({ jump, onJumpDone, onOpenMessages }: { jump: JumpT
             {session.sendError}
           </p>
         )}
-        {notice && (
+        {/* 범위부터 정해야 하는 질문이면 보내기 전 확인(고른 사례 기준)은 범위를 고른 뒤에 의미가 있으므로 잠시 숨긴다 */}
+        {notice && !hint?.hold && (
           <div role="status" aria-live="polite" className="mb-2 rounded-control bg-emr-lock-tint px-3 py-2 text-[13px] text-ink-2">
             <p className="flex gap-2">
               <NoticeIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-emr-lock" aria-hidden />
@@ -291,6 +313,52 @@ export function ClinicalChat({ jump, onJumpDone, onOpenMessages }: { jump: JumpT
                 ))}
               </div>
             )}
+          </div>
+        )}
+        {hint && summary && (
+          <div
+            role="status"
+            aria-live="polite"
+            className={`mb-2 rounded-control px-3 py-2 text-[13px] text-ink-2 ${holding ? 'bg-iris-tint ring-1 ring-iris' : 'bg-surface-2'}`}
+          >
+            <p className="flex gap-2">
+              <Layers className="mt-0.5 h-3.5 w-3.5 shrink-0 text-iris-text" aria-hidden />
+              <span>
+                {hint.kind === 'toAll'
+                  ? `여러 사례를 묻는 질문 같습니다. 지금 묻는 범위는 ${josa(summary.label, '이라', '라')} ${summary.label}만 답합니다.`
+                  : hint.kind === 'otherCase'
+                    ? `질문에 ${josa(`사례 ${hint.caseNo}`, '이', '가')} 있지만 지금 묻는 범위는 ${summary.label}입니다.`
+                    : `사례 ${hint.caseNo} 하나만 묻는 질문입니다. 사례 ${hint.caseNo} 대화에서 물으면 그 사례 기록에 함께 남습니다.`}
+                {holding && <strong className="ml-1 font-semibold text-ink">범위를 골라 보내세요. Enter를 한 번 더 누르면 지금 범위로 보냅니다.</strong>}
+              </span>
+            </p>
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5 pl-5">
+              {hint.kind === 'toAll' && (
+                <>
+                  <button type="button" className="btn-primary btn-sm h-7" disabled={sending || !data} onClick={() => void submit(undefined, 'all')}>
+                    찾은 사례 전체로 보내기
+                  </button>
+                  <button type="button" className="btn-ghost btn-sm h-7 text-ink-2" disabled={sending || !data} onClick={() => void submit(undefined, 'case')}>
+                    {summary.label}만 묻기
+                  </button>
+                </>
+              )}
+              {hint.kind === 'otherCase' && (
+                <>
+                  <button type="button" className="btn-primary btn-sm h-7" disabled={!caseIdOf(hint.caseNo)} onClick={() => moveDraft(hint.caseNo)}>
+                    {josaRo(`사례 ${hint.caseNo}`)} 옮겨 묻기
+                  </button>
+                  <button type="button" className="btn-ghost btn-sm h-7 text-ink-2" disabled={sending || !data} onClick={() => void submit(undefined, 'case')}>
+                    {josaRo(summary.label)} 보내기
+                  </button>
+                </>
+              )}
+              {hint.kind === 'oneCase' && (
+                <button type="button" className="btn-ghost btn-sm h-7 text-ink-2" disabled={!caseIdOf(hint.caseNo)} onClick={() => moveDraft(hint.caseNo)}>
+                  사례 {hint.caseNo} 대화에서 묻기
+                </button>
+              )}
+            </div>
           </div>
         )}
         {data && data.messages.length > 0 && suggestions.length > 0 && !draft && (
