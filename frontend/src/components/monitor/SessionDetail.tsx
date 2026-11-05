@@ -2,6 +2,7 @@ import { ChevronDown, ChevronUp, Loader2, MailQuestion, MessageSquareText, Netwo
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ClueFact } from '../../lib/clueGraph';
 import { josa } from '../../lib/korean';
+import { detailBrief } from '../../lib/monitorBrief';
 import { caseLabel, clockTime, relativeTime } from '../../lib/time';
 import { useTermDetect } from '../../state/TermContext';
 import type { MonitorDetail, ReviewAction, ThreadMessage, TurnView } from '../../types/monitor';
@@ -41,33 +42,20 @@ const CHANGE = { suppress: { tone: 'danger', label: '가림' }, generalize: { to
 
 type Group = { kind: 'turn'; turn: TurnView } | { kind: 'fold'; turns: TurnView[] };
 
-function summarize(d: MonitorDetail): string {
-  const base = summarizeTurns(d);
-  const aps = d.approvals ?? [];
-  if (!aps.length) return base;
-  const n = aps.reduce((s, ap) => s + ap.items.length, 0);
-  return `${base} 그 뒤 보안 담당자가 세부 정보 요청을 승인해 값 ${n}개를 공개했고, 지금 ${caseLabel(d.row.focus_case)} 후보는 ${d.row.k_now ?? '–'}명입니다.`;
-}
-
-function summarizeTurns(d: MonitorDetail): string {
-  const r = d.row;
-  const focus = caseLabel(r.focus_case);
-  const turns = d.arms[d.live_arm].turns;
-  // 방어 규칙이 지킨 후보 수: 첫 승인 공개 전 마지막 턴 기록 (승인 공개 뒤의 턴은 공개된 값이 더해진 수다)
-  const firstAp = Math.min(...(d.approvals ?? []).flatMap((ap) => ap.items.map((x) => x.after_turn ?? Infinity)));
-  const upto = turns.filter((t) => t.turn <= firstAp);
-  const kTurns = (r.focus_case ? upto[upto.length - 1]?.cases?.[r.focus_case]?.k : null) ?? r.k_now;
-  const hits = turns.filter((t) =>
-    t.change_notes.some((n) => n.case === r.focus_case && n.changes.some((c) => (r.status === 'danger' ? c.change === 'suppress' : true))),
-  ).length;
-  const droppedAt = r.focus_case ? turns.find((t) => t.dropped?.includes(r.focus_case!)) : undefined;
-  if (droppedAt)
-    return `${droppedAt.turn === 0 ? '첫 답(사례 검색)' : `${droppedAt.turn}턴 답`}에서 ${focus} 내용을 그대로 냈다면 후보가 ${r.k_if_raw}명으로 줄 수 있었고, 고친 답도 다시 확인을 통과하지 못해 그 사례만 답에서 뺐습니다. 지금 ${focus} 후보는 ${r.k_now ?? '–'}명입니다.`;
-  if (r.status === 'danger')
-    return `${focus} 환자를 좁히는 질문에 값을 가린 답이 ${hits}번 있었습니다. 그대로 답했다면 후보가 ${r.k_if_raw}명으로 줄어 환자가 특정될 수 있었습니다. 방어 규칙이 값을 가려 후보 ${kTurns}명을 지켰습니다.`;
-  if (r.status === 'caution')
-    return `${focus} 답에서 넓은 범주로 바꾼 값이 ${hits}번 있었습니다. 그대로였다면 후보가 ${r.k_if_raw}명이었고, 답한 뒤에는 ${kTurns}명입니다.`;
-  return `모든 답을 그대로 보냈습니다. 후보가 기준 ${d.k_req}명보다 많게 유지되었습니다.`;
+/** 맨 위 세 줄: 무엇이 위험했나 · 시스템이 한 일 · 내가 할 일 (ADR-0030) */
+function BriefLines({ d }: { d: MonitorDetail }) {
+  const b = detailBrief(d);
+  const todoTone = b.tone === 'danger' ? 'font-semibold text-danger-text' : b.tone === 'request' ? 'font-semibold text-iris-text' : 'text-ink';
+  return (
+    <dl className="grid max-w-[46em] grid-cols-[auto_1fr] gap-x-4 gap-y-1.5 text-[14px] leading-relaxed">
+      <dt className="pt-px text-xs font-semibold leading-[1.75rem] text-ink-3">위험했던 것</dt>
+      <dd className="text-ink">{b.risk}</dd>
+      <dt className="pt-px text-xs font-semibold leading-[1.75rem] text-ink-3">시스템이 한 일</dt>
+      <dd className="text-ink">{b.done}</dd>
+      <dt className="pt-px text-xs font-semibold leading-[1.75rem] text-ink-3">내가 할 일</dt>
+      <dd className={todoTone}>{b.todo}</dd>
+    </dl>
+  );
 }
 
 /** 확인 요청 기본 문구 (보안 담당자가 고쳐 보낼 수 있다) */
@@ -290,6 +278,11 @@ export function SessionDetail({ detail: d, onReveal, onReview, onMessage, onDeta
             {d.source_label}
             {r.owner ? ` · ${r.owner}` : ''} {r.turns}턴 {relativeTime(r.last_active)}
           </span>
+          {d.patient_tag && (
+            <span className="text-xs text-ink-3" title="지금 환자 기호: 같은 환자는 늘 같은 기호로 보여, 번호를 열지 않고 다른 대화 · 감사 기록과 맞춰 볼 수 있습니다.">
+              지금 환자 <span className="font-mono text-ink-2">{d.patient_tag}</span>
+            </span>
+          )}
           {r.llm_mode === 'live' && <StatusChip tone="plain">실제 LLM 대화</StatusChip>}
           {r.review && <StatusChip tone="plain">{r.review.label}</StatusChip>}
         </div>
@@ -298,7 +291,6 @@ export function SessionDetail({ detail: d, onReveal, onReview, onMessage, onDeta
             서버를 다시 켜기 전 대화입니다. 기록과 판정은 DB에 남은 그대로 볼 수 있고, 원문 열람 · 검토 표시는 되지만 메시지는 보낼 수 없습니다.
           </p>
         )}
-        <p className="mt-3 max-w-[40em] text-[15px] leading-relaxed">{summarize(d)}</p>
         {pending && !archived && (
           <div className="mt-3 flex flex-wrap items-start gap-x-3 gap-y-2 rounded-control border border-iris bg-iris-tint px-3 py-2.5 text-[13px]">
             <MailQuestion className="mt-0.5 h-4 w-4 shrink-0 text-iris-text" aria-hidden />
@@ -330,6 +322,10 @@ export function SessionDetail({ detail: d, onReveal, onReview, onMessage, onDeta
       </header>
 
       <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
+        {/* 세 줄 요약은 고정 머리에 두지 않는다: 승인 창 · 질문 흐름을 볼 자리를 남긴다 (요청 칸만 고정) */}
+        <section aria-label="세 줄 요약" className="border-b border-line px-5 py-4">
+          <BriefLines d={d} />
+        </section>
         {pending && pending.kind === 'access_request' && !archived && (
           <section aria-label="세부 정보 요청 검토" className="border-b border-line px-5 pb-4 pt-1">
             <AssistPanel

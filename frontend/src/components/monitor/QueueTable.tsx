@@ -63,6 +63,14 @@ export function QueueTable({ rows, selected, onSelect, kReq, pRef = 461 }: Props
                       {r.flag}
                     </div>
                   ))}
+                {r.violated.length > 0 && (
+                  <div className="mt-1 text-[11px] font-semibold text-danger-text">기준 아래 · {r.violated.map(caseLabel).join(', ')}</div>
+                )}
+                {(r.approved_low ?? []).length > 0 && (
+                  <div className="mt-1 text-[11px] text-ink-2" title="보안 담당자가 승인해 공개해서 후보가 기준 아래가 된 사례 (경보로 세지 않음)">
+                    승인 공개로 기준 아래 · {r.approved_low!.map(caseLabel).join(', ')}
+                  </div>
+                )}
                 {r.review && (
                   <div className="mt-1 text-[11px] font-semibold text-ink-3">
                     {r.review.label}

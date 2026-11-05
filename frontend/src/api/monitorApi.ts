@@ -17,6 +17,7 @@ import type {
   ReviewAction,
   ThreadResult,
   WatchItem,
+  WhatIf,
 } from '../types/monitor';
 import { apiMode } from './index';
 import { API_BASE, notifyUnauthorized } from './session';
@@ -61,8 +62,9 @@ export type PocSummary = Record<string, PocResult> & { fuzzer_compare?: Record<s
 export const monitorApi = {
   overview: (signal?: AbortSignal) => request<MonitorOverview>('/monitor/overview', { signal }),
   detail: (sid: string, signal?: AbortSignal) => request<MonitorDetail>(`/monitor/sessions/${encodeURIComponent(sid)}`, { signal }),
-  reveal: (sid: string, reason: string) =>
-    request<MonitorDetail>(`/monitor/sessions/${encodeURIComponent(sid)}/reveal`, { method: 'POST', body: JSON.stringify({ reason }) }),
+  /** 원문 열람: reason은 고른 사유, note는 직접 쓴 한 줄 설명 (운영 모드는 필수) */
+  reveal: (sid: string, reason: string, note?: string) =>
+    request<MonitorDetail>(`/monitor/sessions/${encodeURIComponent(sid)}/reveal`, { method: 'POST', body: JSON.stringify({ reason, note: note ?? null }) }),
   review: (sid: string, action: ReviewAction, note?: string) =>
     request<MonitorRow>(`/monitor/sessions/${encodeURIComponent(sid)}/review`, { method: 'POST', body: JSON.stringify({ action, note }) }),
   /** 의료진에게 답장(reply) 또는 확인 요청(check_request). case는 '사례1' 같은 사례 표시. */
@@ -91,11 +93,15 @@ export const monitorApi = {
     request<Narrowing>(`/watch/${encodeURIComponent(sid)}/cases/${encodeURIComponent(caseId)}/narrowing`, { signal }),
   /** 가리거나 넓힌 값 목록 (값 없음). 승인 공개를 고를 때 */
   hidden: (sid: string, signal?: AbortSignal) => request<HiddenItem[]>(`/monitor/sessions/${encodeURIComponent(sid)}/hidden`, { signal }),
-  approve: (sid: string, items: string[], reason: string) =>
+  /** confirmLowK: 함께 공개하면 후보가 기준 아래로 내려가는 것을 알고 승인 (고위험 승인) */
+  approve: (sid: string, items: string[], reason: string, confirmLowK = false) =>
     request<{ approval: Approval; detail: MonitorDetail }>(`/monitor/sessions/${encodeURIComponent(sid)}/approve`, {
       method: 'POST',
-      body: JSON.stringify({ items, reason }),
+      body: JSON.stringify({ items, reason, confirmLowK }),
     }),
+  /** 고른 값을 함께 공개하면 사례별 후보 수 (State는 바꾸지 않는다) */
+  whatIf: (sid: string, items: string[], signal?: AbortSignal) =>
+    request<WhatIf>(`/monitor/sessions/${encodeURIComponent(sid)}/what-if`, { method: 'POST', body: JSON.stringify({ items }), signal }),
   addRule: (sid: string, caseRef: string, attribute: string, note?: string) =>
     request<MonitorDetail>(`/monitor/sessions/${encodeURIComponent(sid)}/rules`, {
       method: 'POST',

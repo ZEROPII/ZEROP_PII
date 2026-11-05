@@ -7,6 +7,11 @@
 # '같은 환자 반복 질문'은 한 사례에서 가림이 두 번 이상 나온 대화다.
 # 원 응답·가린 원래 값·환자 번호는 기본으로 지워서 보내고, 사유를 남긴 열람(reveal)에서만 보낸다. 열람·검토는 감사 기록에 남는다.
 #
+# 환자 기호 (ADR-0030): 감사 기록과 관제에는 환자 번호 대신 기호('P-3f9a1c')를 쓴다. 같은 번호는 늘 같은 기호이고(서버 비밀 열쇠로 만든
+#   HMAC, DB meta에 둔다), 기호만으로는 번호를 알 수 없다. 원문 열람에서는 번호와 기호가 함께 보여 서로 맞춰 볼 수 있다.
+#   누구의 기록을 다뤘는지(지금 환자 · 사례마다 과거 환자)가 감사 기록에 남아, 같은 과거 환자를 여러 대화 · 의료진이 물은 것도 찾는다.
+# 기준 아래(후보 < k_req) 사례는 둘로 나눈다: 방어 규칙이 지키지 못한 것(violated, 경보)과 보안 담당자가 승인해 공개한 것(approved_low).
+#
 # 의료진 ↔ 보안 담당자 메시지 (Session.messages)
 #   의료진: 세부 정보 요청(access_request) · 답장(reply)     보안 담당자: 확인 요청(check_request) · 답장(reply)
 #   마지막 메시지를 의료진이 보냈으면 보안 담당자가 답할 차례다 → 검토 필요 목록 맨 위로 올린다.
@@ -22,12 +27,15 @@ from __future__ import annotations
 
 import collections
 import copy
+import hashlib
+import hmac
 import itertools
 import re
+import secrets
 import sqlite3
 import threading
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from webdemo.backend.auth import actor_label
 from webdemo.backend.clinic import Conflict
@@ -41,6 +49,10 @@ ACTOR = "보안 담당자 (데모)"
 CLINICIAN = "의료진 (데모)"
 SIM_TRIALS = ("T0010", "T0015", "T0036", "T0024", "T0016", "T0005")
 AUDIT_LIMIT = 2000
+DUP_WINDOW = 15.0                    # 같은 메시지 · 확인 요청을 이 초 안에 또 보내면 한 번으로 본다 (두 번 누름)
+REPEAT_WINDOW = 30 * 86400           # 같은 과거 환자를 다른 대화에서도 물었는지 볼 기간
+REPEAT_FLAG = "같은 과거 환자 다른 대화에서도 조회"
+HIGH_RISK_REASON = 15                # 기준 아래로 내려가는 공개 승인의 사유 최소 글자 수
 
 MSG_KINDS = dict(clinician=("access_request", "reply"), security=("check_request", "reply", "release"))
 MSG_KIND_KO = dict(access_request="세부 정보 요청", check_request="확인 요청", reply="답장", release="공개 승인")
@@ -92,6 +104,43 @@ class Monitor:
         self._seq_lock = threading.Lock()
         self.sim_status = "idle"
         self.assistant: Any = None                  # 검토 보조 (assist.ReviewAssistant). create_app이 붙인다
+        self._tag_key: bytes | None = None
+        self._ask_lock = threading.Lock()
+
+    # ── 환자 기호 ──
+    def _key(self) -> bytes:
+        if self._tag_key is None:
+            k = self.store.get_meta("subject_tag_key") if self.store is not None else None
+            if not k:
+                k = secrets.token_hex(16)
+                if self.store is not None:
+                    self.store.set_meta("subject_tag_key", k)
+            self._tag_key = k.encode()
+        return self._tag_key
+
+    def tag(self, number: str | None) -> str | None:
+        """환자 번호(앞 8자리)의 기호 ('P-3f9a1c'). 같은 번호는 늘 같은 기호, 기호만으로는 번호를 알 수 없다."""
+        if not number:
+            return None
+        return "P-" + hmac.new(self._key(), str(number)[:8].encode(), hashlib.sha256).hexdigest()[:6]
+
+    @staticmethod
+    def _numbers(s: Any) -> tuple[str | None, dict[str, str]]:
+        """(지금 환자 번호, 사례 → 과거 환자 번호), 모두 앞 8자리."""
+        if getattr(s, "archived", False):
+            v = s.db.get("security") or {}
+            return v.get("patient"), {r["ref"]: r["patient"] for r in v.get("retrieval", []) if r.get("patient")}
+        if not hasattr(s, "prefix"):
+            return None, {}
+        return s.patient_id[:8], {f"사례{i}": p[:8] for i, (p, _) in enumerate(s.prefix.retrieval, 1)}
+
+    def subjects(self, s: Any, cases: Iterable[str | None] | None = None) -> dict[str, Any]:
+        """감사 기록에 붙일 정보주체: 지금 환자 기호와 사례(과거 환자)마다 기호. cases가 None이면 찾은 사례 전부."""
+        if s is None:
+            return {}
+        cur, past = self._numbers(s)
+        refs = list(past) if cases is None else [c for c in dict.fromkeys(cases) if c]
+        return dict(patient_tag=self.tag(cur), subjects=[dict(case=c, tag=self.tag(past[c])) for c in refs if c in past])
 
     # ── 감사 기록 ──
     def log(self, action: str, session: Any = None, *, user: dict[str, Any] | None = None, actor: str | None = None,
@@ -177,27 +226,48 @@ class Monitor:
             for ref, c in (r.get("cases") or {}).items():
                 if "k" in c:
                     k_now[ref] = c["k"]
-        if getattr(s, "approvals", None):                # 승인 공개 뒤의 후보 수 (턴 기록 밖에서 State가 바뀌었다)
-            refs = set(k_now) | {x["case"] for ap in s.approvals for x in ap["items"]}
+        approvals = getattr(s, "approvals", None) or []
+        approved_cases = {x["case"] for ap in approvals for x in ap["items"]}
+        # 방어 규칙이 지킨 후보 수: 첫 승인 공개 전까지의 턴 기록 (승인 뒤의 State에는 공개한 값이 더해져 있다)
+        first_ap = min((x.get("after_turn", 10 ** 9) for ap in approvals for x in ap["items"]), default=None)
+        k_sys: dict[str, int] = {}
+        for r in recs:
+            if first_ap is not None and r["turn"] > first_ap:
+                continue
+            for ref, c in (r.get("cases") or {}).items():
+                if "k" in c:
+                    k_sys[ref] = c["k"]
+        if approvals:                                    # 승인 공개 뒤의 후보 수 (턴 기록 밖에서 State가 바뀌었다)
+            refs = set(k_now) | approved_cases
             k_now = {ref: s.current_k(LIVE_ARM, ref) for ref in refs}
         focus = min(min_raw, key=lambda ref: (min_raw[ref], ref)) if min_raw else s.case_a(LIVE_ARM)
+        last_msg = s.messages[-1] if s.messages else None
+        pending = bool(last_msg and last_msg["sender"] == "clinician")          # 보안 담당자가 답할 차례
+        if pending and last_msg.get("case"):
+            focus = last_msg["case"]                     # 답을 기다리는 요청이 있으면 그 요청의 사례부터 보인다
         if focus and focus not in k_now and hasattr(s, "current_k"):
             k_now[focus] = s.current_k(LIVE_ARM, focus)       # 아직 아무것도 공개되지 않은 사례 (예: 첫 답에서 사례째로 뺌): 기준 집단 전체
         status = "danger" if sup else "caution" if gen else "safe"
         k_req = s.cfg.k_req
-        violated = sorted(ref for ref, k in k_now.items() if 1 <= k < k_req)
+        p_ref = self.eng.ctx["staged"].p_ref
+        low = {ref for ref, k in k_now.items() if 1 <= k < k_req}
+        # 승인으로 기준 아래가 된 사례: 승인 전까지는 기준 이상이었다 (경보가 아니라 '승인 공개'로 따로 센다)
+        approved_low = sorted(ref for ref in low if ref in approved_cases and k_sys.get(ref, p_ref) >= k_req)
+        violated = sorted(low - set(approved_low))
         repeated = [ref for ref, n in sup_by_case.items() if n >= 2]
         last_q = next((r.get("user_question") or r["query_text"] for r in reversed(recs) if r["turn"] > 0), None)
-        last_msg = s.messages[-1] if s.messages else None
-        pending = bool(last_msg and last_msg["sender"] == "clinician")          # 보안 담당자가 답할 차례
         awaiting = bool(last_msg and last_msg["sender"] == "security" and last_msg["kind"] == "check_request")
         flag = FLAG_KO[last_msg["kind"]] if pending else "같은 환자 반복 질문" if repeated else None
+        # 질문에 대한 답에 나온 사례(턴 1부터): 다른 대화에서도 같은 과거 환자를 물었는지 보는 데 쓴다 (기호만)
+        asked = sorted({p["ref"] for r in recs if r["turn"] > 0 for p in (r.get("release_plans") or [])})
+        _, past = self._numbers(s)
+        asked_subjects = [dict(case=ref, tag=self.tag(past[ref])) for ref in asked if ref in past]
         return dict(id=s.id, trial_id=s.trial_id, source=s.source, source_label=SOURCE_KO.get(s.source, s.source),
                     qtype_label=s._summary()["qtype_label"], turns=s.turn, suppressed=sup, generalized=gen,
                     status=status, status_label=STATUS_KO[status], focus_case=focus,
                     k_if_raw=min_raw.get(focus) if focus else None, k_now=k_now.get(focus) if focus else None,
-                    repeated=repeated, flag=flag, violated=violated,
-                    last_question=last_q, last_active=s.last_active, created=s.created,
+                    repeated=repeated, flag=flag, violated=violated, approved_low=approved_low, asked_subjects=asked_subjects,
+                    repeat_subjects=[], last_question=last_q, last_active=s.last_active, created=s.created,
                     review=s.review, needs_review=(bool(repeated) and not s.review) or pending,
                     messages=len(s.messages), pending_request=pending, awaiting_clinician=awaiting,
                     request_case=last_msg.get("case") if pending else None,
@@ -220,7 +290,7 @@ class Monitor:
             return None
         return ArchivedSession(c, self.store.messages_of(sid))
 
-    def overview(self) -> dict[str, Any]:
+    def _all_rows(self) -> list[dict[str, Any]]:
         with self.eng.lock:
             live_ids = set(self.eng.sessions)
             rows = [self.row(s) for s in self.eng.sessions.values()]
@@ -230,10 +300,43 @@ class Monitor:
                 if c["conv_id"] in live_ids or not r or (not r.get("turns") and not r.get("messages")):
                     continue                       # 질문 없이 끝난 빈 대화는 목록에 올리지 않는다
                 rows.append(self._archived_row(ArchivedSession(c, [])))
+        return rows
+
+    @staticmethod
+    def _with_repeats(rows: list[dict[str, Any]], only: list[dict[str, Any]] | None = None) -> None:
+        """
+        같은 과거 환자(기호)를 최근 REPEAT_WINDOW 안의 다른 대화에서도 물었으면 표시한다 (대화마다 누적이 따로라 나눠 묻는 것을 사람이 보게).
+        판정은 바꾸지 않는다. only를 주면 그 줄들에만 표시한다 (상세 화면).
+        """
+        now = time.time()
+        seen: dict[str, list[dict[str, Any]]] = collections.defaultdict(list)
+        for r in rows:
+            if now - (r.get("last_active") or 0) > REPEAT_WINDOW:
+                continue
+            for x in r.get("asked_subjects") or []:
+                if x.get("tag"):
+                    seen[x["tag"]].append(r)
+        for r in only if only is not None else rows:
+            rep = []
+            for x in r.get("asked_subjects") or []:
+                others = [o for o in seen.get(x.get("tag"), []) if o["id"] != r["id"]]
+                if others:
+                    owners = {o.get("owner") for o in others} | {r.get("owner")}
+                    rep.append(dict(case=x["case"], tag=x["tag"], conversations=len(others), clinicians=len({o for o in owners if o})))
+            r["repeat_subjects"] = rep
+            if rep:
+                r["flag"] = r.get("flag") or REPEAT_FLAG
+                r["needs_review"] = bool(r.get("needs_review")) or not r.get("review")
+
+    def overview(self) -> dict[str, Any]:
+        rows = self._all_rows()
+        self._with_repeats(rows)
         rank = dict(danger=0, caution=1, safe=2)
         rows.sort(key=lambda r: (not r["pending_request"], not r["needs_review"], r.get("archived", False), rank[r["status"]], -r["last_active"]))
         kpi = dict(sessions=len(rows), suppressed=sum(r["suppressed"] for r in rows), generalized=sum(r["generalized"] for r in rows),
                    identified=sum(len(r["violated"]) for r in rows), needs_review=sum(r["needs_review"] for r in rows),
+                   approved_low=sum(len(r.get("approved_low") or []) for r in rows),
+                   repeat_subjects=sum(bool(r.get("repeat_subjects")) for r in rows),
                    blocked_sessions=sum(r["status"] == "danger" for r in rows), requests=sum(r["pending_request"] for r in rows))
         return dict(kpi=kpi, sessions=rows, simulations=self.sim_status, live_arm=LIVE_ARM, live_arm_label=ARM_KO[LIVE_ARM],
                     k_req=self.eng.cfg.k_req, suppress_threshold=self.eng.cfg.suppress_threshold,
@@ -250,37 +353,46 @@ class Monitor:
                 v = s.security_view()
                 row = self.row(s)
                 msgs = copy.deepcopy(s.messages)
+        self._with_repeats(self._all_rows(), only=[row])
+        # 기호는 늘 보인다 (번호는 열람 뒤에만): 감사 기록 · 다른 대화와 맞춰 보는 데 쓴다
+        v["patient_tag"] = self.tag(v.get("patient"))
+        for r in v.get("retrieval", []):
+            r["tag"] = self.tag(r.get("patient"))
         if not reveal:
             v = mask(v)
             msgs = mask_messages(msgs)
         return dict(v, row=row, revealed=reveal, source_label=SOURCE_KO.get(s.source, s.source), live_arm=LIVE_ARM, messages=msgs,
                     archived=bool(getattr(s, "archived", False)), assist=self.assist_state(s))
 
-    def reveal(self, s: Any, reason: str, user: dict[str, Any] | None = None) -> dict[str, Any]:
-        self.log("reveal", s, user=user, reason=reason)
+    def reveal(self, s: Any, reason: str, user: dict[str, Any] | None = None, note: str | None = None) -> dict[str, Any]:
+        """원문 열람: 지금 환자와 찾은 사례(과거 환자) 모두의 번호가 보이므로, 그 기호를 모두 감사 기록에 남긴다."""
+        self.log("reveal", s, user=user, reason=reason, note=note, **self.subjects(s))
         return self.detail(s, reveal=True)
 
     def review(self, s: Any, action: str, note: str | None, user: dict[str, Any] | None = None) -> dict[str, Any]:
         archived = getattr(s, "archived", False)
-        check = None
         if action == "ask_clinician":                    # 표시만 하지 않고 의료진 화면에 확인 요청을 보낸다
             if archived:
                 raise Conflict("지난 대화의 의료진에게는 확인 요청을 보낼 수 없습니다. '검토 완료'로 표시하세요.")
             check = (note or "").strip() or CHECK_DEFAULT
             if len(check) < 2:                           # 상태를 바꾸기 전에 검사한다 (표시 · 감사 기록만 남고 메시지가 없는 일이 없게)
                 raise ValueError("확인 요청은 2자 이상 써 주세요.")
+            with self._ask_lock:                         # 같은 확인 요청이 동시에 두 번 와도 (두 번 누름) 한 번만 보내고 한 번만 기록한다
+                with self.eng.lock:
+                    focus = self.row(s)["focus_case"]
+                if self._duplicate(s, "security", "check_request", check, focus) is None:
+                    s.review = dict(action=action, label=REVIEW_KO[action], at=time.time(), actor=actor_label(user, ACTOR), note=note)
+                    self.log(action, s, user=user, note=note, **self.subjects(s, [focus]))
+                    self.post_message(s, "security", "check_request", check, focus, audit=False, user=user)
+            with self.eng.lock:
+                return self.row(s)
         s.review = dict(action=action, label=REVIEW_KO[action], at=time.time(), actor=actor_label(user, ACTOR), note=note)
         self.log(action, s, user=user, note=note)
         if archived:
             if self.store is not None:
                 self.store.save_conversation(s.id, review_json=s.review)
             return self._archived_row(s)
-        if check is not None:
-            with self.eng.lock:
-                case = self.row(s)["focus_case"]
-            self.post_message(s, "security", "check_request", check, case, audit=False, user=user)
-        else:
-            self._changed(s)
+        self._changed(s)
         with self.eng.lock:
             return self.row(s)
 
@@ -292,7 +404,7 @@ class Monitor:
             raise Conflict("규칙은 의료진 대화에만 걸 수 있습니다.")
         with self.eng.lock:
             rule = s.add_rule(case, attribute, by=actor_label(user, ACTOR), note=note)
-        self.log("add_rule", s, user=user, case=case, attribute=attribute, note=note)
+        self.log("add_rule", s, user=user, case=case, attribute=attribute, note=note, **self.subjects(s, [case]))
         self._changed(s)
         return rule
 
@@ -301,7 +413,7 @@ class Monitor:
             raise Conflict("지난 대화의 규칙은 바꿀 수 없습니다.")
         with self.eng.lock:
             rule = s.remove_rule(rule_id)
-        self.log("remove_rule", s, user=user, case=rule["case"], attribute=rule["attribute"])
+        self.log("remove_rule", s, user=user, case=rule["case"], attribute=rule["attribute"], **self.subjects(s, [rule["case"]]))
         self._changed(s)
         return rule
 
@@ -311,8 +423,21 @@ class Monitor:
         with self.eng.lock:
             return s.hidden()
 
-    def approve(self, s: Any, conv: Any, item_ids: list[str], reason: str, user: dict[str, Any] | None = None) -> dict[str, Any]:
-        """가린 값을 골라 그 의료진의 그 대화에 공개한다. 공개 승인 메시지(값 포함)를 의료진에게 보내고 감사 기록에 남긴다."""
+    def what_if(self, s: Any, item_ids: list[str]) -> dict[str, Any]:
+        """고른 가린 값을 함께 공개하면 사례마다 후보 수 (승인 창이 보내기 전에 보인다). State는 바꾸지 않는다."""
+        if getattr(s, "archived", False) or not item_ids:
+            return dict(kAfter={}, lowest=None, kReq=self.eng.cfg.k_req)
+        with self.eng.lock:
+            proj = s.what_if(item_ids)
+        return dict(kAfter=proj, lowest=min(proj.values()) if proj else None, kReq=self.eng.cfg.k_req)
+
+    def approve(self, s: Any, conv: Any, item_ids: list[str], reason: str, user: dict[str, Any] | None = None,
+                confirm_low_k: bool = False) -> dict[str, Any]:
+        """
+        가린 값을 골라 그 의료진의 그 대화에 공개한다. 공개 승인 메시지(값 포함)를 의료진에게 보내고 감사 기록에 남긴다.
+        함께 공개하면 후보가 기준(k_req) 아래로 내려가는 승인은 고위험이다: 확인(confirm_low_k)과 더 긴 사유가 있어야 하고,
+        감사 기록에 high_risk로 남는다 (2인 확인 대신, ADR-0030).
+        """
         if getattr(s, "archived", False):
             raise Conflict("지난 대화의 값은 공개할 수 없습니다.")
         if getattr(s, "source", None) != "clinic":
@@ -322,12 +447,24 @@ class Monitor:
         reason = (reason or "").strip()
         if len(reason) < 5:
             raise ValueError("공개 사유를 5자 이상 써 주세요.")
-        with self.eng.lock:
+        k_req = self.eng.cfg.k_req
+        with self.eng.lock:                              # 후보 수 확인과 공개를 한 번에 (사이에 다른 답이 State를 바꾸지 못하게)
+            proj = s.what_if(item_ids)
+            lowest = min(proj.values()) if proj else None
+            high = lowest is not None and lowest < k_req
+            if high and not confirm_low_k:
+                raise ValueError(f"고른 값을 함께 공개하면 후보가 {lowest}명까지 줄어듭니다 (기준 {k_req}명). "
+                                 f"고위험 승인 확인란에 표시하고 사유를 {HIGH_RISK_REASON}자 이상 써 주세요.")
+            if high and len(reason) < HIGH_RISK_REASON:
+                raise ValueError(f"기준 아래로 내려가는 공개는 사유를 {HIGH_RISK_REASON}자 이상 써 주세요.")
             ap = s.approve(item_ids, by=actor_label(user, ACTOR), reason=reason)
+            ap["high_risk"] = high                      # 승인 기록(대화 상세 · DB 저장)에도 남긴다
             text = conv.apply_approval(ap)
         case = ap["items"][0]["case"] if len({x["case"] for x in ap["items"]}) == 1 else None
         self.log("approve_release", s, user=user, reason=reason, case=case,
-                 items=[dict(turn=x["turn"], case=x["case"], attribute=x["attribute"]) for x in ap["items"]], k_after=ap["k_after"])
+                 items=[dict(turn=x["turn"], case=x["case"], attribute=x["attribute"]) for x in ap["items"]], k_after=ap["k_after"],
+                 high_risk=high, k_min=min(ap["k_after"].values()) if ap["k_after"] else None,
+                 **self.subjects(s, [x["case"] for x in ap["items"]]))
         self.post_message(s, "security", "release", text[:2000], case, audit=False, user=user)
         return ap
 
@@ -345,17 +482,21 @@ class Monitor:
         if case is not None and not _CASE_REF.fullmatch(case):
             raise ValueError(f"사례 표시가 올바르지 않습니다: {case}")
         actor = actor_label(user, ACTOR if sender == "security" else CLINICIAN)
-        with self._seq_lock:
-            n = next(self._mids)
-        m = dict(id=f"M{n:04d}", at=time.time(), sender=sender, kind=kind, kind_label=MSG_KIND_KO[kind],
-                 case=case, text=text, actor=actor)
-        with self.eng.lock:
+        with self.eng.lock:                              # 같은 메시지 검사와 덧붙이기를 한 번에 (두 번 누른 요청이 동시에 와도 한 번)
+            dup = self._duplicate(s, sender, kind, text, case)
+            if dup is not None:
+                return dup                               # 방금 보낸 같은 메시지: 다시 보내지 않는다
+            with self._seq_lock:
+                n = next(self._mids)
+            m = dict(id=f"M{n:04d}", at=time.time(), sender=sender, kind=kind, kind_label=MSG_KIND_KO[kind],
+                     case=case, text=text, actor=actor)
             s.messages.append(m)
             s.last_active = m["at"]
         if self.store is not None:
             self.store.add_message(s.id, m, n, user["user_id"] if user else None)
         if audit:
-            self.log(MSG_AUDIT[(sender, kind)], s, user=user, actor=ACTOR if sender == "security" else CLINICIAN, note=text, case=case)
+            self.log(MSG_AUDIT[(sender, kind)], s, user=user, actor=ACTOR if sender == "security" else CLINICIAN, note=text, case=case,
+                     **self.subjects(s, [case]))
         self._changed(s)
         if sender == "clinician" and kind == "access_request" and self.assistant is not None and getattr(s, "source", None) == "clinic":
             try:
@@ -363,6 +504,15 @@ class Monitor:
             except Exception as exc:
                 print(f"[medicloak] 검토 보조를 시작하지 못했습니다: {type(exc).__name__}: {exc}")
         return m
+
+    @staticmethod
+    def _duplicate(s: Any, sender: str, kind: str, text: str, case: str | None) -> dict[str, Any] | None:
+        """마지막 메시지가 DUP_WINDOW 초 안에 같은 사람이 보낸 같은 종류 · 사례 · 글이면 그것 (두 번 누름)."""
+        last = s.messages[-1] if s.messages else None
+        if (last and last["sender"] == sender and last["kind"] == kind and last.get("case") == case and last["text"] == text.strip()
+                and time.time() - last["at"] < DUP_WINDOW):
+            return last
+        return None
 
     # ── 검토 보조 (assist.py) ──
     def assist_state(self, s: Any) -> dict[str, Any]:

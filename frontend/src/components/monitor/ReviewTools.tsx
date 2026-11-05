@@ -2,13 +2,14 @@
 //   규칙   : 이 대화에서 고른 사례 · 단서 종류는 다음 질문부터 늘 가린다 (의료진 화면 갈래에만, 감사 기록).
 //   승인   : 의료진의 세부 정보 요청에 사유를 적고 가린 값을 골라 그 의료진의 그 대화에만 공개한다.
 //            공개한 값은 누적 State에 더해져 이후 판정에 들어간다 (후보가 기준 아래로 내려갈 수 있다).
+//            기준 아래로 내려가는 공개는 확인란 · 더 긴 사유를 받는 고위험 승인이다 (ADR-0030).
 
-import { Eye, Loader2, Plus, ShieldCheck, Trash2, X } from 'lucide-react';
+import { ChevronDown, ChevronUp, Eye, Loader2, Plus, ShieldCheck, Trash2, X } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { monitorApi } from '../../api/monitorApi';
 import { josa } from '../../lib/korean';
 import { caseLabel, clockTime } from '../../lib/time';
-import type { HiddenItem, MonitorDetail, Narrowing } from '../../types/monitor';
+import type { HiddenItem, MonitorDetail, Narrowing, WhatIf } from '../../types/monitor';
 import { useToast } from '../layout/Toast';
 import { ArmCompare, NarrowingLadder } from '../viz/Instruments';
 
@@ -39,25 +40,30 @@ function where(turn: number): string {
   return turn === 0 ? '사례 검색 답' : `질문 ${turn}의 답`;
 }
 
-/** 대화 끝 후보 수(세 갈래)와 초점 사례에서 후보가 줄어든 과정 */
+/**
+ * 초점 사례의 후보 수와 환자 기호. 방어 방식 비교(세 갈래)와 후보가 줄어든 과정은 '자세히'를 눌러야 보인다 (ADR-0030):
+ * 맨 위 세 줄 요약을 먼저 읽고, 근거가 필요할 때만 펼친다.
+ */
 export function CountsSection({ d, onReveal }: { d: MonitorDetail; onReveal(): void }) {
   const r = d.row;
   const focus = r.focus_case;
   const cid = caseIdOf(focus);
+  const [more, setMore] = useState(false);
   const [nar, setNar] = useState<Narrowing | null>(null);
   const [narError, setNarError] = useState<string | null>(null);
   const key = `${d.id}|${focus}|${d.turn}|${(d.approvals ?? []).length}|${(d.rules ?? []).length}`;
 
+  useEffect(() => setMore(false), [d.id]);
   useEffect(() => {
     setNar(null);
     setNarError(null);
-    if (!cid || d.source !== 'clinic') return;
+    if (!more || !cid || d.source !== 'clinic') return; // 펼쳤을 때만 받는다
     const ctl = new AbortController();
     monitorApi.narrowing(d.id, cid, ctl.signal).then(setNar, (e) => {
       if (!(e instanceof DOMException)) setNarError(e instanceof Error ? e.message : '불러오지 못했습니다.');
     });
     return () => ctl.abort();
-  }, [key, cid, d.id, d.source]);
+  }, [more, key, cid, d.id, d.source]);
 
   const g = d.k_req;
   const s = nar?.suppressK ?? 3;
@@ -67,18 +73,22 @@ export function CountsSection({ d, onReveal }: { d: MonitorDetail; onReveal(): v
     { key: 'C1S', label: '턴별 방어였다면', note: '비교', k: focus ? lastK(d.arms.C1S?.k_series[focus]) : null },
     { key: 'C0', label: '방어 없었다면', note: '비교', k: focus ? lastK(d.arms.C0?.k_series[focus]) : null },
   ];
-  const patient = d.retrieval.find((x) => x.ref === focus)?.patient;
+  const hit = d.retrieval.find((x) => x.ref === focus);
+  const violated = !!focus && r.violated.includes(focus);
+  const approvedLow = !!focus && (r.approved_low ?? []).includes(focus);
 
   return (
     <section aria-label="후보 수" className="border-b border-line px-5 py-4">
       <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
         <h3 className="text-[13px] font-bold text-ink-2">
-          {josa(caseLabel(focus), '과', '와')} 조건이 같은 과거 환자 <span className="num text-ink">{r.k_now != null ? `${r.k_now.toLocaleString()}명` : '–'}</span>
+          {josa(caseLabel(focus), '과', '와')} 조건이 같은 과거 환자{' '}
+          <span className={`num ${violated ? 'text-danger-text' : 'text-ink'}`}>{r.k_now != null ? `${r.k_now.toLocaleString()}명` : '–'}</span>
+          {approvedLow && <span className="ml-2 rounded-[4px] bg-surface-2 px-1.5 py-px text-[11px] font-semibold text-ink-2">승인 공개로 기준 아래</span>}
         </h3>
-        <span className="flex items-center gap-2 text-xs text-ink-3">
+        <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-3">
           환자 번호
           {d.revealed ? (
-            <span className="font-mono text-ink">{patient ?? '–'}</span>
+            <span className="font-mono text-ink">{hit?.patient ?? '–'}</span>
           ) : (
             <>
               <span className="redact" style={{ width: 72 }} aria-label="가려진 환자 번호" />
@@ -88,20 +98,33 @@ export function CountsSection({ d, onReveal }: { d: MonitorDetail; onReveal(): v
               </button>
             </>
           )}
+          {hit?.tag && (
+            <span title="환자 기호: 같은 환자는 늘 같은 기호로 보입니다. 번호를 열지 않고 다른 대화 · 감사 기록과 맞춰 볼 수 있습니다.">
+              기호 <span className="font-mono text-ink-2">{hit.tag}</span>
+            </span>
+          )}
         </span>
       </div>
       <p className="mt-1 max-w-[62ch] text-xs leading-5 text-ink-3">
         {josa(caseLabel(focus), '은', '는')} 과거 기록 환자 한 명입니다. 지금까지 답에 나온 이 사람의 단서를 모두 가진 사람이 {max.toLocaleString()}명 중 몇 명인지
         셉니다. {g}명 아래로 줄면 누구인지 좁혀지고, 1명이면 특정됩니다.
       </p>
-      <div className="mt-2.5">
-        <ArmCompare rows={rows} max={max} g={g} s={s} />
-      </div>
-      {d.source === 'clinic' && (
-        <div className="mt-4">
-          <h4 className="mb-1 text-xs font-semibold text-ink-2">{caseLabel(focus)} 후보가 줄어든 과정</h4>
-          {nar ? <NarrowingLadder data={nar} labelOf={labelOf} /> : <p className="text-xs text-ink-3">{narError ?? '불러오는 중'}</p>}
-        </div>
+      <button type="button" className="btn-ghost btn-sm mt-1.5 h-7 px-1.5" aria-expanded={more} onClick={() => setMore((v) => !v)}>
+        {more ? <ChevronUp className="h-3.5 w-3.5" aria-hidden /> : <ChevronDown className="h-3.5 w-3.5" aria-hidden />}
+        {more ? '자세히 접기' : '자세히: 방어 방식 비교 · 후보가 줄어든 과정'}
+      </button>
+      {more && (
+        <>
+          <div className="mt-2">
+            <ArmCompare rows={rows} max={max} g={g} s={s} />
+          </div>
+          {d.source === 'clinic' && (
+            <div className="mt-4">
+              <h4 className="mb-1 text-xs font-semibold text-ink-2">{caseLabel(focus)} 후보가 줄어든 과정</h4>
+              {nar ? <NarrowingLadder data={nar} labelOf={labelOf} /> : <p className="text-xs text-ink-3">{narError ?? '불러오는 중'}</p>}
+            </div>
+          )}
+        </>
       )}
     </section>
   );
@@ -226,7 +249,15 @@ export function RulesSection({ d, open, onOpen, onDetail }: { d: MonitorDetail; 
   );
 }
 
-/** 세부 정보 요청 승인: 가린 값을 골라 사유와 함께 공개한다 */
+/** 공개 사유 최소 길이: 보통 · 기준 아래로 내려가는 고위험 승인 (서버 monitor.HIGH_RISK_REASON과 같다) */
+export const REASON_MIN = 5;
+export const HIGH_RISK_REASON = 15;
+
+/**
+ * 세부 정보 요청 승인: 가린 값을 골라 사유와 함께 공개한다.
+ * 고른 값을 함께 공개했을 때의 후보 수는 서버가 승인과 같은 방식으로 센다 (/what-if). 기준 아래로 내려가면
+ * 확인란과 더 긴 사유를 받고 고위험 승인으로 감사 기록에 남긴다 (2인 확인 대신, ADR-0030).
+ */
 export function ApprovePanel({
   d,
   caseRef,
@@ -250,6 +281,10 @@ export function ApprovePanel({
   const [reason, setReason] = useState(initialReason ?? '');
   const seeded = !!initialPick?.length;
   const [busy, setBusy] = useState(false);
+  const [proj, setProj] = useState<WhatIf | null>(null);
+  const [projState, setProjState] = useState<'idle' | 'loading' | 'error'>('idle');
+  const [confirmLow, setConfirmLow] = useState(false);
+  const pickKey = [...picked].sort().join(',');
 
   useEffect(() => {
     const ctl = new AbortController();
@@ -262,17 +297,55 @@ export function ApprovePanel({
     return () => ctl.abort();
   }, [d.id, caseRef]);
 
-  const lowest = items?.filter((x) => picked.has(x.id) && x.kIfRaw != null).reduce<number | null>((m, x) => (m == null ? x.kIfRaw : Math.min(m, x.kIfRaw!)), null);
+  // 고른 값이 바뀌면 다시 세고, 확인란도 다시 받는다
+  useEffect(() => {
+    setProj(null);
+    setConfirmLow(false);
+    if (!pickKey) {
+      setProjState('idle');
+      return;
+    }
+    setProjState('loading');
+    const ctl = new AbortController();
+    const t = window.setTimeout(() => {
+      monitorApi.whatIf(d.id, pickKey.split(','), ctl.signal).then(
+        (w) => {
+          setProj(w);
+          setProjState('idle');
+        },
+        (e) => {
+          if (!(e instanceof DOMException)) setProjState('error');
+        },
+      );
+    }, 150);
+    return () => {
+      window.clearTimeout(t);
+      ctl.abort();
+    };
+  }, [d.id, pickKey]);
+
+  // 미리 세지 못했으면 값마다 '그대로면' 수 가운데 가장 적은 것으로 가늠한다 (승인할 때 서버가 다시 센다)
+  const guess = items?.filter((x) => picked.has(x.id) && x.kIfRaw != null).reduce<number | null>((m, x) => (m == null ? x.kIfRaw : Math.min(m, x.kIfRaw!)), null) ?? null;
+  const lowest = proj ? proj.lowest : projState === 'error' ? guess : null;
+  const high = lowest != null && lowest < d.k_req;
+  const need = high ? HIGH_RISK_REASON : REASON_MIN;
+  const typed = reason.trim().length;
+  const kList = proj
+    ? Object.entries(proj.kAfter)
+        .map(([ref, k]) => `${caseLabel(ref)} 후보 ${k}명`)
+        .join(', ')
+    : '';
+  const ready = !busy && picked.size > 0 && projState !== 'loading' && typed >= need && (!high || confirmLow);
 
   async function submit() {
     setBusy(true);
     try {
-      const res = await monitorApi.approve(d.id, [...picked], reason.trim());
+      const res = await monitorApi.approve(d.id, [...picked], reason.trim(), high && confirmLow);
       onDetail(res.detail);
       const ks = Object.entries(res.approval.k_after)
         .map(([ref, k]) => `${caseLabel(ref)} 후보 ${k}명`)
         .join(', ');
-      toast(`값 ${res.approval.items.length}개를 공개했습니다 (${ks}). 의료진 화면의 보호 담당자 창에 도착합니다.`);
+      toast(`${res.approval.high_risk ? '고위험 승인으로 ' : ''}값 ${res.approval.items.length}개를 공개했습니다 (${ks}). 의료진 화면의 보호 담당자 창에 도착합니다.`);
       onCancel();
     } catch (e) {
       toast(e instanceof Error ? e.message : '공개하지 못했습니다.');
@@ -330,13 +403,31 @@ export function ApprovePanel({
           ))}
         </ul>
       )}
-      {lowest != null && lowest < d.k_req && (
-        <p className="mt-2 rounded-cell bg-danger-tint px-2.5 py-1.5 text-xs text-danger-text">
-          고른 값을 공개하면 후보가 {lowest}명까지 줄 수 있습니다 (기준 {d.k_req}명). 그 뒤 이 사례의 새 단서는 가려서 답합니다.
-        </p>
-      )}
+      {picked.size > 0 &&
+        (projState === 'loading' ? (
+          <p className="mt-2 text-xs text-ink-3" aria-live="polite">
+            함께 공개했을 때 후보 수를 세는 중
+          </p>
+        ) : high ? (
+          <div className="mt-2 rounded-cell border border-danger bg-danger-tint px-2.5 py-2 text-xs leading-5 text-danger-text" aria-live="polite">
+            <p>
+              고른 값을 함께 공개하면 후보가 <b className="num">{lowest}명</b>까지 줄어듭니다 (기준 {d.k_req}명{proj && Object.keys(proj.kAfter).length > 1 ? ` · ${kList}` : ''}).
+              그 뒤 이 사례의 새 단서는 가려서 답합니다.
+            </p>
+            <label className="mt-1.5 flex cursor-pointer items-start gap-2 font-semibold">
+              <input type="checkbox" checked={confirmLow} onChange={(e) => setConfirmLow(e.target.checked)} className="mt-[3px]" />
+              후보가 {lowest}명까지 줄어드는 것을 알고 공개합니다. 고위험 승인으로 감사 기록에 따로 남습니다.
+            </label>
+          </div>
+        ) : proj && proj.lowest != null ? (
+          <p className="mt-2 text-xs text-ink-2" aria-live="polite">
+            함께 공개하면 {kList} (기준 {d.k_req}명 이상)
+          </p>
+        ) : projState === 'error' ? (
+          <p className="mt-2 text-xs text-ink-3">후보 수를 미리 세지 못했습니다. 공개할 때 서버가 다시 셉니다.</p>
+        ) : null)}
       <label htmlFor="approve-reason" className="mt-2.5 block text-xs font-semibold text-ink-2">
-        공개 사유 (5자 이상, 감사 기록에 남음)
+        공개 사유 ({high ? `기준 아래로 내려가는 공개라 ${need}자 이상` : `${need}자 이상`}, 감사 기록에 남음)
       </label>
       <textarea
         id="approve-reason"
@@ -347,13 +438,14 @@ export function ApprovePanel({
         placeholder="예: 처방 시작 시기가 현재 환자 약물 조정 판단에 필요함"
         className="mt-1 w-full resize-none rounded-control border border-line-input bg-surface px-3 py-2 text-[13px] leading-5 text-ink outline-none placeholder:text-ink-3 focus:border-focus"
       />
-      <div className="mt-1.5 flex justify-end gap-1.5">
+      <div className="mt-1.5 flex items-center justify-end gap-1.5">
+        {typed > 0 && typed < need && <span className="mr-auto text-[11.5px] text-ink-3">{need - typed}자 더 써야 합니다</span>}
         <button type="button" className="btn-ghost btn-sm" onClick={onCancel}>
           취소
         </button>
-        <button type="button" className="btn-primary btn-sm" disabled={busy || picked.size === 0 || reason.trim().length < 5} onClick={() => void submit()}>
+        <button type="button" className="btn-primary btn-sm" disabled={!ready} onClick={() => void submit()}>
           {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <ShieldCheck className="h-3.5 w-3.5" aria-hidden />}
-          고른 값 {picked.size}개 공개
+          {high ? `고위험 승인으로 ${picked.size}개 공개` : `고른 값 ${picked.size}개 공개`}
         </button>
       </div>
     </div>
@@ -379,6 +471,7 @@ export function ApprovalsList({ d }: { d: MonitorDetail }) {
               ))}
             </p>
             <p className="mt-0.5 text-ink-3">
+              {ap.high_risk && <span className="mr-1.5 rounded-[4px] bg-danger-tint px-1 py-px text-[10.5px] font-semibold text-danger-text">고위험 승인</span>}
               {ap.by.split(' (')[0]} · {clockTime(ap.at)} · 사유: {ap.reason} · 공개 뒤{' '}
               {Object.entries(ap.k_after)
                 .map(([ref, k]) => `${caseLabel(ref)} 후보 ${k}명`)

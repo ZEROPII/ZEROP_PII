@@ -33,7 +33,14 @@ export interface MonitorRow {
   k_now: number | null;
   repeated: string[];
   flag: string | null;
+  /** 방어 규칙이 지키지 못하고 기준 아래로 내려간 사례 (경보) */
   violated: string[];
+  /** 보안 담당자가 승인해 공개해서 기준 아래가 된 사례 (경보와 따로 센다) */
+  approved_low?: string[];
+  /** 질문의 답에 나온 사례와 그 과거 환자 기호 */
+  asked_subjects?: SubjectTag[];
+  /** 같은 과거 환자를 최근 다른 대화에서도 물었다: 다른 대화 수 · 물은 의료진 수 (이 대화 포함) */
+  repeat_subjects?: (SubjectTag & { conversations: number; clinicians: number })[];
   last_question: string | null;
   last_active: number;
   created: number;
@@ -53,6 +60,12 @@ export interface MonitorRow {
   archived?: boolean;
   /** oracle: 결정적 응답기 · live: 서버를 켤 때 정한 LLM */
   llm_mode?: 'oracle' | 'live';
+}
+
+/** 환자 기호 ('P-3f9a1c'): 같은 환자 번호는 늘 같은 기호, 기호만으로는 번호를 알 수 없다 */
+export interface SubjectTag {
+  case: string;
+  tag: string | null;
 }
 
 /** 의료진 대화 목록 한 줄 (/api/watch) */
@@ -119,6 +132,9 @@ export interface MonitorOverview {
     blocked_sessions: number;
     /** 보안 담당자가 답할 차례인 의료진 요청 수 */
     requests: number;
+    /** 승인 공개로 기준 아래가 된 사례 수 · 같은 과거 환자를 다른 대화에서도 물은 대화 수 */
+    approved_low?: number;
+    repeat_subjects?: number;
   };
   sessions: MonitorRow[];
   simulations: string;
@@ -213,6 +229,15 @@ export interface Approval {
   items: ApprovalItem[];
   /** 공개한 뒤 사례별 후보 수 */
   k_after: Record<string, number>;
+  /** 기준 아래로 내려가는 공개 (확인과 긴 사유를 받고 감사 기록에 따로 남김) */
+  high_risk?: boolean;
+}
+
+/** 승인 전에 보는: 고른 값을 함께 공개하면 사례별 후보 수 */
+export interface WhatIf {
+  kAfter: Record<string, number>;
+  lowest: number | null;
+  kReq: number;
 }
 
 /** 가리거나 넓힌 값 (값 자체는 없다). 승인 공개를 고를 때 쓴다. */
@@ -280,7 +305,9 @@ export interface MonitorDetail {
   source: string;
   source_label: string;
   arms: Record<ArmKey, ArmView>;
-  retrieval: { ref: string; patient: string | null; score: number }[];
+  retrieval: { ref: string; patient: string | null; score: number; tag?: string | null }[];
+  /** 지금 환자의 기호 (번호는 열람 뒤에만) */
+  patient_tag?: string | null;
   row: MonitorRow;
   revealed: boolean;
   live_arm: ArmKey;
@@ -364,6 +391,14 @@ export interface AuditEntry {
   reason?: string;
   note?: string | null;
   job?: string;
+  /** 다룬 정보주체: 지금 환자 기호, 사례(과거 환자)마다 기호 */
+  patient_tag?: string | null;
+  subjects?: SubjectTag[];
+  /** 공개 승인: 기준 아래로 내려가는 고위험 승인 · 공개 뒤 가장 적은 후보 수 */
+  high_risk?: boolean;
+  k_min?: number | null;
+  /** 규칙 걸기 실패: 까닭 */
+  why?: string;
   /** 메시지 기록만: 가리킨 사례 ('사례1') */
   case?: string | null;
   /** 운영 모드: 계정 번호 */

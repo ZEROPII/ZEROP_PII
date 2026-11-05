@@ -118,7 +118,9 @@ class ResetIn(BaseModel):
 
 
 class RevealIn(BaseModel):
+    """원문 열람: reason은 고른 사유(분류), note는 직접 쓴 한 줄 설명 (운영 모드에서는 꼭 써야 한다)."""
     reason: str = Field(..., min_length=2, max_length=200)
+    note: str | None = Field(None, max_length=300)
 
 
 class ReviewIn(BaseModel):
@@ -151,6 +153,11 @@ class ApproveIn(BaseModel):
     """세부 정보 요청 승인: 가린 값 id(/hidden의 id) 목록과 공개 사유."""
     items: list[str] = Field(..., min_length=1, max_length=50)
     reason: str = Field(..., min_length=5, max_length=300)
+    confirmLowK: bool = Field(False, description="함께 공개하면 후보가 기준 아래로 내려가는 것을 알고 승인한다 (고위험 승인)")
+
+
+class WhatIfIn(BaseModel):
+    items: list[str] = Field(..., min_length=1, max_length=50)
 
 
 class LoginIn(BaseModel):
@@ -446,9 +453,11 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
                 if asking.get(key) is st:
                     asking.pop(key)
         p = out["assistantMessage"]["protection"]
-        mon().log("clinic_question", d.current.session, user=user_of(request), actor="의료진", case=d.current.ref_of(case_id),
+        ref = d.current.ref_of(case_id)
+        mon().log("clinic_question", d.current.session, user=user_of(request), actor="의료진", case=ref,
                   turn=out["assistantMessage"].get("engineTurn"), release=p.get("releaseMode"), scope=body.scope,
-                  protected=sum(t["action"] != "allow" for t in p.get("transformations", [])))
+                  protected=sum(t["action"] != "allow" for t in p.get("transformations", [])),
+                  **mon().subjects(d.current.session, None if body.scope == "all" else [ref]))
         return redact.send_result(out)
 
     @r.get("/clinic/progress")
@@ -486,7 +495,7 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
         d = opened(request)
         tid = (body.trialId if body else None) or d.session.trial_id
         guard(lambda: d.start(tid))
-        mon().log("clinic_start", d.session, user=user_of(request), actor="의료진")
+        mon().log("clinic_start", d.session, user=user_of(request), actor="의료진", **mon().subjects(d.session, []))
         return dict(status="ok", workspaceId=d.workspace_id, trialId=tid)
 
     @r.get("/clinic/messages")
@@ -592,7 +601,8 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
             with launching_lock:
                 if launching.get(key) is st:
                     launching.pop(key)
-        mon().log("emr_launch", d.session, user=user_of(request), actor="의료진", purpose=body.purpose, **visit_note(d.session))
+        mon().log("emr_launch", d.session, user=user_of(request), actor="의료진", purpose=body.purpose, **visit_note(d.session),
+                  **mon().subjects(d.session, []))
         return dict(status="ok", workspaceId=d.workspace_id, trialId=tid, seconds=round(time.time() - st["started"], 1), calls=st["calls"])
 
     @r.post("/emr/prefetch")
@@ -615,7 +625,8 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
         visit = {"visit_dx": b.get("QUERY_MAIN_DX"), "visit_date": b.get("index_date")} if ev else {}
 
         def done(calls: int, ok: bool) -> None:
-            mon().log("emr_prefetch", None, user=user, actor="의료진", trial=tid, purpose=body.purpose, calls=calls, ok=ok, **visit)
+            mon().log("emr_prefetch", None, user=user, actor="의료진", trial=tid, purpose=body.purpose, calls=calls, ok=ok, **visit,
+                      patient_tag=mon().tag(body.fhirId))
 
         return dict(status=eng().prefetch(tid, launch_key(request), ev, on_done=done))
 
@@ -737,7 +748,11 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
 
     @r.post("/monitor/sessions/{sid}/reveal")
     def reveal(sid: str, body: RevealIn, request: Request) -> dict[str, Any]:
-        return mon().reveal(sess(sid), body.reason.strip(), user=user_of(request))
+        note = (body.note or "").strip() or None
+        if product is not None and (note is None or len(note) < 5):
+            # 운영 모드: 고른 사유만으로는 열지 않는다 (기본으로 골라진 사유를 누르기만 하는 일을 막는다, ADR-0030)
+            raise HTTPException(422, "원문을 보는 이유를 한 줄로 써 주세요 (5자 이상).")
+        return mon().reveal(sess(sid), body.reason.strip(), user=user_of(request), note=note)
 
     @r.post("/monitor/sessions/{sid}/review")
     def review(sid: str, body: ReviewIn, request: Request) -> dict[str, Any]:
@@ -762,9 +777,20 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
     @r.post("/monitor/sessions/{sid}/rules")
     def add_rule(sid: str, body: RuleIn, request: Request) -> dict[str, Any]:
         s = sess(sid)
+
+        def failed(why: str) -> None:            # 걸지 못한 시도도 감사 기록에 남긴다 (ADR-0030)
+            mon().log("add_rule_failed", s, user=user_of(request), case=body.case, attribute=body.attribute, note=body.note, why=why,
+                      **mon().subjects(s, [body.case]))
+
         if not getattr(s, "archived", False) and getattr(s, "source", None) == "clinic" and sid not in reg().current_ids():
-            raise HTTPException(409, "의료진이 이미 다른 환자를 열어 이 대화에는 다음 질문이 없습니다.")
-        guard(lambda: mon().add_rule(s, body.case, body.attribute, body.note, user=user_of(request)))
+            why = "의료진이 이미 다른 환자를 열어 이 대화에는 다음 질문이 없습니다."
+            failed(why)
+            raise HTTPException(409, why)
+        try:
+            guard(lambda: mon().add_rule(s, body.case, body.attribute, body.note, user=user_of(request)))
+        except HTTPException as exc:
+            failed(str(exc.detail))
+            raise
         return mon().detail(s)
 
     @r.delete("/monitor/sessions/{sid}/rules/{rule_id}")
@@ -788,9 +814,15 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
     def approve(sid: str, body: ApproveIn, request: Request) -> dict[str, Any]:
         s = sess(sid)
         conv = current_conv(sid) if not getattr(s, "archived", False) else None
-        ap = guard(lambda: mon().approve(s, conv, body.items, body.reason, user=user_of(request)))
+        ap = guard(lambda: mon().approve(s, conv, body.items, body.reason, user=user_of(request), confirm_low_k=body.confirmLowK))
         shown = dict(ap, items=[dict(x, value=None) for x in ap["items"]])          # 값은 열람 뒤 상세에서만
         return dict(approval=shown, detail=mon().detail(s))
+
+    @r.post("/monitor/sessions/{sid}/what-if")
+    def approve_what_if(sid: str, body: WhatIfIn) -> dict[str, Any]:
+        """고른 가린 값을 함께 공개하면 사례마다 후보 수 (승인 창이 보내기 전에 보인다). State는 바꾸지 않는다."""
+        s = sess(sid)
+        return guard(lambda: mon().what_if(s, body.items))
 
     # ── 검토 보조: 세부 정보 요청의 검토 초안 (assist.py). 보내는 일은 하지 않는다 ──
     @r.get("/monitor/sessions/{sid}/assist")

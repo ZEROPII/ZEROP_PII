@@ -335,8 +335,16 @@ def test_real_llm_question_is_defended_and_redacted(world):
     assert t1["change_notes"] == [dict(case="사례1", changes=[dict(attribute="시점", change="suppress")], k_if_raw=1, k_now=6)]
     assert d["arms"]["C0"]["turns"][-1]["released"] is None
     assert d["arms"]["C0"]["k_series"]["사례1"][-1] == [1, 1]                                    # 방어 없었다면 후보 1명
-    d2 = sec.post(f"/api/monitor/sessions/{w}/reveal", json=dict(reason="실제 LLM 답 확인")).json()
+    # 운영 모드 원문 열람: 고른 사유만으로는 열리지 않는다 (한 줄 설명 필수)
+    assert sec.post(f"/api/monitor/sessions/{w}/reveal", json=dict(reason="오탐 확인")).status_code == 422
+    d2 = sec.post(f"/api/monitor/sessions/{w}/reveal", json=dict(reason="오탐 확인", note="실제 LLM 답에서 가린 시기 확인")).json()
     assert "2004-06-16" in d2["arms"]["C1"]["turns"][-1]["raw"]
+    assert d2["patient_tag"].startswith("P-") and all(r["tag"].startswith("P-") and r["patient"] for r in d2["retrieval"])
+    rv_log = next(a for a in sec.get("/api/monitor/audit").json() if a["action"] == "reveal")
+    assert rv_log["note"] == "실제 LLM 답에서 가린 시기 확인" and rv_log["patient_tag"] == d2["patient_tag"]
+    assert [x["tag"] for x in rv_log["subjects"]] == [r["tag"] for r in d2["retrieval"]]          # 열람한 과거 환자 모두 (기호)
+    assert not any(r["patient"] in json.dumps(rv_log, ensure_ascii=False) for r in d2["retrieval"])   # 번호는 감사 기록에 그대로 두지 않는다
+    assert d["patient_tag"] == d2["patient_tag"] and d["patient"] is None                          # 열람 전에도 기호는 보인다
     row = next(x for x in sec.get("/api/monitor/overview").json()["sessions"] if x["id"] == w)
     assert row["owner"] == "김서연" and row["llm_mode"] == "live" and row["status"] == "danger" and row["last_question"] == Q_DRUG
     # 원 응답이 든 턴 기록은 DB에만 (C1S는 뒤에서 계산한 뒤 저장)
@@ -533,19 +541,30 @@ def test_review_rules_and_approval_change_the_conversation(world):
     assert "value" not in item and "raw_value" not in json.dumps(hidden)
     assert sec.post(f"/api/monitor/sessions/{w}/approve", json=dict(items=[item["id"]], reason="짧음")).status_code == 422
     assert sec.post(f"/api/monitor/sessions/{w}/messages", json=dict(kind="release", text="몰래 보내는 값 2004-06-16")).status_code == 422
-    r = sec.post(f"/api/monitor/sessions/{w}/approve", json=dict(items=[item["id"]], reason="처방 시작 시기가 약 조정 판단에 필요함"))
+    # 함께 공개하면 후보가 기준 아래(1명)로 내려간다: 고위험 확인 없이는 막고, 확인해도 사유가 짧으면 막는다 (2인 확인 대신)
+    wi = sec.post(f"/api/monitor/sessions/{w}/what-if", json=dict(items=[item["id"]])).json()
+    assert wi["kAfter"] == {"사례1": 1} and wi["lowest"] == 1 and wi["kReq"] == 5
+    low = sec.post(f"/api/monitor/sessions/{w}/approve", json=dict(items=[item["id"]], reason="처방 시작 시기가 약 조정 판단에 필요함"))
+    assert low.status_code == 422 and "1명까지" in low.json()["detail"]
+    assert sec.post(f"/api/monitor/sessions/{w}/approve", json=dict(items=[item["id"]], reason="약 조정에 필요함", confirmLowK=True)).status_code == 422
+    r = sec.post(f"/api/monitor/sessions/{w}/approve", json=dict(items=[item["id"]], reason="처방 시작 시기가 약 조정 판단에 필요함", confirmLowK=True))
     assert r.status_code == 200, r.text
     ap = r.json()["approval"]
-    assert ap["k_after"] == {"사례1": 1} and ap["items"][0]["value"] is None   # 승인 응답에도 값은 없다 (열람 뒤 상세에서만)
+    assert ap["k_after"] == {"사례1": 1} and ap["items"][0]["value"] is None and ap["high_risk"]   # 승인 응답에도 값은 없다 (열람 뒤 상세에서만)
     d = r.json()["detail"]
     assert d["approvals"][0]["items"][0]["value"] is None                    # 관제 상세는 열람 전에 값을 지운다
-    assert d["row"]["k_now"] == 1 and "사례1" in d["row"]["violated"]
+    # 승인으로 기준 아래가 된 사례는 경보(violated)가 아니라 '승인 공개'로 따로 센다
+    assert d["row"]["k_now"] == 1 and d["row"]["violated"] == [] and d["row"]["approved_low"] == ["사례1"]
+    kpi = sec.get("/api/monitor/overview").json()["kpi"]
+    assert kpi["approved_low"] >= 1
+    ap_log = next(a for a in sec.get("/api/monitor/audit").json() if a["action"] == "approve_release")
+    assert ap_log["high_risk"] and ap_log["k_min"] == 1 and ap_log["subjects"][0]["case"] == "사례1" and ap_log["subjects"][0]["tag"]
     assert "2004-06-16" not in json.dumps(d, ensure_ascii=False)
     rel = [m for m in d["messages"] if m["kind"] == "release"]
     assert rel and rel[0]["masked"] and "2004-06-16" not in rel[0]["text"]
     th = sec.get(f"/api/monitor/sessions/{w}/messages").json()               # 메시지 목록은 열람과 관계없이 늘 지운다
     assert "2004-06-16" not in json.dumps(th, ensure_ascii=False) and th["messages"][-1]["masked"]
-    rv = sec.post(f"/api/monitor/sessions/{w}/reveal", json=dict(reason="공개 승인한 값 확인")).json()
+    rv = sec.post(f"/api/monitor/sessions/{w}/reveal", json=dict(reason="의료진 문의 대응", note="공개 승인한 값 확인")).json()
     assert rv["approvals"][0]["items"][0]["value"] == "2004-06-16"
     assert any(m["kind"] == "release" and "2004-06-16" in m["text"] and not m.get("masked") for m in rv["messages"])
     assert sec.post(f"/api/monitor/sessions/{w}/approve", json=dict(items=[item["id"]], reason="같은 값을 다시 공개")).status_code == 400
@@ -561,6 +580,8 @@ def test_review_rules_and_approval_change_the_conversation(world):
     # 규칙: 사례1 약은 늘 가림 → 다음 답에서 약이 빠진다 (이미 나간 답은 그대로)
     bad = sec.post(f"/api/monitor/sessions/{w}/rules", json=dict(case="사례9", attribute="MED"))
     assert bad.status_code == 400
+    fail = next(a for a in sec.get("/api/monitor/audit").json() if a["action"] == "add_rule_failed")       # 걸지 못한 시도도 남긴다
+    assert fail["case"] == "사례9" and "사례" in fail["why"]
     d = sec.post(f"/api/monitor/sessions/{w}/rules", json=dict(case="사례1", attribute="MED", note="약 이름 반복 질문")).json()
     rule = d["rules"][0]
     assert rule["attribute"] == "MED" and rule["from_turn"] == 2 and rule["by"].startswith("이하늘")
@@ -596,6 +617,8 @@ def test_review_only_reaches_the_current_conversation(world):
     r = sec.post(f"/api/monitor/sessions/{w1}/approve", json=dict(items=[item["id"]], reason="지난 대화의 값 공개 시도"))
     assert r.status_code == 409 and "다른 환자" in r.json()["detail"]
     assert sec.post(f"/api/monitor/sessions/{w1}/rules", json=dict(case="사례1", attribute="MED")).status_code == 409
+    fail = next(a for a in sec.get("/api/monitor/audit").json() if a["action"] == "add_rule_failed")
+    assert fail["session"] == w1 and "다른 환자" in fail["why"] and fail["subjects"][0]["case"] == "사례1"
     assert sec.get(f"/api/monitor/sessions/{w1}").json()["approvals"] == []
 
 
@@ -1738,3 +1761,61 @@ def test_prefetch_keeps_the_last_pick_while_one_is_running(world):
     sec = login(world, "privacy1")
     dx = [a.get("visit_dx") for a in sec.get("/api/monitor/audit").json() if a["action"] == "emr_prefetch" and a["actor"].startswith("이어서")]
     assert others[1]["label"] in dx and others[0]["label"] not in dx       # 사이에 고른 것은 버렸다
+
+
+def test_monitor_flags_repeat_subjects_focuses_requests_and_ignores_double_sends(world):
+    """
+    관제: 같은 과거 환자를 다른 대화 · 다른 의료진이 물으면 표시한다(판정은 그대로). 답을 기다리는 요청이 있으면 그 사례부터 보인다.
+    같은 답장 · 확인 요청을 바로 두 번 보내면 한 번만 간다. 의료진 질문 감사 기록에 지금 환자와 과거 환자의 기호가 남는다.
+    """
+    add_user(world["store"], "doc_r1", "반복일", "clinician", "내과", PW)
+    add_user(world["store"], "doc_r2", "반복이", "clinician", "내과", PW)
+    d1, d2 = login(world, "doc_r1"), login(world, "doc_r2")
+    _, s1 = launch(d1, "T0014")
+    d1.post("/api/cases/case-1/messages", json=dict(sessionId=s1, question=Q_DRUG, clientMessageId="rp1"))
+    _, s2 = launch(d2, "T0014")
+    d2.post("/api/cases/case-1/messages", json=dict(sessionId=s2, question=Q_DRUG, clientMessageId="rp2"))
+    sec = login(world, "privacy1")
+    w1, w2 = current_conv(sec, "반복일"), current_conv(sec, "반복이")
+    rows = {r["id"]: r for r in sec.get("/api/monitor/overview").json()["sessions"]}
+    for w in (w1, w2):
+        rep = next(x for x in rows[w]["repeat_subjects"] if x["case"] == "사례1")
+        assert rep["conversations"] >= 1 and rep["clinicians"] >= 2 and rep["tag"].startswith("P-")
+        assert rows[w]["flag"] == "같은 과거 환자 다른 대화에서도 조회" and rows[w]["needs_review"]
+    assert sec.get(f"/api/monitor/sessions/{w1}").json()["row"]["repeat_subjects"]
+    q = next(a for a in sec.get("/api/monitor/audit").json() if a["action"] == "clinic_question" and a["session"] == w2)
+    assert q["patient_tag"].startswith("P-") and [x["case"] for x in q["subjects"]] == ["사례1"]
+    assert q["subjects"][0]["tag"] == rows[w2]["repeat_subjects"][0]["tag"]
+
+    # 요청이 온 사례부터 보인다
+    d2.post("/api/clinic/messages", json=dict(kind="access_request", text="사례 2의 처방 시기가 필요합니다.", caseId="case-2"))
+    row2 = next(r for r in sec.get("/api/monitor/overview").json()["sessions"] if r["id"] == w2)
+    assert row2["pending_request"] and row2["focus_case"] == "사례2" and row2["request_case"] == "사례2"
+    # 같은 답장을 바로 두 번: 한 번만 간다
+    n0 = len(sec.get(f"/api/monitor/sessions/{w2}/messages").json()["messages"])
+    for _ in range(2):
+        assert sec.post(f"/api/monitor/sessions/{w2}/messages", json=dict(kind="reply", text="확인하고 있습니다.", case="사례2")).status_code == 200
+    assert len(sec.get(f"/api/monitor/sessions/{w2}/messages").json()["messages"]) == n0 + 1
+    # 의료진에게 확인 요청을 바로 두 번: 메시지 · 감사 기록 모두 한 번
+    a0 = sum(a["action"] == "ask_clinician" for a in sec.get("/api/monitor/audit").json())
+    for _ in range(2):
+        assert sec.post(f"/api/monitor/sessions/{w1}/review", json=dict(action="ask_clinician", note="진료에 필요한 내용이었는지 알려 주세요")).status_code == 200
+    th = sec.get(f"/api/monitor/sessions/{w1}/messages").json()["messages"]
+    assert sum(m["kind"] == "check_request" for m in th) == 1
+    assert sum(a["action"] == "ask_clinician" for a in sec.get("/api/monitor/audit").json()) == a0 + 1
+    # 두 번 누른 요청이 동시에 와도 한 번만 (같은 메시지 검사와 덧붙이기를 한 번에 한다)
+    sec2 = login(world, "privacy1")
+    n1 = len(sec.get(f"/api/monitor/sessions/{w2}/messages").json()["messages"])
+    gate, codes = threading.Barrier(2), []
+
+    def send(c: TestClient) -> None:
+        gate.wait()
+        codes.append(c.post(f"/api/monitor/sessions/{w2}/messages", json=dict(kind="reply", text="동시에 두 번 누른 답장", case="사례2")).status_code)
+
+    ts = [threading.Thread(target=send, args=(c,)) for c in (sec, sec2)]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join(30)
+    assert codes == [200, 200]
+    assert len(sec.get(f"/api/monitor/sessions/{w2}/messages").json()["messages"]) == n1 + 1
