@@ -66,6 +66,8 @@ export interface PrivacyTransformation {
   rule?: boolean;
   /** 다시 확인을 통과하지 못해 이 사례 내용을 답에서 뺐다 (공개 방식 CASE_DROPPED) */
   dropped?: boolean;
+  /** 위험 때문이 아니라 정해진 공개 단위로 바꾼 값 (나이 5세 구간 · 날짜 월, ADR-0024) */
+  floor?: boolean;
 }
 
 /** 응답 본문 조각. 보호 조치가 걸린 조각은 transformationId로 메타데이터를 가리킨다. */
@@ -82,7 +84,7 @@ export interface ProtectionResult {
   /** 의료진 화면 API에서는 null */
   kBefore: number | null;
   kAfter: number | null;
-  /** 실제 백엔드만: 공개 방식 (RAW · REWRITTEN · REWRITTEN_FALLBACK · CASE_DROPPED · REFUSAL · REFUSAL_EXTRACTION_FAILED) */
+  /** 실제 백엔드만: 공개 방식 (RAW · ROUNDED · REWRITTEN · REWRITTEN_FALLBACK · CASE_DROPPED · REFUSAL · REFUSAL_EXTRACTION_FAILED) */
   releaseMode?: string;
   /** 실제 백엔드만: 원 응답 QI 추출 성공 여부. false면 이번 답변의 공개가 k에 반영되지 않았을 수 있다. */
   extractionOk?: boolean;
@@ -319,24 +321,39 @@ export interface WorklistPurpose {
   purposeLabel: string;
   /** 이 진료 목적의 진료일 (합성 데이터의 기준일) */
   visitDate: string;
-  ageSex?: string;
   mainDx?: string;
   item?: string;
 }
 
+/** EMR 외래 목록 한 줄. 생년 · 거주 지역은 넣지 않는다 (환자를 고르는 데 필요 없다). */
 export interface WorklistPatient {
   /** FHIR Patient.id */
   fhirId: string;
   /** 화면 표시용 앞 8자리 */
   identifier: string;
   sex: 'male' | 'female' | 'unknown';
-  birthYear: number | null;
-  region: string;
+  /** 가장 최근 진료 목적의 진료일 기준 연령대 ('20대') */
+  ageBand: string | null;
   conditions: string[];
   events: number;
   purposes: WorklistPurpose[];
   featured: boolean;
-  lastVisit: string;
+  /** ACTIVE 진료 중: 끝나지 않은 진단 · 관리 계획이 있고 최근 기록이 있음 · RESOLVED 완치: 모두 끝남 ·
+   *  DORMANT 장기 미내원: 끝나지 않은 것이 있지만 마지막 기록이 3년보다 오래됨 */
+  status: 'ACTIVE' | 'RESOLVED' | 'DORMANT';
+  statusLabel: string;
+  openItems: number;
+  /** 가상 EMR에 남은 마지막 기록일 */
+  lastRecord: string | null;
+}
+
+/** 진료 지원 AI를 여는 동안의 진행 (GET /api/emr/launch/progress) */
+export interface LaunchProgress {
+  active: boolean;
+  label?: string;
+  /** 지금까지 보낸 실제 LLM 호출 수 */
+  calls?: number;
+  elapsed?: number;
 }
 
 /** 이 의료진의 대화 목록 (지금 대화 · 지난 대화) */

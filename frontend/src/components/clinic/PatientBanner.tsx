@@ -78,7 +78,7 @@ function DemoPatientSwitcher() {
             onChange={(e) => setPick(e.target.value)}
             className="h-8 w-full rounded-cell border border-line-input bg-surface px-2 text-xs text-ink"
           >
-            <optgroup label="시연용">
+            <optgroup label="먼저 볼 환자">
               {featured.map((o) => (
                 <option key={o.trialId} value={o.trialId}>
                   {o.trialId} {o.ageSex} {o.mainDx}

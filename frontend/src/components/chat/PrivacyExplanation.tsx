@@ -5,6 +5,7 @@ import { StatusIcon } from '../common/StatusChip';
 
 const MODE_KO: Record<string, string> = {
   RAW: '그대로 보냄',
+  ROUNDED: '나이 · 날짜를 공개 단위로만 바꾼 답',
   REWRITTEN: '재작성기가 고친 답',
   REWRITTEN_FALLBACK: '값만 글자 그대로 바꾼 답',
   CASE_DROPPED: '통과하지 못한 사례를 뺀 답',
@@ -115,6 +116,7 @@ export function PrivacyExplanation({ protection }: { protection: ProtectionResul
                     <ActionBadge action={t.action} />
                     {t.rule && <span className="text-ink-3">규칙</span>}
                     {t.dropped && <span className="text-ink-3">사례째로 뺌</span>}
+                    {t.floor && <span className="text-ink-3" title="후보 수와 관계없이 나이는 5세 구간, 날짜는 월 단위로만 낸다">공개 단위</span>}
                   </span>
                 </td>
                 <td className="num border-b border-line/70 py-1.5 pl-2 text-right">

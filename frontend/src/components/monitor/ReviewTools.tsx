@@ -252,7 +252,7 @@ export function ApprovePanel({ d, caseRef, onCancel, onDetail }: { d: MonitorDet
       const ks = Object.entries(res.approval.k_after)
         .map(([ref, k]) => `${caseLabel(ref)} 후보 ${k}명`)
         .join(', ');
-      toast(`값 ${res.approval.items.length}개를 공개했습니다 (${ks}). 의료진 화면 보호 담당자 메시지에 도착합니다.`);
+      toast(`값 ${res.approval.items.length}개를 공개했습니다 (${ks}). 의료진 화면의 보호 담당자 창에 도착합니다.`);
       onCancel();
     } catch (e) {
       toast(e instanceof Error ? e.message : '공개하지 못했습니다.');

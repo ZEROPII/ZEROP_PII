@@ -41,7 +41,7 @@ from medical.session import ARMS, Context, extract, make_prefix
 from medical.simulate import SUPPRESSED, OracleRoleLLM, plan_all
 from medical.tracking import Case, known_cases_json, view_of
 from medical.validate import validate_case
-from webdemo.backend.live import ORACLE_LABEL, LiveLLM, Turn0LLM, background_calls
+from webdemo.backend.live import ORACLE_LABEL, AnswerStyleLLM, LiveLLM, Turn0Cache, Turn0LLM, background_calls
 from webdemo.backend.review import RELEASE_VERSION, RuledArmRun, decision_of, hidden_items
 
 PROFILES = ("staged", "full")
@@ -126,6 +126,7 @@ class Engine:
         self.live_rule_extract = live_rule_extract
         live_cfg = replace(base.cfg, rule_extract=True) if live_rule_extract else base.cfg
         self.live_ctx: Context | None = replace(base, llm=self.live_llm, cfg=live_cfg) if self.live_llm is not None else None
+        self.turn0_cache = Turn0Cache()                   # 첫 답 요청 · 답 (대화 사이에 나눠 씀, 메모리)
         self.live_label = live_label or (ORACLE_LABEL if live_llm is None else "LLM")
         self.seed_by_id = {s["seed_id"]: s for s in base.seeds}
         self.plan = plan_all(None, self.cfg.seed)(self.data, self.split, self.cfg)     # POC와 같은 trial 번호 (T0001…)
@@ -159,7 +160,7 @@ class Engine:
 
     # ── 세션 ──
     def new_session(self, trial_id: str, profile: str = "staged", fuzzer: str = "uniform", *, source: str = "manual",
-                    budget: int | None = None, llm_mode: str = "oracle") -> "Session":
+                    budget: int | None = None, llm_mode: str = "oracle", on_call: Callable[[str, int], None] | None = None) -> "Session":
         if trial_id not in self.trial_of:
             raise DemoError(f"없는 trial입니다: {trial_id}")
         if profile not in PROFILES or fuzzer not in FUZZERS:
@@ -168,7 +169,7 @@ class Engine:
             raise DemoError("이 서버에는 의료진 대화용 LLM이 설정되어 있지 않습니다.")
         with self.lock:
             sid = f"S{next(self._ids):04d}"
-            s = Session(self, sid, trial_id, profile, fuzzer, source=source, budget=budget, llm_mode=llm_mode)
+            s = Session(self, sid, trial_id, profile, fuzzer, source=source, budget=budget, llm_mode=llm_mode, on_call=on_call)
             self.sessions[sid] = s
             self._trim_usage()
             return s
@@ -259,7 +260,7 @@ class Engine:
 
 class Session:
     def __init__(self, eng: Engine, sid: str, trial_id: str, profile: str, fuzzer: str, *, source: str = "manual",
-                 budget: int | None = None, llm_mode: str = "oracle") -> None:
+                 budget: int | None = None, llm_mode: str = "oracle", on_call: Callable[[str, int], None] | None = None) -> None:
         self.eng, self.id, self.trial_id, self.profile, self.fuzzer = eng, sid, trial_id, profile, fuzzer
         self.ctx = eng.ctx[profile]
         self.cfg = self.ctx.cfg
@@ -273,7 +274,10 @@ class Session:
         self.rules: list[dict[str, Any]] = []               # 보안 담당자 규칙: 이 대화에서 사례 · 단서 종류는 늘 가림 (review.py, C1에만)
         self.approvals: list[dict[str, Any]] = []           # 보안 담당자가 승인해 공개한 값 (review.py)
         # 실제 LLM 대화는 첫 답(턴 0, 사례 검색)부터 실제 LLM이 쓰고 방어 게이트를 거친다. 검색 질문 문장만 결정적 응답기가 만든다.
-        ctx0 = replace(eng.live_ctx, llm=Turn0LLM(eng.live_ctx.llm, self.ctx.llm)) if llm_mode == "live" else self.ctx
+        # 대상 AI에는 진료 화면용 답 형식을 붙이고(AnswerStyleLLM), 첫 답은 같은 환자 · 목적의 다른 대화와 나눠 쓴다(Turn0Cache).
+        live_ctx = replace(eng.live_ctx, llm=AnswerStyleLLM(eng.live_ctx.llm)) if llm_mode == "live" else None
+        ctx0 = (replace(live_ctx, llm=Turn0LLM(live_ctx.llm, self.ctx.llm, cache=eng.turn0_cache, on_call=on_call))
+                if live_ctx is not None else self.ctx)
         p = self.prefix = make_prefix(ctx0, trial_id, pid, qt, "DOCTOR")
         self.logs: dict[str, list[dict[str, Any]]] = {a: [] for a in ARMS}
         self.runs = {a: RuledArmRun(ctx0, p, a, self._logger(a), lambda a=a: self.rules_for(a), live=llm_mode == "live") for a in ARMS}
@@ -290,9 +294,12 @@ class Session:
         self.owner: dict[str, Any] | None = None             # 의료진 대화: 계정 (user_id, username, label)
         self.launch: dict[str, Any] | None = None            # EMR에서 연 대화: {fhirId, purpose}
         self.compare_pending = 0                             # 뒤에서 계산할 비교 갈래 턴 수 (실제 LLM 대화)
-        if llm_mode == "live":
+        if live_ctx is not None:
             for r in self.runs.values():
-                r.ctx = eng.live_ctx
+                r.ctx = live_ctx
+            first = self.logs["C1"][0] if self.logs["C1"] else None
+            if first is None or first["release_mode"].startswith("REFUSAL"):
+                ctx0.llm.forget()                            # 거절된 첫 답은 나눠 쓰지 않는다 (다시 열면 새로 부른다)
         self.turn = 0
         self.rng = random.Random(f"{self.cfg.seed}-{trial_id}-follow")          # POC run()과 같은 난수열
         self.used: set[str] = set()

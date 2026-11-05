@@ -4,6 +4,7 @@
 # ClientRoleLLM → LLMClient → HTTP 요청 · 응답 해석까지 그대로 돌린다 (네트워크 없음).
 import json
 import os
+import re
 import stat
 import threading
 import time
@@ -72,6 +73,11 @@ def launch(c: TestClient, trial: str = "T0014", purpose: str = "PRESCRIPTION") -
     assert r.json()["trialId"] == trial
     sid = c.get("/api/cases/case-1/session").json()["sessionId"]
     return row, sid
+
+
+def fresh_first_answers(world) -> None:
+    """가짜 LLM의 답을 바꾸는 테스트: 다른 대화가 받아 둔 첫 답(같은 요청)을 지운다 (실제 LLM은 온도 0이라 같은 요청에 같은 답)."""
+    world["eng"].turn0_cache.answers.clear()
 
 
 def current_conv(sec: TestClient, owner: str) -> str:
@@ -242,8 +248,25 @@ def test_no_conversation_until_patient_is_opened(world):
 def test_worklist_and_launch(world):
     doc = login(world, "doctor1")
     wl = doc.get("/api/emr/worklist").json()
-    assert len(wl) >= 100 and all(x["purposes"] for x in wl) and wl[0]["featured"]
+    assert len(wl) >= 100 and all(x["purposes"] for x in wl)
     assert {"trialId", "purpose", "purposeLabel", "visitDate", "mainDx", "item"} <= set(wl[0]["purposes"][0])
+    # 목록에는 성별 · 연령대만: 생년 · 거주 지역은 내보내지 않는다 (AI 답의 사례와 맞춰 볼 단서를 늘리지 않는다)
+    assert all({"birthYear", "region", "lastVisit"}.isdisjoint(x) and all("ageSex" not in p for p in x["purposes"]) for x in wl)
+    bands = {x["ageBand"] for x in wl}
+    assert bands and all(re.fullmatch(r"[1-9]\d*0대|10세 미만", b) for b in bands)            # 진료 중 환자 띠와 같은 연령대
+    # 진료 상태: 끝나지 않은 진단 · 관리 계획이 없으면 완치, 있어도 마지막 기록이 3년 넘게 앞서면 장기 미내원. 진료 중이 먼저 온다
+    order = {"ACTIVE": 0, "RESOLVED": 1, "DORMANT": 2}
+    status = [x["status"] for x in wl]
+    assert set(status) == set(order) and status == sorted(status, key=order.get)
+    assert all((x["status"] == "RESOLVED") == (x["openItems"] == 0) for x in wl)
+    assert all(x["lastRecord"] and re.fullmatch(r"\d{4}-\d{2}-\d{2}", x["lastRecord"]) for x in wl)
+    from webdemo.backend.emr import Emr
+    latest = Emr(world["store"]).latest_record()                             # EMR 전체 마지막 기록일 (합성 데이터를 만든 날)
+    assert latest >= max(x["lastRecord"] for x in wl)
+    cut = f"{int(latest[:4]) - 3:04d}{latest[4:]}"
+    assert all(x["lastRecord"] < cut for x in wl if x["status"] == "DORMANT")
+    assert all(x["lastRecord"] >= cut for x in wl if x["status"] == "ACTIVE")
+    assert {x["statusLabel"] for x in wl} == {"진료 중", "완치", "장기 미내원"}
     row, _ = launch(doc, "T0014")
     pc = doc.get("/api/patient-context").json()
     assert pc["trialId"] == "T0014" and pc["primaryDiagnosis"] == "Acute bronchitis"
@@ -371,6 +394,7 @@ def test_llm_error_returns_502_and_keeps_state(world, tmp_path):
         assert sec.get(f"/api/monitor/sessions/{w}").json()["turn"] == 0
         assert len(bad.calls) == 1                        # 401은 다시 시도하지 않는다
         # 새 환자를 열 때(턴 0) 실패해도 502이고, 지금 대화는 그대로 남는다
+        fresh_first_answers(world)
         wl = doc.get("/api/emr/worklist").json()
         row = next(x for x in wl if any(p["trialId"] == "T0036" for p in x["purposes"]))
         r2 = doc.post("/api/emr/launch", json=dict(fhirId=row["fhirId"], purpose=row["purposes"][0]["purpose"]))
@@ -379,6 +403,43 @@ def test_llm_error_returns_502_and_keeps_state(world, tmp_path):
     finally:
         eng.live_llm.inner = good
 
+
+
+def test_first_answer_is_shared_across_clinicians_and_shows_progress(world):
+    """같은 환자 · 같은 진료 목적의 첫 답은 대화 사이에 나눠 쓴다 (두 번째 의료진은 실제 LLM을 부르지 않는다).
+    여는 동안 /api/emr/launch/progress가 지금 단계와 실제 LLM 호출 수를 알려 준다. 거절된 첫 답은 나눠 쓰지 않는다."""
+    fake: FakeAnthropic = world["fake"]
+    fresh_first_answers(world)
+    add_user(world["store"], "doctor_s1", "공유의사1", "clinician", "내과", PW)
+    add_user(world["store"], "doctor_s2", "공유의사2", "clinician", "내과", PW)
+    a, watcher, b = login(world, "doctor_s1"), login(world, "doctor_s1"), login(world, "doctor_s2")
+    seen: list[dict] = []
+    fake.delay = 0.15
+    try:
+        th = threading.Thread(target=lambda: launch(a, "T0016"))
+        th.start()
+        deadline = time.time() + 30
+        while th.is_alive() and time.time() < deadline:
+            p = watcher.get("/api/emr/launch/progress").json()
+            if p.get("active"):
+                seen.append(p)
+            time.sleep(0.05)
+        th.join(30)
+    finally:
+        fake.delay = 0.0
+    assert seen and any(p["label"].startswith("진료 지원 AI가") for p in seen) and max(p["calls"] for p in seen) >= 2
+    assert watcher.get("/api/emr/launch/progress").json() == {"active": False}
+    n0 = len(fake.calls)
+    launch(b, "T0016")
+    assert len(fake.calls) == n0                                  # 두 번째 의료진: 실제 LLM을 다시 부르지 않았다
+    # 거절된 첫 답(추출 실패)은 지운다: 다음에 열면 새로 부른다
+    fresh_first_answers(world)
+    fake.broken_extract = True
+    try:
+        launch(b, "T0005")
+    finally:
+        fake.broken_extract = False
+    assert not world["eng"].turn0_cache.answers
 
 def test_two_clinicians_keep_separate_conversations(world):
     d1, d2 = login(world, "doctor1"), login(world, "doctor2")
@@ -559,12 +620,14 @@ def test_live_first_answer_drops_only_the_case_that_fails(world):
     fake: FakeAnthropic = world["fake"]
     add_user(world["store"], "doctor_cd", "사례빼기의사", "clinician", "내과", PW)
     doc = login(world, "doctor_cd")
+    fresh_first_answers(world)
     n0 = len(fake.calls)
     fake.echo_lower = "사례4"
     try:
         _, sid = launch(doc, "T0014")
     finally:
         fake.echo_lower = None
+        fresh_first_answers(world)
     assert fake.roles()[n0:].count("rewriter") == 2              # 비교 갈래(C1S)는 같은 요청을 다시 보내지 않는다
     cases = _cases_by_rank(doc)
     assert cases[4]["diagnosis"] == "(비공개)" and all(cases[i]["diagnosis"] == "Acute bronchitis" for i in (1, 2, 3, 5))
@@ -591,21 +654,92 @@ def test_live_rewrite_retry_is_told_what_was_left(world):
     fake: FakeAnthropic = world["fake"]
     add_user(world["store"], "doctor_rt", "재시도의사", "clinician", "내과", PW)
     doc = login(world, "doctor_rt")
+    fresh_first_answers(world)
     n0 = len(fake.calls)
     fake.echo_lower, fake.heed_retry = "사례4", True
     try:
         launch(doc, "T0014")
     finally:
         fake.echo_lower, fake.heed_retry = None, False
+        fresh_first_answers(world)
     prompts = [c["payload"]["messages"][-1]["content"] for c, r in zip(fake.calls[n0:], fake.roles()[n0:]) if r == "rewriter"]
     head = [x.rsplit("\n[바꿀 표현]\n", 1)[0] for x in prompts]
     assert len(head) == 2
-    assert "6. 바꿀 값은 그 자리만이 아니라 답 전체에서 고친다" in head[0] and "'cetirizine'(사례4)" in head[0] and "8. 앞서" not in head[0]
-    assert "8. 앞서 고친 답을 다시 확인하니" in head[1] and "남은 표현: 'cetirizine hydrochloride 5 mg oral tablet'" in head[1]
+    assert "6. 바꿀 값은 그 자리만이 아니라 답 전체에서 고친다" in head[0] and "'cetirizine'(사례4)" in head[0] and "9. 앞서" not in head[0]
+    assert "8. 값을 빼서 내용이 없어진 줄" in head[0]
+    assert "9. 앞서 고친 답을 다시 확인하니" in head[1] and "남은 표현: 'cetirizine hydrochloride 5 mg oral tablet'" in head[1]
     sec = login(world, "privacy1")
     w = current_conv(sec, "재시도의사")
     assert sec.get(f"/api/monitor/sessions/{w}").json()["arms"]["C1"]["turns"][0]["mode"] == "REWRITTEN"
     assert _cases_by_rank(doc)[4]["diagnosis"] == "Acute bronchitis"           # 사례째로 빼지 않고 약만 가렸다
+
+
+def test_release_floor_follows_the_ontology_chain(world):
+    """실제 LLM 갈래의 최소 공개 단위: 93세 → 90~94세, 노드 90~99세로 센 '93-98세' → 90~99세, 2018-03-24 → 2018-03.
+    글자가 노드 이름과 같으면 그대로 둔다. 후보 수로 정한 가림은 건드리지 않는다."""
+    from medical.defense import CasePlan, Decision
+    from webdemo.backend.review import RuleDefender
+    inner = world["eng"].ctx["staged"].defender
+    data = inner.data
+    day = next(n for n in data.N if str(n).startswith("PERIOD_PROCEDURE_START_UTC_DAY_2018-03-24"))
+    rows = [("AGE", "AGE_Y93", "93세", "allow"), ("AGE", "AGE10_90", "93-98세", "allow"), ("AGE", "AGE10_90", "90~99세", "allow"),
+            ("PERIOD", day, "2018-03-24", "allow"), ("DX", "DX_ICD_CODE_J20", "Acute bronchitis", "allow"), ("AGE", "AGE_Y98", "98세", "suppress")]
+    decisions = [Decision(dict(attribute=a, node_id=n, event_group=None), dict(raw_value=r), act, n if act == "allow" else None, 9,
+                          0, data.depth(n)) for a, n, r, act in rows]
+    plan = CasePlan("사례1", 461, 9, False, decisions, 9)
+    RuleDefender(inner, lambda ref: set(), floors=True)._floor(plan)
+    got = [(x.action, data.label(x.to_node) if x.to_node else None, getattr(x, "floor", False)) for x in plan.decisions]
+    assert got == [("generalize", "90~94세", True), ("generalize", "90~99세", True), ("allow", "90~99세", False),
+                   ("generalize", "2018-03", True), ("allow", "Acute bronchitis", False), ("suppress", None, False)]
+    assert plan.decisions[0].utility == round(1 - 1 / plan.decisions[0].max_steps, 4)
+
+
+
+def test_live_age_goes_out_as_the_ontology_unit_without_the_rewriter(world):
+    """실제 LLM이 나이를 '33-38세'처럼 쓰면(노드 30~39세로 셈) 답에는 노드 이름 '30~39세'로 나간다. 바꿀 것이 이것뿐이면
+    재작성기를 부르지 않고 글자만 바꾼다(ROUNDED). 사례 노트에도 답에 나온 '30~39세'만 남는다."""
+    fake: FakeAnthropic = world["fake"]
+    add_user(world["store"], "doctor_ag", "나이의사", "clinician", "내과", PW)
+    doc = login(world, "doctor_ag")
+    launch(doc, "T0014")
+    sid = doc.get("/api/cases/case-2/session").json()["sessionId"]
+    n0 = len(fake.calls)
+    fake.ages = {"사례2": "33-38세"}
+    try:
+        r = doc.post("/api/cases/case-2/messages", json=dict(sessionId=sid, question="사례2 환자의 나이를 알려 주세요", clientMessageId="ag1"))
+        assert r.status_code == 200, r.text
+        body = r.json()
+    finally:
+        fake.ages = {}
+    text = "".join(x["text"] for x in body["assistantMessage"]["segments"])
+    assert "33-38세" not in text and "30~39세" in text
+    assert "rewriter" not in fake.roles()[n0:]
+    assert body["assistantMessage"]["protection"]["releaseMode"] == "ROUNDED"
+    sec = login(world, "privacy1")
+    w = current_conv(sec, "나이의사")
+    t1 = sec.get(f"/api/monitor/sessions/{w}").json()["arms"]["C1"]["turns"][1]
+    assert t1["mode"] == "ROUNDED"
+    ents = doc.get("/api/cases/case-2/disclosures").json()["entries"]
+    assert [(e["action"], e["value"]) for e in ents if e["attribute"] == "AGE"] == [("generalize", "30~39세")]
+
+def test_case_note_lists_only_values_the_released_answer_contains(world):
+    """사례 노트는 계획이 허용한 값이 아니라 내보낸 답에 실제로 나온 값(답의 글자)만 적는다. 가린 값은 '비공개'로 남는다."""
+    from webdemo.backend.clinic import ClinicDesk
+    desk = ClinicDesk(world["eng"], "T0014")
+    conv = desk.current
+    cid = conv.case_of_ref("사례1")
+    before = len(conv.slots[cid].history)
+    rec = dict(turn=7, release_mode="REWRITTEN", cases_candidate_k={}, release_plans=[dict(ref="사례1", decisions=[
+        dict(attribute="AGE", node_id="AGE_Y93", raw_value="93세", action="generalize", to_node="AGE5_90", k_raw=6, floor=True),
+        dict(attribute="PERIOD", node_id="PERIOD_X_DAY_2018-03-24", raw_value="2018-03-24", action="allow", to_node="PERIOD_X_DAY_2018-03-24", k_raw=6),
+        dict(attribute="REGION", node_id="REGION_X", raw_value="Norton, Massachusetts", action="suppress", to_node=None, k_raw=3)])],
+        cases={"사례1": dict(normalized=[dict(attribute="AGE", node_id="AGE5_90", raw_value="90~94세", commit=True),
+                                        dict(attribute="DX", node_id="DX_ICD_CODE_J20", raw_value="Acute bronchitis", commit=True)])})
+    tf, entries = conv._absorb(rec, None)
+    got = [(e["attribute"], e["action"], e["value"]) for e in entries[cid]]
+    assert got == [("AGE", "generalize", "90~94세"), ("REGION", "suppress", None), ("DX", "allow", "Acute bronchitis")]
+    assert len(conv.slots[cid].history) == before + 3 and "2018-03-24" not in json.dumps(entries, ensure_ascii=False)
+    assert next(t for t in tf if t["attribute"] == "AGE")["floor"] is True
 
 def test_live_redteam_runs_on_real_llm_path_and_is_kept(world, tmp_path):
     """레드팀 점검이 서버의 실제 LLM 경로(가짜 HTTP)로 돌고, 호출 수를 따로 세고, 끝나면 DB에 남는다. 멈춤도 된다."""
@@ -787,7 +921,7 @@ def test_drop_cases_and_rewrite_rules_unit():
           dict(case_ref="사례5", attribute="MED", raw_value="fexofenadine hydrochloride 30 MG Oral Tablet", action="generalize")]
     r1, r2 = rewrite_rules(prompt, ch), rewrite_rules(prompt, ch, "- 사례2 환자를 알아볼 수 있는 표현이 아직 남았다.")
     assert r1.index("6. 바꿀 값은") < r1.rindex("\n[바꿀 표현]\n") and "'naproxen'(사례2)" in r1 and "fexofenadine'(" not in r1
-    assert "8. 앞서" not in r1 and r2.index("8. 앞서 고친 답을") < r2.rindex("\n[바꿀 표현]\n")
+    assert "9. 앞서" not in r1 and r2.index("9. 앞서 고친 답을") < r2.rindex("\n[바꿀 표현]\n")
     assert r1.endswith("[원 답변]\n원 답") and rewrite_rules("다른 지시문", ch) == "다른 지시문"
 
 def test_redact_unit():

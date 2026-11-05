@@ -66,10 +66,12 @@ export function protectionNote(p: ProtectionResult): Notice | null {
   if (mode.startsWith('REFUSAL')) return { tone: 'lock', text: '이 질문에는 개인정보 보호를 위해 답하지 않았습니다.' };
   if (mode === 'CASE_DROPPED') return { tone: 'lock', text: '환자를 알아볼 위험이 있는 사례는 이 답에서 뺐습니다.' };
   const sup = p.transformations.some((t) => t.action === 'suppress');
-  const gen = p.transformations.some((t) => t.action === 'generalize');
+  const gen = p.transformations.some((t) => t.action === 'generalize' && !t.floor);
+  const unit = p.transformations.some((t) => t.action === 'generalize' && t.floor);
   if (sup && gen) return { tone: 'lock', text: '개인을 알아볼 수 있는 값은 범위로 바꾸거나 비공개로 표시했습니다.' };
   if (sup) return { tone: 'lock', text: '개인을 알아볼 수 있는 값은 비공개로 표시했습니다.' };
   if (gen) return { tone: 'range', text: '개인을 알아볼 수 있는 값은 정확한 값 대신 범위로 표시했습니다.' };
+  if (unit) return { tone: 'range', text: '나이 · 날짜는 정해진 공개 단위로 표시했습니다.' };
   return null;
 }
 
@@ -77,7 +79,8 @@ export function protectionNote(p: ProtectionResult): Notice | null {
 export function whyText(p: ProtectionResult, caseLabel: string): string[] {
   const kept = p.transformations.filter((t) => !t.dropped);
   const sup = joinNames(kept.filter((t) => t.action === 'suppress').map(attrName));
-  const gen = joinNames(kept.filter((t) => t.action === 'generalize').map(attrName));
+  const gen = joinNames(kept.filter((t) => t.action === 'generalize' && !t.floor).map(attrName));
+  const unit = joinNames(kept.filter((t) => t.action === 'generalize' && t.floor).map(attrName));
   const dropped = joinNames(p.transformations.filter((t) => t.dropped && t.caseRef).map((t) => refLabel(t.caseRef!)));
   const out: string[] = [];
   if ((p.releaseMode ?? '').startsWith('REFUSAL'))
@@ -90,6 +93,8 @@ export function whyText(p: ProtectionResult, caseLabel: string): string[] {
     );
   if (gen)
     out.push(`${josa(gen, '은', '는')} 정확한 값이면 해당하는 환자가 적어, 뜻은 유지하면서 한 단계 넓은 범위로 바꿔 보여 드렸습니다.`);
+  if (unit)
+    out.push(`${josa(unit, '은', '는')} 위험과 관계없이 정해진 공개 단위로만 보여 드립니다. 나이는 5세 구간, 날짜는 월 단위보다 자세히 보이지 않습니다.`);
   out.push('앞선 질문에서 나온 내용과 함께 판단하므로, 같은 값도 대화가 이어지면 다르게 보일 수 있습니다.');
   return out;
 }
@@ -116,5 +121,8 @@ export function answerPlainText(segments: { kind: string; text: string; transfor
       if (t?.action === 'generalize') return `${s.text} (범위)`;
       return s.text;
     })
-    .join('');
+    .join('')
+    .replace(/\*\*/g, '')
+    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
+    .replace(/`/g, '');
 }

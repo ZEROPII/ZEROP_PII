@@ -4,28 +4,20 @@ import {
   ClipboardList,
   CornerDownRight,
   Hourglass,
-  Loader2,
   Lock,
   MapPin,
   Pill,
-  Send,
-  ShieldCheck,
   Stethoscope,
   Syringe,
   UserRound,
   type LucideIcon,
 } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo } from 'react';
 import { buildCaseNote, type NoteValue } from '../../lib/caseNote';
-import { requestDraft } from '../../lib/clinicianCopy';
-import { formatTime } from '../../lib/format';
-import { useClinicMessages } from '../../state/ClinicMessages';
 import { useTermDetect, useTerms } from '../../state/TermContext';
 import { useSelectedCase, useWorkspace } from '../../state/WorkspaceContext';
 import type { CaseId, ConversationSession, DisclosureHistoryEntry } from '../../types/domain';
 import { EmptyState, LoadingState } from '../common/StatusViews';
-
-export type NoteTab = 'note' | 'messages';
 
 const ATTR_ICON: Record<string, LucideIcon> = {
   DX: Stethoscope,
@@ -41,7 +33,7 @@ const ATTR_ICON: Record<string, LucideIcon> = {
   LOC: MapPin,
   STATE: MapPin,
 };
-/** 의료 용어 사전에서 찾아볼 수 있는 항목 (값이 [[링크]]가 된다) */
+/** 의료 용어 사전에서 찾아볼 수 있는 항목 (값을 누르면 용어 설명이 열린다) */
 const TERM_ATTRS = new Set(['DX', 'MED', 'PROC', 'PLAN', 'COMORBID']);
 
 function SectionTitle({ children, count }: { children: string; count?: number }) {
@@ -107,7 +99,7 @@ function NoteView({ onJump }: { onJump(caseId: CaseId, messageId: string): void 
     [caseId, disclosures?.data, allEntries, sessions, cases],
   );
 
-  // 진단 · 약 · 시술 값은 용어 사전에서 찾아 [[링크]]로 만든다
+  // 진단 · 약 · 시술 값은 용어 사전에서 찾아 누르면 설명이 열리게 한다
   const termValues = useMemo(
     () => (note ? note.properties.flatMap((p) => (TERM_ATTRS.has(p.attribute) ? p.values.map((v) => v.text ?? '') : [])) : []),
     [note],
@@ -121,13 +113,14 @@ function NoteView({ onJump }: { onJump(caseId: CaseId, messageId: string): void 
   let ti = 0;
   const asked = session?.data?.questionCount ?? 0;
   return (
-    <div className="px-4 pb-5 pt-4">
-      <h2 className="text-xl font-bold tracking-[-0.02em] text-ink">{summary.label}</h2>
+    <div className="px-4 pb-20 pt-4">
+      <h3 className="text-xl font-bold tracking-[-0.02em] text-ink">{summary.label}</h3>
       <p className="mt-0.5 text-xs text-ink-3">
-        비슷한 사례 {summary.similarityRank}위로 찾은 과거 기록{asked ? `, 이 사례에 질문 ${asked}회` : ''}
+        비슷한 사례 {summary.similarityRank}위 · 과거 환자 한 명의 기록{asked ? ` · 질문 ${asked}회` : ''}
       </p>
 
-      <SectionTitle>속성</SectionTitle>
+      <SectionTitle>답에 나온 내용</SectionTitle>
+      <p className="-mt-0.5 mb-2 text-[11px] leading-4 text-ink-3">AI 답에 실제로 보인 값만 모읍니다. 범위로 바꾼 값과 비공개 값은 답과 같은 모양으로 보입니다.</p>
       {note.properties.length === 0 ? (
         <p className="text-[13px] text-ink-3">아직 답에 나온 내용이 없습니다.</p>
       ) : (
@@ -221,183 +214,17 @@ function NoteView({ onJump }: { onJump(caseId: CaseId, messageId: string): void 
   );
 }
 
-/** 개인정보 보호 담당자와 주고받은 메시지 (세부 정보 요청 · 확인 요청 · 답장) */
-function MessagesView({ focusNonce }: { focusNonce: number }) {
-  const msgs = useClinicMessages();
-  const { caseId, summary } = useSelectedCase();
-  const hasSecurity = msgs.messages.some((m) => m.sender === 'security');
-  const [mode, setMode] = useState<'reply' | 'access_request'>(msgs.awaitingReply ? 'reply' : 'access_request');
-  const [text, setText] = useState('');
-  const inputRef = useRef<HTMLTextAreaElement>(null);
-  const listRef = useRef<HTMLOListElement>(null);
-  /** 화면이 자동으로 채운 마지막 초안. 의료진이 고치지 않았으면 사례를 바꿀 때 새 사례 초안으로 바꾼다. */
-  const autoDraft = useRef('');
-  const { markRead } = msgs;
-
-  useEffect(() => {
-    markRead();
-    const el = listRef.current;
-    if (el) el.scrollTo({ top: el.scrollHeight });
-    // 새 메시지가 올 때마다 읽음으로 표시한다 (이 탭이 열려 있는 동안)
-  }, [msgs.messages.length]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  useEffect(() => {
-    if (msgs.awaitingReply) setMode('reply');
-  }, [msgs.awaitingReply]);
-
-  useEffect(() => {
-    if (focusNonce) inputRef.current?.focus();
-  }, [focusNonce]);
-
-  useEffect(() => {
-    if (mode !== 'access_request' || !summary) return;
-    const next = requestDraft(summary.label, []);
-    setText((t) => {
-      if (t !== '' && t !== autoDraft.current) return t; // 의료진이 고친 초안은 그대로 둔다
-      autoDraft.current = next;
-      return next;
-    });
-  }, [mode, summary?.label]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  async function send() {
-    const body = text.trim();
-    if (body.length < 2) return;
-    const ok = await msgs.send({ kind: mode, text: body, caseId: mode === 'access_request' ? caseId : (msgs.awaitingReply?.caseId ?? null) });
-    if (ok) {
-      autoDraft.current = '';
-      setText('');
-    }
-  }
-
-  if (msgs.supported === false) return <EmptyState message="이 서버는 개인정보 보호 담당자 메시지를 지원하지 않습니다." />;
-
+/** 의료진 화면 오른쪽: 사례 노트 (보호 담당자 메시지는 오른쪽 아래 상담 창으로 옮겼다) */
+export function CaseNotePanel({ onJump }: { onJump(caseId: CaseId, messageId: string): void }) {
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <p className="px-4 pb-2 pt-3 text-xs leading-5 text-ink-3">
-        세부 정보 요청과 개인정보 보호 담당자의 답장이 여기에 모입니다. 주고받은 내용은 감사 기록에 남습니다.
-      </p>
-      <ol ref={listRef} className="scroll-thin min-h-0 flex-1 space-y-3 overflow-y-auto px-4 pb-3">
-        {msgs.messages.length === 0 && <li className="py-6 text-center text-[13px] text-ink-3">아직 주고받은 메시지가 없습니다.</li>}
-        {msgs.messages.map((m) => {
-          const mine = m.sender === 'clinician';
-          return (
-            <li key={m.messageId} className={mine ? 'ml-6' : 'mr-6'}>
-              <p className={`flex flex-wrap items-center gap-x-1.5 text-[11px] text-ink-3 ${mine ? 'justify-end' : ''}`}>
-                {!mine && <ShieldCheck className="h-3 w-3 text-iris-text" aria-hidden />}
-                <span className="font-semibold text-ink-2">{mine ? '나' : '개인정보 보호 담당자'}</span>
-                <span>{m.kindLabel}</span>
-                {m.caseLabel && <span>{m.caseLabel}</span>}
-                <time dateTime={m.createdAt} className="num">
-                  {formatTime(m.createdAt)}
-                </time>
-              </p>
-              <p
-                className={`mt-1 whitespace-pre-wrap break-words rounded-control px-3 py-2 text-[13px] leading-5 text-ink ${
-                  mine ? 'bg-iris-tint' : m.kind === 'check_request' ? 'border border-iris bg-surface' : m.kind === 'release' ? 'border border-caution bg-caution-tint' : 'bg-surface-2'
-                }`}
-              >
-                {m.text}
-              </p>
-            </li>
-          );
-        })}
-      </ol>
-      <form
-        className="shrink-0 border-t border-line p-3"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void send();
-        }}
-      >
-        {hasSecurity && (
-          <div role="group" aria-label="보낼 메시지 종류" className="mb-2 flex gap-1 rounded-control bg-surface-2 p-0.5 text-xs font-semibold">
-            {(
-              [
-                ['reply', '답장'],
-                ['access_request', '새 세부 정보 요청'],
-              ] as const
-            ).map(([k, l]) => (
-              <button
-                key={k}
-                type="button"
-                aria-pressed={mode === k}
-                onClick={() => {
-                  setMode(k);
-                  const next = k === 'access_request' && summary ? requestDraft(summary.label, []) : '';
-                  autoDraft.current = next;
-                  setText(next);
-                }}
-                className={`h-7 flex-1 rounded-[8px] ${mode === k ? 'bg-surface text-ink shadow-sm' : 'text-ink-3 hover:text-ink'}`}
-              >
-                {l}
-              </button>
-            ))}
-          </div>
-        )}
-        <label htmlFor="clinic-msg" className="sr-only">
-          {mode === 'reply' ? '답장' : '세부 정보 요청'}
-        </label>
-        <textarea
-          id="clinic-msg"
-          ref={inputRef}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          rows={3}
-          maxLength={500}
-          placeholder={mode === 'reply' ? '확인 요청에 답장을 쓰세요' : '필요한 세부 정보와 사유를 쓰세요'}
-          className="w-full resize-none rounded-control border border-line-input bg-surface px-3 py-2 text-[13px] leading-5 text-ink outline-none placeholder:text-ink-3 focus:border-focus"
-        />
-        {msgs.error && <p className="mt-1 text-xs text-danger-text">{msgs.error}</p>}
-        <div className="mt-2 flex items-center justify-between gap-2">
-          <span className="text-[11px] text-ink-3">{mode === 'access_request' && summary ? `${summary.label}에 대한 요청으로 보냅니다` : ''}</span>
-          <button type="submit" className="btn-primary btn-sm" disabled={msgs.sending || text.trim().length < 2}>
-            {msgs.sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <Send className="h-3.5 w-3.5" aria-hidden />}
-            {mode === 'reply' ? '답장 보내기' : '요청 보내기'}
-          </button>
-        </div>
-      </form>
-    </div>
-  );
-}
-
-/** 의료진 화면 오른쪽: 사례 노트와 보호 담당자 메시지 */
-export function CaseNotePanel({
-  tab,
-  onTab,
-  onJump,
-  focusNonce,
-}: {
-  tab: NoteTab;
-  onTab(t: NoteTab): void;
-  onJump(caseId: CaseId, messageId: string): void;
-  focusNonce: number;
-}) {
-  const msgs = useClinicMessages();
-  const tabs: { id: NoteTab; label: string; badge?: number }[] = [
-    { id: 'note', label: '사례 노트' },
-    ...(msgs.supported ? [{ id: 'messages' as const, label: '보호 담당자 메시지', badge: msgs.unread }] : []),
-  ];
-  return (
-    <section aria-label="사례 노트와 메시지" className="panel flex h-full min-h-0 flex-col overflow-hidden">
-      <div role="tablist" aria-label="오른쪽 영역" className="flex shrink-0 gap-1 border-b border-line px-2">
-        {tabs.map((t) => (
-          <button
-            key={t.id}
-            role="tab"
-            type="button"
-            aria-selected={tab === t.id}
-            onClick={() => onTab(t.id)}
-            className={`relative -mb-px inline-flex h-11 items-center gap-1.5 border-b-2 px-2.5 text-[13px] font-semibold ${
-              tab === t.id ? 'border-iris text-ink' : 'border-transparent text-ink-3 hover:text-ink'
-            }`}
-          >
-            {t.label}
-            {!!t.badge && <span className="num grid h-[18px] min-w-[18px] place-items-center rounded-full bg-iris px-1 text-[10px] font-bold text-iris-on">{t.badge}</span>}
-          </button>
-        ))}
-      </div>
-      <div className={`min-h-0 flex-1 ${tab === 'note' ? 'scroll-thin overflow-y-auto' : 'flex flex-col'}`}>
-        {tab === 'note' ? <NoteView onJump={onJump} /> : <MessagesView focusNonce={focusNonce} />}
+    <section aria-labelledby="case-note-title" className="panel flex h-full min-h-0 flex-col overflow-hidden">
+      <header className="flex h-11 shrink-0 items-center border-b border-line px-4">
+        <h2 id="case-note-title" className="text-[13px] font-semibold text-ink">
+          사례 노트
+        </h2>
+      </header>
+      <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
+        <NoteView onJump={onJump} />
       </div>
     </section>
   );

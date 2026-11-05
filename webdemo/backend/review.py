@@ -20,9 +20,13 @@
 #   사례 단위로 빼기 : 재작성 · 값 치환이 모두 다시 확인을 통과하지 못하면 연구 모듈은 답 전체를 거절 문장으로 바꾼다.
 #                     그 전에 통과하지 못한 사례만 답에서 빼고(그 사례를 가리키는 머리줄 묶음 · 문장) 한 번 더 확인한다.
 #                     통과하면 그 답을 내고(CASE_DROPPED) 뺀 사례의 판정은 모두 가림으로 남긴다. 통과하지 못하면 거절 그대로.
+#   최소 공개 단위 (ADR-0024) : 나이는 5세 구간(93세 → 90~94세), 날짜는 월(2018-03-24 → 2018-03)보다 자세히 내지 않는다.
+#                     온톨로지의 넓힘 사슬(정확한 값 → 5세 구간 → 10세 구간, 일 → 월 → 분기 → 연)을 따른다. 또 답의 글자가 후보를
+#                     센 노드보다 자세하면(예: 노드 90~99세로 센 '93-98세') 그 노드 이름으로 바꾼다. 내보낸 글자와 센 값이 늘 같다.
+#                     바꿀 것이 이 단위 맞춤뿐이면 재작성기를 부르지 않고 글자 그대로 바꾼 뒤 다시 확인한다(ROUNDED).
 #
 # medical/ 연구 모듈은 바꾸지 않는다. Defender와 LLM은 감싸고(RuleDefender · RewriteHintLLM), 갈래는 상속해(RuledArmRun)
-# 공개 단계에 확인과 마지막 시도만 덧붙인다.
+# 공개 단계에 확인과 앞뒤 시도만 덧붙인다.
 
 from __future__ import annotations
 
@@ -31,19 +35,43 @@ import re
 from dataclasses import replace
 from typing import Any, Callable
 
-from medical.defense import ALLOW, GENERALIZE, SUPPRESS, Decision
+from medical.defense import ALLOW, GENERALIZE, SUPPRESS, Decision, apply_changes_deterministic
 from medical.session import ArmRun, Release
+from medical.tracking import view_of
 
 CASE_DROPPED = "CASE_DROPPED"                 # 통과하지 못한 사례를 뺀 답
-RELEASE_VERSION = "medicloak-release-v2"       # 재작성 지시 보강 · 사례 단위로 빼기 (실제 LLM 갈래의 versions에 남긴다)
+ROUNDED = "ROUNDED"                           # 나이 · 날짜를 최소 공개 단위로만 바꾼 답 (재작성기 없이)
+RELEASE_VERSION = "medicloak-release-v3"       # 재작성 지시 보강 · 사례 단위로 빼기 · 최소 공개 단위 (실제 LLM 갈래의 versions에 남긴다)
+
+# 최소 공개 단위: 이 노드보다 자세한 값은 내지 않는다 (온톨로지 노드 이름 규칙: AGE_Y93 · AGE5_90 · AGE10_90, …_DAY_ · _MONTH_ …)
+FLOOR_ATTRS = ("AGE", "PERIOD")
+
+
+def floor_ok(attribute: str, node: str) -> bool:
+    n = str(node)
+    if attribute == "AGE":
+        return not n.startswith("AGE_Y")             # 나이는 5세 구간 이상
+    if attribute == "PERIOD":
+        return "_DAY_" not in n                      # 날짜는 월 이상
+    return True
+
+
+def same_text(raw: str | None, label: str | None) -> bool:
+    """답의 글자가 노드 이름과 같은 값인지 ('90~99세' = '90-99세', '2018년' = '2018')."""
+    norm = lambda x: re.sub(r"[\s년월일세경약쯤]", "", x or "").translate(str.maketrans({"~": "-", "–": "-", "—": "-", "/": "-", ".": "-"}))
+    return bool(raw) and norm(raw) == norm(label)
 
 
 class RuleDefender:
-    """MedicalDefender를 감싼다. blocked(ref)가 주는 단서 종류는 그 사례에서 늘 가림(SUPPRESS)으로 정한다."""
+    """
+    MedicalDefender를 감싼다. blocked(ref)가 주는 단서 종류는 그 사례에서 늘 가림(SUPPRESS)으로 정한다.
+    floors=True(실제 LLM 갈래)면 나이 · 날짜를 최소 공개 단위로 올리고, 답의 글자가 센 노드보다 자세하면 노드 이름으로 바꾼다.
+    """
 
-    def __init__(self, inner: Any, blocked: Callable[[str], set[str]]) -> None:
+    def __init__(self, inner: Any, blocked: Callable[[str], set[str]], *, floors: bool = False) -> None:
         self.inner = inner
         self.blocked = blocked
+        self.floors = floors
         self.last_plans: list[Any] = []                 # 이번 공개의 계획과 바꿀 값 (RuledArmRun._verify가 다시 확인에 씀)
         self.last_changes: list[dict[str, Any]] = []
 
@@ -52,10 +80,38 @@ class RuleDefender:
 
     def change_lines(self, plans: list[Any]) -> list[dict[str, Any]]:
         changes = self.inner.change_lines(plans)
+        flags = [bool(getattr(d, "floor", False)) for p in plans for d in p.changes]     # inner.change_lines와 같은 순서
+        for c, f in zip(changes, flags):
+            c["floor"] = f
         self.last_plans, self.last_changes = list(plans), list(changes)
         return changes
 
     def plan_case(self, ref: str, basis: list[dict[str, Any]], new: list[dict[str, Any]], sources: list[dict[str, Any]]):
+        plan = self._plan(ref, basis, new, sources)
+        if self.floors:
+            self._floor(plan)
+        return plan
+
+    def _floor(self, plan: Any) -> None:
+        """허용 · 넓힘으로 정한 나이 · 날짜를 최소 공개 단위 이상으로, 글자가 센 노드보다 자세하면 그 노드 이름으로 (넓힘)."""
+        data = self.inner.data
+        for i, x in enumerate(plan.decisions):
+            attr = x.disclosure["attribute"]
+            if attr not in FLOOR_ATTRS or x.action != ALLOW:
+                continue                                # 가림은 그대로, 넓힘은 이미 노드 이름으로 바꿔 쓴다
+            orig = x.disclosure["node_id"]
+            chain = data.anc(orig)                      # [원래 값, 부모, …, 루트]
+            target = next((n for n in chain if floor_ok(attr, n)), None)
+            if target == orig and same_text(x.source.get("raw_value"), data.label(orig)):
+                continue
+            if target is None or data.is_root(target):
+                d = Decision(x.disclosure, x.source, SUPPRESS, None, x.k_raw, x.max_steps, x.max_steps)
+            else:
+                d = Decision(x.disclosure, x.source, GENERALIZE, target, x.k_raw, chain.index(target), x.max_steps)
+            d.floor = True                              # 후보 수 때문이 아니라 공개 단위 · 글자를 맞추려고 바꿈
+            plan.decisions[i] = d
+
+    def _plan(self, ref: str, basis: list[dict[str, Any]], new: list[dict[str, Any]], sources: list[dict[str, Any]]):
         blocked = self.blocked(ref)
         if not blocked or not any(d["attribute"] in blocked for d in new):
             return self.inner.plan_case(ref, basis, new, sources)
@@ -109,9 +165,10 @@ def rewrite_rules(prompt: str, changes: list[dict[str, Any]], retry: str | None 
     add = ["6. 바꿀 값은 그 자리만이 아니라 답 전체에서 고친다. 같은 값이 요약 · 비교 · 주목할 점 같은 다른 문장에 다시 나오거나, "
            "대소문자를 바꾸거나 줄여 쓴 경우(약 이름의 성분 이름만, 날짜의 연도 · 월만)도 같은 값으로 보고 똑같이 고친다."
            + (f" 이 답에서 줄여 쓸 수 있는 이름: {', '.join(dict.fromkeys(short))}." if short else ""),
-           "7. 값을 뺀 사례를 다른 문장에서 다시 가리키며 그 값을 떠올리게 하지 않는다."]
+           "7. 값을 뺀 사례를 다른 문장에서 다시 가리키며 그 값을 떠올리게 하지 않는다.",
+           "8. 값을 빼서 내용이 없어진 줄(표의 빈 줄, '-'만 남은 줄, 빈 목록 항목)은 줄째 지운다."]
     if retry:
-        add.append("8. 앞서 고친 답을 다시 확인하니 아래가 남아 통과하지 못했다. 이번에는 이것까지 고친다.\n" + retry)
+        add.append("9. 앞서 고친 답을 다시 확인하니 아래가 남아 통과하지 못했다. 이번에는 이것까지 고친다.\n" + retry)
     return prompt[:at] + "\n" + "\n".join(add) + prompt[at:]
 
 
@@ -287,7 +344,7 @@ class RuledArmRun(ArmRun):
     def ctx(self, c: Any) -> None:
         # 문맥을 바꿔 끼울 때(실제 LLM 문맥 등)마다 Defender를 규칙으로, 실제 LLM이면 LLM을 재작성 지시 보강으로 감싼다
         if not isinstance(c.defender, RuleDefender):
-            c = replace(c, defender=RuleDefender(c.defender, self.blocked))
+            c = replace(c, defender=RuleDefender(c.defender, self.blocked, floors=self.live))
         if self.live and not (isinstance(c.llm, RewriteHintLLM) and c.llm.arm is self):
             inner = c.llm.inner if isinstance(c.llm, RewriteHintLLM) else c.llm
             c = replace(c, llm=RewriteHintLLM(inner, self))
@@ -295,11 +352,50 @@ class RuledArmRun(ArmRun):
 
     def release(self, query: str, raw: str, raw_obs: list[dict[str, Any]], raw_ok: bool) -> Release:
         self._retry_note = None
-        rel = super().release(query, raw, raw_obs, raw_ok)
+        rel, pre, n_pre = self._rounded(query, raw, raw_obs, raw_ok) if self.live else (None, [], 0)
+        self._retry_note = None
+        if rel is None:
+            rel = self._mark_floor(super().release(query, raw, raw_obs, raw_ok))
+            if pre:                                       # 단위만 맞춘 답이 다시 확인을 통과하지 못한 기록도 남긴다
+                rel = replace(rel, attempts=pre + rel.attempts, extraction_tries=rel.extraction_tries + n_pre)
         self._retry_note = None
         if not self.live or rel.mode != "REFUSAL":
             return rel
         return self._drop_failing(query, rel)
+
+    def _mark_floor(self, rel: Release) -> Release:
+        """기록의 판정에 '최소 공개 단위로 바꿈(floor)'을 남긴다 (화면 설명 · 감사용). 계획과 판정 순서는 연구 모듈과 같다."""
+        plans = getattr(self._ctx.defender, "last_plans", None) or []
+        if len(plans) != len(rel.plans):
+            return rel
+        for p, pd in zip(plans, rel.plans):
+            for x, xd in zip(p.decisions, pd["decisions"]):
+                if getattr(x, "floor", False):
+                    xd["floor"] = True
+        return rel
+
+    def _rounded(self, query: str, raw: str, raw_obs: list[dict[str, Any]], raw_ok: bool) -> tuple[Release | None, list[dict[str, Any]], int]:
+        """
+        바꿀 것이 최소 공개 단위 맞춤(나이 · 날짜를 노드 이름으로)뿐이면 재작성기를 부르지 않는다: 원 답의 그 글자를 노드 이름으로
+        바꾸고 다시 확인한다. 통과하면 (ROUNDED 공개, [], 0). 해당하지 않으면 (None, [], 0), 확인에 떨어지면 (None, [시도], 추출 수)
+        로 연구 모듈의 공개 단계(재작성 · 값 치환 · 사례 빼기 · 거절)에 넘긴다.
+        """
+        if self.arm == "C0" or not raw_ok:
+            return None, [], 0
+        d = self._ctx.defender
+        raw_view = view_of(raw_obs, raw, query, self._ctx.nz)
+        plans = [d.plan_case(ref, self._basis(ref), raw_view.disclosures[ref], raw_view.sources[ref]) for ref in raw_view.case_refs]
+        changes = d.change_lines(plans)
+        if not changes or not all(c.get("floor") for c in changes):
+            return None, [], 0
+        text = apply_changes_deterministic(raw, changes)
+        ok, v, checks, n = self._verify(query, text)
+        attempt = dict(mode=ROUNDED, text=text, ok=ok, checks=checks)
+        if not ok or v is None:
+            return None, [attempt], n
+        decisions = [x for p in plans for x in p.decisions]
+        util = round(sum(x.utility for x in decisions) / len(decisions), 4) if decisions else None
+        return self._mark_floor(Release(text, v, ROUNDED, [p.as_dict() for p in plans], changes, [attempt], util, n)), [], 0
 
     def _verify(self, query: str, text: str):
         ok, v, checks, n = super()._verify(query, text)

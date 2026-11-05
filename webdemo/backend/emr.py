@@ -116,12 +116,40 @@ class FhirNotFound(KeyError):
     pass
 
 
+#: 끝나지 않은 진단이 있어도 마지막 기록이 이보다 오래되면 '장기 미내원'으로 둔다 (진료 중 목록에 섞지 않는다)
+DORMANT_YEARS = 3
+STATUS_KO = {"ACTIVE": "진료 중", "RESOLVED": "완치", "DORMANT": "장기 미내원"}
+
+
+def care_status(open_items: int, last: str | None, latest: str | None) -> str:
+    """
+    외래 목록의 진료 상태.
+      RESOLVED 완치       기록된 진단 · 관리 계획이 모두 끝났다 (종료일 있음)
+      DORMANT  장기 미내원 끝나지 않은 것이 있지만 마지막 기록이 EMR 마지막 기록일보다 DORMANT_YEARS년 넘게 앞선다
+      ACTIVE   진료 중     끝나지 않은 진단이나 관리 계획이 있고 최근 기록이 있다
+    날짜는 'YYYY-MM-DD' 글자로 비교한다 (기준일의 연도만 뺀다).
+    """
+    if not open_items:
+        return "RESOLVED"
+    if last and latest and last < f"{int(latest[:4]) - DORMANT_YEARS:04d}{latest[4:10]}":
+        return "DORMANT"
+    return "ACTIVE"
+
+
 class Emr:
     """DB 위의 가상 EMR. 라벨은 온톨로지 노드 이름을 쓴다."""
 
     def __init__(self, store: Store) -> None:
         self.store = store
         self._labels: dict[str, str] = {}
+        self._latest: str | None = None
+
+    def latest_record(self) -> str:
+        """가상 EMR 전체의 마지막 기록일 (합성 데이터를 만든 날). 진료 상태의 '최근'을 오늘이 아니라 이 날 기준으로 센다."""
+        if self._latest is None:
+            r = self.store.one("SELECT MAX(SUBSTR(start, 1, 10)) AS d FROM emr_event WHERE start <> ''")
+            self._latest = (r["d"] if r else None) or ""
+        return self._latest
 
     def label(self, node_id: str | None) -> str:
         if not node_id:
@@ -196,13 +224,22 @@ class Emr:
         return res
 
     def summary(self, fhir_id: str) -> dict[str, Any]:
-        """EMR 외래 목록 한 줄: 나이대 · 성별 · 대표 진단 (화면에서 환자를 고를 때)."""
+        """
+        EMR 외래 목록 한 줄: 성별 · 대표 진단 · 진료 상태 · 마지막 기록일 (화면에서 진료할 환자를 고를 때).
+        생년 · 거주 지역은 목록에 넣지 않는다 (환자를 고르는 데 필요 없다. FHIR Patient 자원에는 그대로 있다).
+        진료 상태는 care_status: 진료 중 · 완치 · 장기 미내원.
+        """
         r = self.patient_row(fhir_id)
+        pid = r["patient_id"]
         dx = self.store.q("SELECT code_node, COUNT(*) AS n FROM emr_event WHERE patient_id = ? AND event_type = 'CONDITION' "
-                          "GROUP BY code_node ORDER BY n DESC, code_node LIMIT 3", (r["patient_id"],))
-        return dict(fhirId=r["fhir_id"], identifier=r["patient_id"][:8], sex=SEX_FHIR.get(r["sex_node"], "unknown"),
-                    birthYear=r["birth_year"], region=self.label(r["region_node"]), conditions=[self.label(d["code_node"]) for d in dx],
-                    events=r["n_events"])
+                          "GROUP BY code_node ORDER BY n DESC, code_node LIMIT 3", (pid,))
+        open_n = self.store.q("SELECT COUNT(*) AS n FROM emr_event WHERE patient_id = ? AND event_type IN ('CONDITION', 'CAREPLAN') "
+                              "AND (stop IS NULL OR stop = '')", (pid,))[0]["n"]
+        last = self.store.q("SELECT MAX(SUBSTR(start, 1, 10)) AS d FROM emr_event WHERE patient_id = ? AND start <> ''", (pid,))[0]["d"]
+        status = care_status(open_n, last, self.latest_record())
+        return dict(fhirId=r["fhir_id"], identifier=pid[:8], sex=SEX_FHIR.get(r["sex_node"], "unknown"),
+                    conditions=[self.label(d["code_node"]) for d in dx], events=r["n_events"],
+                    status=status, statusLabel=STATUS_KO[status], openItems=open_n, lastRecord=last)
 
 
 def bundle(resources: list[dict[str, Any]], total: int) -> dict[str, Any]:

@@ -29,7 +29,7 @@ from api_server.engine import segments_of
 from medical.defense import ALLOW, GENERALIZE, SUPPRESS, SUPPRESSED_MARK as SUPPRESSED
 from webdemo.backend import intent as I
 from webdemo.backend.engine import ATTR_KO, QTYPE_KO, Engine, Session, parse_answer
-from webdemo.backend.review import CASE_DROPPED, ref_no
+from webdemo.backend.review import CASE_DROPPED, ROUNDED, ref_no, same_text
 
 ATTR_LABEL = dict(AGE="나이", SEX="성별", REGION="거주 지역", DX="진단", PROC="시술", PERIOD="시기", MED="처방 약", PLAN="관리 계획")
 TITLE_ATTRS = ("DX", "MED", "PROC", "PLAN")          # 사례 목록 제목에 쓰는 단서 (진단 + 관련 항목)
@@ -64,7 +64,8 @@ class Slot:
         self.last_action = ALLOW
 
 
-CHECK_MODE_KO = dict(REWRITTEN="재작성기가 고친 답", REWRITTEN_FALLBACK="값만 글자 그대로 바꾼 답", CASE_DROPPED="통과하지 못한 사례를 뺀 답")
+CHECK_MODE_KO = dict(REWRITTEN="재작성기가 고친 답", REWRITTEN_FALLBACK="값만 글자 그대로 바꾼 답", CASE_DROPPED="통과하지 못한 사례를 뺀 답",
+                     ROUNDED="나이 · 날짜를 공개 단위로만 바꾼 답")
 
 
 def _checks(rec: dict[str, Any]) -> list[dict[str, Any]]:
@@ -330,21 +331,50 @@ class ClinicConversation:
             return self._reply(s, question, client_message_id, rec, k_before, it)
 
     # ── 응답 만들기 ──
+    @staticmethod
+    def _released(rec: dict[str, Any]) -> dict[str, list[tuple[str, str, str]]]:
+        """내보낸 답을 다시 뽑아 State에 들어간 단서 (사례마다 [(단서 종류, 노드, 답의 글자)]). 의료진이 실제로 본 값이다."""
+        out: dict[str, list[tuple[str, str, str]]] = {}
+        for ref, c in (rec.get("cases") or {}).items():
+            if not isinstance(c, dict) or ref == "UNCLEAR":
+                continue
+            out[ref] = [(o["attribute"], o["node_id"], str(o.get("raw_value") or "")) for o in c.get("normalized") or []
+                        if o.get("commit") and o.get("node_id")]
+        return out
+
     def _absorb(self, rec: dict[str, Any], turn_for_entries: int | None) -> tuple[list[dict[str, Any]], dict[str, list[dict[str, Any]]]]:
-        """한 턴 기록의 Defender 판정 → 화면 조치 목록과 사례별 공개 이력."""
+        """
+        한 턴 기록 → 화면 조치 목록(Defender 판정)과 사례별 공개 이력(사례 노트).
+        공개 이력은 내보낸 답에 실제로 나온 값만 담는다: 허용 · 넓힘으로 정했어도 고친 답에서 빠졌으면 넣지 않고,
+        값은 계획의 원래 글자가 아니라 답에 나온 글자(넓혔으면 넓힌 이름)로 적는다. 가린 값은 '비공개'로 남긴다.
+        """
         data = self.session.ctx.data
         refusal = rec["release_mode"].startswith("REFUSAL")
         cand = rec.get("cases_candidate_k") or {}
         ruled = {(r["case"], r["attribute"]) for r in getattr(self.session, "rules", []) if r["from_turn"] <= rec["turn"]} if self.arm == "C1" else set()
+        released = self._released(rec)
+        used: set[tuple[str, str, str]] = set()
+        turn = rec["turn"] if turn_for_entries is None else turn_for_entries
         tf, entries = [], {cid: [] for cid in self.slots}
+
+        def shown(ref: str, attribute: str, node: str | None) -> tuple[str, str, str] | None:
+            label = data.label(node) if node in data.N else None
+            for o in released.get(ref, []):
+                key = (ref, o[0], o[1])
+                if key not in used and o[0] == attribute and (o[1] == node or (label and same_text(o[2], label))):
+                    used.add(key)
+                    return o
+            return None
+
         for p in rec.get("release_plans") or []:
             cid = self.case_of_ref(p["ref"])
             for x in p["decisions"]:
                 action = SUPPRESS if refusal else x["action"]
                 to_label = data.label(x["to_node"]) if x.get("to_node") in data.N else None
                 k_raw = x.get("k_raw") if x.get("k_raw") is not None else cand.get(p["ref"])
+                floor = bool(x.get("floor")) and not refusal
                 if action == GENERALIZE:
-                    value, desc = to_label, f"넓은 범주로 바꿔 공개: {to_label}"
+                    value, desc = to_label, (f"정해진 공개 단위로 바꿔 공개: {to_label}" if floor else f"넓은 범주로 바꿔 공개: {to_label}")
                 elif action == SUPPRESS:
                     value = None
                     if refusal:
@@ -361,12 +391,31 @@ class ClinicConversation:
                 tf.append(dict(id=self._id("tf"), attribute=x["attribute"], attributeLabel=(f"{p['ref'].replace('사례', '사례 ')} {label}"),
                                action=action, disclosedValue=value, levelDescription=desc, caseRef=p["ref"], kIfRaw=k_raw,
                                rule=(p["ref"], x["attribute"]) in ruled and action == SUPPRESS and not refusal,
-                               dropped=bool(x.get("dropped")) and not refusal))
-                if cid:
-                    turn = rec["turn"] if turn_for_entries is None else turn_for_entries
-                    self.slots[cid].decisions.append(dict(x, action=action, turn=turn))
+                               dropped=bool(x.get("dropped")) and not refusal, floor=floor))
+                if not cid:
+                    continue
+                self.slots[cid].decisions.append(dict(x, action=action, turn=turn))
+                if action == SUPPRESS:
                     entries[cid].append(dict(entryId=self._id("dh"), turn=turn, attribute=x["attribute"], attributeLabel=label, action=action,
-                                             description=f"{value}" if action == ALLOW else desc, value=value))
+                                             description=desc, value=None))
+                    continue
+                o = shown(p["ref"], x["attribute"], x.get("to_node") or x.get("node_id"))
+                if o is None:                      # 고친 답에서 빠져 의료진에게 나가지 않은 값
+                    continue
+                text = o[2] or value or ""
+                entries[cid].append(dict(entryId=self._id("dh"), turn=turn, attribute=x["attribute"], attributeLabel=label, action=action,
+                                         description=text if action == ALLOW else desc, value=text))
+        # 계획에 없던 값이 내보낸 답에 나왔으면(재작성기가 남긴 반복 등) 의료진이 본 것이므로 노트에 넣는다
+        for ref, obs in released.items():
+            cid = self.case_of_ref(ref)
+            if not cid:
+                continue
+            for attribute, node, text in obs:
+                if (ref, attribute, node) in used or not text:
+                    continue
+                used.add((ref, attribute, node))
+                entries[cid].append(dict(entryId=self._id("dh"), turn=turn, attribute=attribute, attributeLabel=ATTR_LABEL.get(attribute, attribute),
+                                         action=ALLOW, description=text, value=text))
         for cid, es in entries.items():
             sl = self.slots[cid]
             sl.history += es
@@ -426,6 +475,9 @@ class ClinicConversation:
             return "이 답에는 새로 더해진 단서가 없습니다."
         if not changed:
             return f"새로 나온 단서를 모두 더해도 후보가 {g}명보다 많아 그대로 답했습니다."
+        units = " 나이는 5세 구간, 날짜는 월 단위보다 자세히 보이지 않습니다."
+        if mode == ROUNDED or all(t.get("floor") for t in changed):
+            return "새로 나온 단서로 환자를 좁힐 위험은 없었고, 나이 · 날짜만 정해진 공개 단위로 바꿔 답했습니다." + units
         cand = rec.get("cases_candidate_k") or {}
         worst = min((cand[t["caseRef"]] for t in changed if cand.get(t["caseRef"]) is not None), default=None)
         n_sup = sum(t["action"] == SUPPRESS for t in changed)
@@ -433,7 +485,8 @@ class ClinicConversation:
         what = ", ".join(x for x in (f"가림 {n_sup}건" if n_sup else "", f"넓힘 {n_gen}건" if n_gen else "") if x)
         head = f"그대로 답하면 후보가 {worst}명까지 줄어들어 " if worst is not None else ""
         how = " 대상 AI의 답을 재작성기가 고친 뒤 다시 확인했습니다." if self.live and rec["release_mode"] == "REWRITTEN" else ""
-        return f"{head}일부 값을 보호해 답했습니다 ({what}).{how}"
+        unit = units if any(t.get("floor") for t in changed) else ""
+        return f"{head}일부 값을 보호해 답했습니다 ({what}).{how}{unit}"
 
     # ── 보안 담당자 검토 반영 (review.py) ──
     def apply_approval(self, ap: dict[str, Any]) -> str:
@@ -608,7 +661,7 @@ class ClinicDesk:
     def workspace_id(self) -> str:
         return self.current.workspace_id
 
-    def start(self, trial_id: str, *, launch: dict[str, Any] | None = None) -> ClinicConversation:
+    def start(self, trial_id: str, *, launch: dict[str, Any] | None = None, on_call: Callable[[str, int], None] | None = None) -> ClinicConversation:
         with self.lock:
             cur = self._current
             first = next((r for r in cur.session.logs[self.arm] if r.get("turn") == 0), None) if cur is not None else None
@@ -620,7 +673,7 @@ class ClinicDesk:
                     self._changed(cur, "launch")
                 return cur
             with self.eng.lock:
-                s = self.eng.new_session(trial_id, source="clinic", budget=self.budget, llm_mode=self.llm_mode)
+                s = self.eng.new_session(trial_id, source="clinic", budget=self.budget, llm_mode=self.llm_mode, on_call=on_call)
                 s.owner = self.owner
                 s.launch = launch
                 conv = ClinicConversation(self.eng, s, self.arm, compare=self.compare, location_label=self.location_label)

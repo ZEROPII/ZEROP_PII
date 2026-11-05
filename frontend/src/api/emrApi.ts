@@ -1,7 +1,7 @@
 // 가상 EMR API (python -m medicloak): 외래 진료 목록 · 진료 지원 AI 열기 · FHIR R4 읽기.
 // 의료진 계정만 쓴다. FHIR로는 외래 환자만 열리고, 유사 사례(과거 기록) 환자는 404다.
 
-import type { WorklistPatient } from '../types/domain';
+import type { LaunchProgress, WorklistPatient } from '../types/domain';
 import { ApiError } from './types';
 import { API_BASE, FHIR_BASE, notifyUnauthorized } from './session';
 
@@ -48,7 +48,8 @@ export interface FhirBundle {
 
 export const emrApi = {
   worklist: (signal?: AbortSignal) => get<WorklistPatient[]>(`${API_BASE}/emr/worklist`, signal),
-  launch: async (fhirId: string, purpose: string): Promise<{ trialId: string }> => {
+  launchProgress: (signal?: AbortSignal) => get<LaunchProgress>(`${API_BASE}/emr/launch/progress`, signal),
+  launch: async (fhirId: string, purpose: string): Promise<{ trialId: string; seconds?: number; calls?: number }> => {
     let res: Response;
     try {
       res = await fetch(`${API_BASE}/emr/launch`, {
@@ -61,8 +62,17 @@ export const emrApi = {
       throw new ApiError('서버에 연결할 수 없습니다.');
     }
     if (res.status === 401) notifyUnauthorized();
-    if (!res.ok) throw new ApiError(res.status === 404 ? '이 환자는 고른 진료 목적으로 진료 지원 AI를 열 수 없습니다.' : `진료 지원 AI를 열지 못했습니다 (HTTP ${res.status}).`, res.status);
-    return (await res.json()) as { trialId: string };
+    if (!res.ok) {
+      const detail = await res
+        .json()
+        .then((b: { detail?: unknown }) => (typeof b?.detail === 'string' ? b.detail : null))
+        .catch(() => null);
+      throw new ApiError(
+        res.status === 404 ? '이 환자는 고른 진료 목적으로 진료 지원 AI를 열 수 없습니다.' : (detail ?? `진료 지원 AI를 열지 못했습니다 (HTTP ${res.status}).`),
+        res.status,
+      );
+    }
+    return (await res.json()) as { trialId: string; seconds?: number; calls?: number };
   },
   /** /fhir/{Condition|MedicationRequest|Procedure|CarePlan}?patient= */
   search: (resource: string, patientId: string, signal?: AbortSignal) =>

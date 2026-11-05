@@ -27,6 +27,8 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -499,14 +501,48 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
                 state["worklist"] = worklist(eng(), e)
         return state["worklist"]
 
+    # 진료 지원 AI를 여는 동안의 진행 (의료진마다). 첫 답은 실제 LLM을 차례로 여러 번 부르므로 화면이 지금 단계를 보여 준다.
+    launching: dict[str, dict[str, Any]] = {}
+    launching_lock = threading.Lock()
+    step_ko = dict(target="진료 지원 AI가 비슷한 사례를 정리하고 있습니다", extractor="답에서 환자를 알아볼 수 있는 단서를 찾고 있습니다",
+                   recheck="고친 답을 다시 확인하고 있습니다", rewriter="가릴 값을 고쳐 쓰고 있습니다")
+
+    def launch_key(request: Request) -> str:
+        u = user_of(request)
+        return str(u.get("id") or u.get("username")) if u else "-"
+
     @r.post("/emr/launch")
     def emr_launch(body: LaunchIn, request: Request) -> dict[str, Any]:
         emr()
         tid = find_trial(eng(), body.fhirId, body.purpose)
         d = desk(request)
-        guard(lambda: d.start(tid, launch=dict(fhirId=body.fhirId, purpose=body.purpose)))
-        mon().log("emr_launch", d.session, user=user_of(request), actor="의료진 (데모)", purpose=body.purpose)
-        return dict(status="ok", workspaceId=d.workspace_id, trialId=tid)
+        key = launch_key(request)
+        st = dict(started=time.time(), label="비슷한 과거 사례를 찾고 있습니다", calls=0, extracted=False)
+
+        def on_call(role: str, n: int) -> None:
+            step = ("recheck" if st["extracted"] else "extractor") if role == "extractor" else role
+            st["extracted"] = st["extracted"] or role == "extractor"
+            st.update(label=step_ko.get(step, st["label"]), calls=n)
+
+        with launching_lock:
+            launching[key] = st
+        try:
+            guard(lambda: d.start(tid, launch=dict(fhirId=body.fhirId, purpose=body.purpose), on_call=on_call))
+        finally:
+            with launching_lock:
+                if launching.get(key) is st:
+                    launching.pop(key)
+        mon().log("emr_launch", d.session, user=user_of(request), actor="의료진", purpose=body.purpose)
+        return dict(status="ok", workspaceId=d.workspace_id, trialId=tid, seconds=round(time.time() - st["started"], 1), calls=st["calls"])
+
+    @r.get("/emr/launch/progress")
+    def emr_launch_progress(request: Request) -> dict[str, Any]:
+        """여는 중이면 지금 단계 · 실제 LLM 호출 수 · 걸린 초. 엔진 잠금을 쓰지 않는다 (여는 요청과 따로 돈다)."""
+        with launching_lock:
+            st = launching.get(launch_key(request))
+            if st is None:
+                return dict(active=False)
+            return dict(active=True, label=st["label"], calls=st["calls"], elapsed=round(time.time() - st["started"], 1))
 
     # ── 보안 담당자: 의료진 대화를 숫자와 함께 (읽기 전용) ──
     w = APIRouter(prefix="/api/watch", dependencies=guarded)

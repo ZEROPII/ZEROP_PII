@@ -31,6 +31,7 @@ const ACTION_KO: Record<string, string> = {
 const PURPOSE_KO: Record<string, string> = { PRESCRIPTION: '처방', TREATMENT_PROCEDURE: '시술·치료', COURSE_CARE: '경과·관리' };
 const RELEASE_KO: Record<string, string> = {
   RAW: '그대로',
+  ROUNDED: '공개 단위로 바꾼 답',
   REWRITTEN: '고쳐 쓴 답',
   REWRITTEN_FALLBACK: '값만 바꾼 답',
   CASE_DROPPED: '사례를 뺀 답',

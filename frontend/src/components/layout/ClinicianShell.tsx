@@ -8,6 +8,7 @@ import { useTerms } from '../../state/TermContext';
 import { useWorkspace } from '../../state/WorkspaceContext';
 import { LogoMark } from '../brand/Logo';
 import { PatientBanner } from '../clinic/PatientBanner';
+import { ProtectionDesk } from '../clinic/ProtectionDesk';
 import { NAV, ROLE_HOME, ROLE_LABEL, type Role } from './nav';
 import { UserMenu } from './UserMenu';
 
@@ -38,7 +39,7 @@ function ChromeButton({ label, onClick, pressed, children, badge }: { label: str
 /**
  * 의료진 화면 틀: 병원 EMR 안에 들어간 진료 지원 AI처럼 보이게 한다. MediCloak은 그 AI 앞에서 답을 거르는 보호 계층이라
  * 이름은 머리줄의 'MediCloak 보호 적용' 표시로만 드러낸다.
- * 어두운 앱 머리줄(메뉴 · 찾기 · 용어 · 보호 담당자 메시지 · 보호 적용 표시) → 환자 띠 → 본문.
+ * 어두운 앱 머리줄(메뉴 · 찾기 · 용어 · 보호 담당자 창 알림 · 보호 적용 표시) → 환자 띠 → 본문 → 오른쪽 아래 보호 담당자 창.
  * 데모용 화면 전환(의료진 | 보안 담당자)은 머리줄 오른쪽 끝에 따로 둔다. 운영 모드(product)에서는 그 자리에 계정 메뉴가 온다.
  */
 export function ClinicianShell({ role, product, onOpenPalette }: { role: Role; product: boolean; onOpenPalette(): void }) {
@@ -98,10 +99,7 @@ export function ClinicianShell({ role, product, onOpenPalette }: { role: Role; p
             <ChromeButton
               label={msgs.unread ? `개인정보 보호 담당자 메시지 ${msgs.unread}건 새로 옴` : '개인정보 보호 담당자 메시지'}
               badge={msgs.unread}
-              onClick={() => {
-                navigate('/');
-                msgs.requestOpen();
-              }}
+              onClick={msgs.requestOpen}
             >
               <Bell className="h-4 w-4" aria-hidden />
             </ChromeButton>
@@ -155,6 +153,7 @@ export function ClinicianShell({ role, product, onOpenPalette }: { role: Role; p
       <main className="min-h-0 flex-1">
         <Outlet />
       </main>
+      <ProtectionDesk />
       <nav aria-label="진료 지원 메뉴" className="flex shrink-0 border-t border-line bg-surface md:hidden">
         {items.map((item) => (
           <NavLink

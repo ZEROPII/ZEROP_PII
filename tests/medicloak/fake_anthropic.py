@@ -34,7 +34,8 @@ class FakeResponse:
 
 class FakeAnthropic:
     def __init__(self, *, fail_status: int | None = None, delay: float = 0.0, drop_date: bool = True, period_in_med: bool = False,
-                 drop_labels: bool = False, echo_lower: str | None = None, heed_retry: bool = False) -> None:
+                 drop_labels: bool = False, echo_lower: str | None = None, heed_retry: bool = False,
+                 ages: dict[str, str] | None = None, broken_extract: bool = False) -> None:
         self.calls: list[dict[str, Any]] = []
         self.fail_status = fail_status
         self.delay = delay
@@ -44,6 +45,8 @@ class FakeAnthropic:
         # 첫 답 끝에 그 사례의 약을 소문자로 한 번 더 적는다 (실제 LLM의 '주목할 점' 문장처럼, 글자 그대로 치환으로는 안 지워지는 반복)
         self.echo_lower = echo_lower
         self.heed_retry = heed_retry                # 재작성기가 다시 고칠 때 알려 준 '남은 표현'을 지운다
+        self.ages = dict(ages or {})                # '나이'를 물으면 사례마다 이 글자로 답한다 ('33-38세' 같은 범위)
+        self.broken_extract = broken_extract        # 추출기가 JSON이 아닌 답을 낸다 (첫 답 거절)
         self.lock = threading.Lock()
         self.active = 0
         self.max_active = 0
@@ -86,12 +89,16 @@ class FakeAnthropic:
             if m is None and len(p["messages"]) == 1:
                 return self._retrieval_answer(system, self.echo_lower)
             n = m.group(1) if m else "1"
+            if "나이" in user and self.ages.get(f"사례{n}"):
+                return f"사례{n} 환자는 당시 {self.ages[f'사례{n}']}였습니다."
             block = system.split(f"[사례{n}]")[1].split("\n\n[사례")[0]
             d = re.search(r"처방 약: (.+?)\.\n\[\d+\] 위 약 첫 처방 시작일: (\d{4}-\d{2}-\d{2})", block)
             if d:
                 return f"사례{n} 환자는 {d.group(1)}를 처방받았고, 첫 처방 시작일은 {d.group(2)}입니다."
             return f"사례{n} 기록에는 처방 약이 없습니다."
         if user.startswith("너는 의료 대화의 정보 추출기다"):
+            if self.broken_extract:
+                return "추출하지 못했습니다"
             resp = user.split("[이번 답변]")[-1]
             obs = []
             for m in re.finditer(r"(사례\d+) 환자의 진단은 (.+?)(?:이고, (.+?)를 처방받았습니다|입니다)", resp):
@@ -102,6 +109,9 @@ class FakeAnthropic:
                     obs.append(dict(attribute="MED", raw_value=m.group(3), evidence_spans=[m.group(3)], inference_mode="EXPLICIT", confidence=5,
                                     case_ref=m.group(1), subject="TARGET_PATIENT", context_status="HISTORY", event_ref="e1",
                                     med_assertion="PRESCRIBED"))
+            for m in re.finditer(r"(사례\d+) 환자는 당시 (\S+세)였습니다", resp):
+                obs.append(dict(attribute="AGE", raw_value=m.group(2), evidence_spans=[m.group(2)], inference_mode="EXPLICIT", confidence=5,
+                                case_ref=m.group(1), subject="TARGET_PATIENT", context_status="HISTORY"))
             for m in re.finditer(r"(사례\d+) 환자는 (.+?)를 처방받았(?:고|습니다)", resp):
                 if any(o["case_ref"] == m.group(1) and o["attribute"] == "MED" for o in obs):
                     continue                                                  # 한 답에서 같은 사례의 약은 처음 것만 적는다

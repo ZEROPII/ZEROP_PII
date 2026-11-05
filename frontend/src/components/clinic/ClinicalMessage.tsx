@@ -1,6 +1,6 @@
 import { AlertCircle, Check, CircleHelp, Copy, Loader2, Lock, MailQuestion, RotateCw, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
-import { toAnswerRows, type AnswerRow } from '../../lib/answerLines';
+import { parseAnswer, type AnswerBlock, type Inline } from '../../lib/answerLines';
 import { answerPlainText, attrName, protectionNote, refLabel, requestDraft, whyText } from '../../lib/clinicianCopy';
 import { formatTime } from '../../lib/format';
 import { useClinicMessages } from '../../state/ClinicMessages';
@@ -40,47 +40,120 @@ function Piece({ seg, tf, mentions }: { seg: MessageSegment; tf: Map<string, Pri
   );
 }
 
-function AnswerBody({ message, caseLabel }: { message: ChatMessage; caseLabel: string }) {
-  const rows = useMemo<AnswerRow[]>(() => toAnswerRows(message.segments), [message.segments]);
-  const tf = useMemo(() => new Map((message.protection?.transformations ?? []).map((t) => [t.id, t])), [message.protection]);
-  // 줄마다 나눈 조각을 한 줄로 펴서 의료 용어를 한 번에 찾는다
-  const flat = useMemo(() => rows.flatMap((r) => (r.kind === 'fact' ? r.value : r.segments)), [rows]);
-  const { mentions } = useTermDetect(flat.map((s) => s.text));
-  const ownRef = caseLabel.replace(/\s+/g, '');
-  const refs = new Set(rows.flatMap((r) => (r.kind === 'fact' ? [r.caseRef] : [])));
-  const showCase = refs.size > 1 || (refs.size === 1 && !refs.has(ownRef));
+function Pieces({ run, tf, mentions }: { run: Inline[]; tf: Map<string, PrivacyTransformation>; mentions: (TermMention[] | undefined)[] }) {
+  return (
+    <>
+      {run.map((p) =>
+        p.bold ? (
+          <strong key={p.k} className="font-semibold">
+            <Piece seg={p.seg} tf={tf} mentions={mentions[p.k]} />
+          </strong>
+        ) : (
+          <Piece key={p.k} seg={p.seg} tf={tf} mentions={mentions[p.k]} />
+        ),
+      )}
+    </>
+  );
+}
 
-  let i = 0;
-  const pieces = (segs: MessageSegment[]) =>
-    segs.map((s) => {
-      const k = i++;
-      return <Piece key={k} seg={s} tf={tf} mentions={mentions[k]} />;
-    });
+function Block({ b, tf, mentions, showCase }: { b: AnswerBlock; tf: Map<string, PrivacyTransformation>; mentions: (TermMention[] | undefined)[]; showCase: boolean }) {
+  const run = (r: Inline[]) => <Pieces run={r} tf={tf} mentions={mentions} />;
+  switch (b.kind) {
+    case 'fact':
+      return (
+        <div className="grid grid-cols-1 gap-x-4 gap-y-0.5 border-b border-line py-2 last:border-b-0 sm:grid-cols-[minmax(150px,38%)_minmax(0,1fr)]">
+          <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[13px] text-ink-2">
+            {showCase && <span className="rounded-[5px] bg-surface-2 px-1.5 text-xs font-semibold text-ink">{refLabel(b.caseRef)}</span>}
+            <span>{b.field}</span>
+            {b.source && (
+              <span className="text-[11px] text-ink-3" title="사례 기록 안에서 이 값이 나온 곳">
+                {b.source.replace(/^기록\s*(\d+)$/, '기록 $1')}
+              </span>
+            )}
+          </div>
+          <div className="min-w-0 break-words font-medium">{run(b.value)}</div>
+        </div>
+      );
+    case 'heading':
+      return b.level <= 2 ? (
+        <h4 className="mb-1 mt-3 text-[15px] font-bold text-ink first:mt-0">{run(b.content)}</h4>
+      ) : (
+        <h5 className="mb-0.5 mt-2.5 text-sm font-semibold text-ink first:mt-0">{run(b.content)}</h5>
+      );
+    case 'para':
+      return (
+        <p className="break-words py-1">
+          {b.lines.map((l, i) => (
+            <span key={i}>
+              {i > 0 && <br />}
+              {run(l)}
+            </span>
+          ))}
+        </p>
+      );
+    case 'list':
+      return (
+        <ul className="my-1 space-y-0.5">
+          {b.items.map((it, i) => (
+            <li key={i} className="flex gap-2" style={{ paddingLeft: it.depth * 16 }}>
+              <span aria-hidden className={`shrink-0 text-ink-3 ${it.marker ? 'num min-w-[1.25rem] text-right' : 'w-3 text-center'}`}>
+                {it.marker ?? '•'}
+              </span>
+              <span className="min-w-0 break-words">{run(it.content)}</span>
+            </li>
+          ))}
+        </ul>
+      );
+    case 'table':
+      return (
+        <div className="my-2 overflow-x-auto rounded-cell border border-line">
+          <table className="w-full border-collapse text-[13px]">
+            {b.head && (
+              <thead className="bg-surface-2 text-left text-ink-2">
+                <tr>
+                  {b.head.map((c, i) => (
+                    <th key={i} scope="col" className="border-b border-line px-2.5 py-1.5 font-semibold">
+                      {run(c)}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+            )}
+            <tbody>
+              {b.rows.map((r, ri) => (
+                <tr key={ri} className="align-top">
+                  {r.map((c, ci) => (
+                    <td key={ci} className="border-b border-line px-2.5 py-1.5 [tr:last-child_&]:border-b-0">
+                      {run(c)}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+    case 'rule':
+      return <hr className="my-2 border-line" />;
+  }
+}
+
+function AnswerBody({ message, caseLabel }: { message: ChatMessage; caseLabel: string }) {
+  const parsed = useMemo(() => parseAnswer(message.segments), [message.segments]);
+  const tf = useMemo(() => new Map((message.protection?.transformations ?? []).map((t) => [t.id, t])), [message.protection]);
+  // 읽는 순서로 편 조각에서 의료 용어를 한 번에 찾는다 (조각 번호 k = mentions 번호)
+  const { mentions } = useTermDetect(parsed.pieces.map((p) => p.seg.text));
+  const ownRef = caseLabel.replace(/\s+/g, '');
+  const refs = new Set(parsed.blocks.flatMap((b) => (b.kind === 'fact' ? [b.caseRef] : [])));
+  const showCase = refs.size > 1 || (refs.size === 1 && !refs.has(ownRef));
 
   return (
     <>
       <div className="px-4 py-3 text-sm leading-relaxed text-ink">
         <span className="sr-only">AI 답변: </span>
-        {rows.map((r, ri) =>
-          r.kind === 'text' ? (
-            <p key={ri} className="whitespace-pre-wrap break-words py-1">
-              {pieces(r.segments)}
-            </p>
-          ) : (
-            <div key={ri} className="grid grid-cols-1 gap-x-4 gap-y-0.5 border-b border-line py-2 last:border-b-0 sm:grid-cols-[minmax(150px,38%)_minmax(0,1fr)]">
-              <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[13px] text-ink-2">
-                {showCase && <span className="rounded-[5px] bg-surface-2 px-1.5 text-xs font-semibold text-ink">{refLabel(r.caseRef)}</span>}
-                <span>{r.field}</span>
-                {r.source && (
-                  <span className="text-[11px] text-ink-3" title="사례 기록 안에서 이 값이 나온 곳">
-                    {r.source.replace(/^기록\s*(\d+)$/, '기록 $1')}
-                  </span>
-                )}
-              </div>
-              <div className="min-w-0 break-words font-medium">{pieces(r.value)}</div>
-            </div>
-          ),
-        )}
+        {parsed.blocks.map((b, i) => (
+          <Block key={i} b={b} tf={tf} mentions={mentions} showCase={showCase} />
+        ))}
       </div>
       <div className="px-4 pb-1 empty:hidden">
         <AnswerTerms mentions={mentions} label="이 답의 의료 용어" />
@@ -143,7 +216,7 @@ function ProtectionFooter({ message, caseLabel, cases }: { message: ChatMessage;
             </button>
           )}
           {canRequest && requested && (
-            <span className="inline-flex items-center gap-1 px-2 text-xs font-semibold text-iris-text" title={`${requestLabel}에 대한 세부 정보 요청을 보냈습니다. 답장은 보호 담당자 메시지에 옵니다.`}>
+            <span className="inline-flex items-center gap-1 px-2 text-xs font-semibold text-iris-text" title={`${requestLabel}에 대한 세부 정보 요청을 보냈습니다. 답장은 보호 담당자 창에 옵니다.`}>
               <Check className="h-3.5 w-3.5" aria-hidden /> 요청함
             </span>
           )}

@@ -74,7 +74,7 @@ export const CHECK_DEFAULT = '이 대화에서 같은 사례의 세부 정보를
 
 type Composer = { kind: 'reply' | 'check_request'; text: string };
 
-/** 의료진과 주고받은 메시지 (의료진 화면의 '보호 담당자 메시지'와 같은 대화) */
+/** 의료진과 주고받은 메시지 (의료진 화면 오른쪽 아래 '보호 담당자 창'과 같은 대화) */
 function Thread({ messages }: { messages: ThreadMessage[] }) {
   return (
     <ol className="space-y-2.5">
@@ -297,7 +297,7 @@ export function SessionDetail({ detail: d, onReveal, onReview, onMessage, onDeta
             <span className="min-w-0 flex-1">
               <strong className="font-semibold">{pending.kind === 'access_request' ? '의료진이 세부 정보를 요청했습니다' : '의료진이 답장했습니다'}</strong>
               {pending.case && <span className="ml-1 text-ink-2">({caseLabel(pending.case)})</span>}
-              <span className="mt-0.5 block text-xs text-ink-2">아래 메시지를 읽고 답장해 주세요. 답장은 의료진 화면의 보호 담당자 메시지에 바로 뜹니다.</span>
+              <span className="mt-0.5 block text-xs text-ink-2">아래 메시지를 읽고 답장해 주세요. 답장은 의료진 화면의 보호 담당자 창에 바로 뜹니다.</span>
             </span>
             {pending.kind === 'access_request' && (
               <button type="button" className="btn-secondary btn-sm" aria-expanded={approveOpen} onClick={() => setApproveOpen((v) => !v)}>

@@ -67,12 +67,12 @@ export function GuidePage() {
             <MailQuestion className="mt-1.5 h-4 w-4 shrink-0 text-iris-text" aria-hidden />
             <span>
               답 아래 <strong className="font-semibold text-ink">세부 정보 요청</strong>을 누르고 사유를 적어 보내면 개인정보 보호 담당자에게 갑니다. 답장은
-              오른쪽 <strong className="font-semibold text-ink">보호 담당자 메시지</strong>에 오고, 머리줄 알림에도 표시됩니다.
+              오른쪽 아래 <strong className="font-semibold text-ink">보호 담당자 창</strong>에 오고, 머리줄 알림에도 표시됩니다.
             </span>
           </p>
           <p className="flex gap-2">
             <MessageSquareReply className="mt-1.5 h-4 w-4 shrink-0 text-iris-text" aria-hidden />
-            <span>보호 담당자가 질문한 목적을 물어볼 때도 있습니다(확인 요청). 대화 위에 안내가 뜨면 답장해 주세요.</span>
+            <span>보호 담당자가 질문한 목적을 물어볼 때도 있습니다(확인 요청). 대화 위에 안내가 뜨면 같은 창에서 답장해 주세요.</span>
           </p>
         </Section>
 

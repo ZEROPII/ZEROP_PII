@@ -79,14 +79,17 @@ def fhir_router(emr_of) -> APIRouter:
 
 
 def worklist(eng: Engine, emr: OutpatientEmr) -> list[dict[str, Any]]:
-    """외래 진료 목록: 연구 계획에 trial이 있는 외래 환자. 목적마다 진료일(index date) · 주진단 · 고려 중인 처치."""
+    """
+    외래 진료 목록: 연구 계획에 trial이 있는 외래 환자. 목적마다 진료일(index date) · 주진단 · 고려 중인 처치.
+    유사 사례 검색 대상(과거 기록 환자 461명)과는 다른 환자들이다 (cohort QUERY_POOL만, OutpatientEmr).
+    """
     by_pid: dict[str, list[dict[str, Any]]] = collections.defaultdict(list)
     for tid, pid, qt, _ in eng.plan:
         b = query_binding(eng.data, pid, qt, random.Random(f"{eng.cfg.seed}-{tid}"))     # make_prefix와 같은 난수 → 같은 패널
         if b is None:
             continue
         panel = {lab: b["panel"][k] for k, lab in PANEL_LABEL}
-        by_pid[pid].append(dict(trialId=tid, purpose=qt, purposeLabel=QTYPE_KO[qt], visitDate=b["index_date"], ageSex=panel.get("연령 / 성별"),
+        by_pid[pid].append(dict(trialId=tid, purpose=qt, purposeLabel=QTYPE_KO[qt], visitDate=b["index_date"], band=b["QUERY_AGE_BAND"],
                                 mainDx=panel.get("주진단"), item=panel.get("고려 중인 처치")))
     out = []
     for pid, purposes in by_pid.items():
@@ -95,9 +98,13 @@ def worklist(eng: Engine, emr: OutpatientEmr) -> list[dict[str, Any]]:
         except FhirNotFound:
             continue
         purposes.sort(key=lambda p: p["trialId"])
-        out.append(dict(s, purposes=purposes, featured=any(p["trialId"] in FEATURED for p in purposes),
-                        lastVisit=max(p["visitDate"] for p in purposes)))
-    out.sort(key=lambda x: (not x["featured"], min(p["trialId"] for p in x["purposes"])))
+        # 나이는 진료 중 환자 띠와 같은 연령대('40대', '10세 미만')로만. 정확한 나이 · 생년은 목록 응답에 넣지 않는다
+        band = max(purposes, key=lambda p: p["visitDate"])["band"]
+        for p in purposes:
+            del p["band"]
+        out.append(dict(s, purposes=purposes, featured=any(p["trialId"] in FEATURED for p in purposes), ageBand=band))
+    order = {"ACTIVE": 0, "RESOLVED": 1, "DORMANT": 2}
+    out.sort(key=lambda x: (order.get(x["status"], 3), not x["featured"], min(p["trialId"] for p in x["purposes"])))
     return out
 
 

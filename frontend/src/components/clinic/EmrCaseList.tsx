@@ -15,11 +15,14 @@ export function EmrCaseList({ onSelected }: { onSelected?: () => void }) {
 
   return (
     <section aria-labelledby="emr-cases-title" className="panel flex min-h-0 flex-col overflow-hidden">
-      <header className="flex items-baseline justify-between gap-2 border-b border-line px-4 py-3">
-        <h2 id="emr-cases-title" className="text-[15px] font-bold text-ink">
-          비슷한 사례
-        </h2>
-        {cases.data && <span className="text-xs text-ink-3">유사도 순 {cases.data.length}건</span>}
+      <header className="border-b border-line px-4 py-3">
+        <div className="flex items-baseline justify-between gap-2">
+          <h2 id="emr-cases-title" className="text-[15px] font-bold text-ink">
+            비슷한 사례
+          </h2>
+          {cases.data && <span className="text-xs text-ink-3">유사도 순 {cases.data.length}건</span>}
+        </div>
+        <p className="mt-0.5 text-[11px] leading-4 text-ink-3">사례 하나는 병원 과거 기록의 환자 한 명입니다.</p>
       </header>
       {cases.status === 'error' ? (
         <ErrorState message={cases.error ?? '사례를 불러오지 못했습니다.'} onRetry={actions.reloadAll} />

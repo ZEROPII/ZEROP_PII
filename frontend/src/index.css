@@ -297,23 +297,14 @@
     color: var(--zp-iris-text);
     border-color: color-mix(in srgb, var(--zp-iris) 40%, transparent);
   }
-  /* 사례 노트의 내부 링크 (옵시디언 [[링크]]) */
+  /* 사례 노트의 내부 링크: 누르면 용어 설명 · 다른 사례로 간다 (괄호 기호 없이 밑줄만) */
   .wikilink {
     @apply cursor-pointer rounded-[3px] text-left font-medium text-iris-text;
     font: inherit;
     font-weight: 550;
-  }
-  .wikilink::before,
-  .wikilink::after {
-    color: var(--zp-text-3);
-    opacity: 0.55;
-    font-weight: 400;
-  }
-  .wikilink::before {
-    content: '[[';
-  }
-  .wikilink::after {
-    content: ']]';
+    text-decoration: underline;
+    text-decoration-color: color-mix(in srgb, var(--zp-iris) 35%, transparent);
+    text-underline-offset: 3px;
   }
   .wikilink:hover,
   .wikilink:focus-visible {

@@ -128,6 +128,59 @@ def make_live_llm(choice: str, cfg: Any, env_file: str | None = None) -> tuple[A
     return ClientRoleLLM(LLMClient(s), models=dict(cfg.models), temperature=cfg.temperature), f"실제 LLM ({s.llm_model})"
 
 
+# 의료진 대화의 대상 AI에게 붙이는 답 형식 (진료 화면에서 읽기 쉽고, 생성 · 추출 · 재작성 호출이 짧아진다). 레드팀에는 붙이지 않는다.
+ANSWER_STYLE = """[답 형식]
+이 답은 진료 중인 의사의 화면에 그대로 보입니다.
+- 사례마다 짧은 문장 두세 개로 씁니다. 표, 머리글(#), 굵은 글씨(**)는 쓰지 않습니다.
+- 질문에 답하는 데 필요한 값만 씁니다. 묻지 않은 날짜 · 나이 · 지역 · 횟수는 덧붙이지 않습니다.
+- 기록에 없는 내용은 '-'로 채우지 말고 쓰지 않습니다."""
+
+
+class AnswerStyleLLM:
+    """의료진 대화의 LLM을 감싼다. 대상 AI 지시문 끝에 답 형식을 붙이고, 다른 역할은 그대로 보낸다."""
+
+    def __init__(self, inner: Any) -> None:
+        self.inner = inner
+
+    def __getattr__(self, name: str) -> Any:          # usage · waiting …
+        return getattr(self.inner, name)
+
+    def complete(self, role: str, system: str, messages: list[dict[str, str]], **kw: Any) -> str:
+        if role == "target" and ANSWER_STYLE not in system:
+            system = f"{system}\n\n{ANSWER_STYLE}"
+        return self.inner.complete(role, system, messages, **kw)
+
+
+class Turn0Cache:
+    """
+    첫 답(턴 0) 요청과 받은 답을 대화 사이에 나눠 쓴다. 같은 환자 · 같은 진료 목적이면 검색 사례 · 질문 · 지시문이 같아 요청이
+    글자까지 같다(온도 0). 다른 의료진이 같은 환자를 열거나 다시 열 때 실제 LLM을 다시 부르지 않는다. 메모리에만 둔다.
+    """
+
+    def __init__(self, cap: int = 4000) -> None:
+        self.cap = cap
+        self.lock = threading.Lock()
+        self.answers: dict[tuple[str, str, str], list[str]] = {}
+
+    def get(self, key: tuple[str, str, str], n: int) -> str | None:
+        with self.lock:
+            got = self.answers.get(key)
+            return got[n] if got is not None and n < len(got) else None
+
+    def put(self, key: tuple[str, str, str], n: int, out: str) -> None:
+        with self.lock:
+            got = self.answers.setdefault(key, [])
+            if len(got) == n:
+                got.append(out)
+            while len(self.answers) > self.cap:                 # 오래된 요청부터 지운다
+                self.answers.pop(next(iter(self.answers)))
+
+    def forget(self, keys: set[tuple[str, str, str]]) -> None:
+        with self.lock:
+            for k in keys:
+                self.answers.pop(k, None)
+
+
 class Turn0LLM:
     """
     의료진 대화의 첫 답(턴 0, 사례 검색)을 만들 때 쓰는 LLM.
@@ -136,29 +189,44 @@ class Turn0LLM:
       - 턴 0에서는 C1과 C1S가 모두 빈 State에서 시작해 공개 계획과 재작성 요청이 똑같다. 그래서 다음 갈래(next_arm 뒤)는
         앞 갈래가 받은 답을 같은 요청의 차례대로 다시 쓴다. 한 갈래 안에서 같은 요청을 다시 보내면(형식이 틀려 다시 추출,
         재작성 두 번째 시도) 실제로 다시 부른다.
-    대화 하나를 만들 때마다 새로 만든다 (받은 답을 다른 대화에 쓰지 않는다).
+      - cache(Turn0Cache)를 주면 다른 대화가 받은 같은 요청의 답도 같은 차례대로 다시 쓴다. 첫 답이 거절이면 forget()으로
+        이 대화가 쓴 요청을 지워 다음에 열 때 새로 부르게 한다.
+      - on_call(role, n)은 실제로 부르기 직전에 알린다 (진료 지원 AI를 여는 화면의 진행 표시).
     """
 
-    def __init__(self, live: Any, det: Any) -> None:
+    def __init__(self, live: Any, det: Any, *, cache: Turn0Cache | None = None, on_call: Any = None) -> None:
         self.live, self.det = live, det
-        self._answers: dict[tuple[str, str, str], list[str]] = {}
+        self.cache = cache if cache is not None else Turn0Cache()
+        self.on_call = on_call
+        self.keys: set[tuple[str, str, str]] = set()
+        self.calls = 0
         self._used: dict[tuple[str, str, str], int] = {}
 
     def next_arm(self) -> None:
         """다음 갈래의 턴 0을 시작한다: 같은 요청을 처음부터 차례대로 다시 쓴다."""
         self._used = {}
 
+    def forget(self) -> None:
+        self.cache.forget(self.keys)
+
     def complete(self, role: str, system: str, messages: list[dict[str, str]], **kw: Any) -> str:
         if role in QUESTION_ROLES:
             return self.det.complete(role, system, messages, **kw)
         key = (role, system, json.dumps(messages, ensure_ascii=False))
-        got = self._answers.setdefault(key, [])
         n = self._used.get(key, 0)
         self._used[key] = n + 1
-        if n < len(got):
-            return got[n]
+        self.keys.add(key)
+        hit = self.cache.get(key, n)
+        if hit is not None:
+            return hit
+        self.calls += 1
+        if self.on_call is not None:
+            try:
+                self.on_call(role, self.calls)
+            except Exception:                                    # 진행 표시가 실패해도 호출은 한다
+                pass
         out = self.live.complete(role, system, messages, **kw)
-        got.append(out)
+        self.cache.put(key, n, out)
         return out
 
 
