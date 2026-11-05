@@ -6,7 +6,7 @@ import { ErrorState, LoadingState } from '../components/common/StatusViews';
 import { useToast } from '../components/layout/Toast';
 import { useWorkspace } from '../state/WorkspaceContext';
 import { koreanNames } from '../lib/koTerms';
-import type { LaunchProgress, WorklistPatient } from '../types/domain';
+import type { LaunchProgress, VisitChoice, WorklistPatient } from '../types/domain';
 
 const SEX_KO = { male: '남', female: '여', unknown: '성별 미상' } as const;
 type StatusTab = WorklistPatient['status'] | 'ALL';
@@ -89,6 +89,9 @@ export function EmrPage() {
   const [tab, setTab] = useState<StatusTab>('ACTIVE');
   const [confirm, setConfirm] = useState(false);
   const [progress, setProgress] = useState<LaunchProgress | null>(null);
+  // 오늘 볼 진단: 진료 목적마다 고를 수 있는 진단(서버) · 의사가 기본과 다르게 고른 것 (진료 목적 → 진단 사건 번호)
+  const [visits, setVisits] = useState<{ id: string; purposes: Record<string, VisitChoice[]> | null } | null>(null);
+  const [chosen, setChosen] = useState<Record<string, string>>({});
   const detailRef = useRef<HTMLElement>(null);
   const current = state.patient.data ?? null;
   const currentTrial = current?.trialId;
@@ -144,6 +147,18 @@ export function EmrPage() {
     return () => ctl.abort();
   }, [picked]);
 
+  // 고른 환자의 '오늘 볼 진단' 후보 (진료 목적마다). 받지 못하면 고르기 없이 기본 기준 진료로 연다.
+  useEffect(() => {
+    if (!picked) return;
+    const ctl = new AbortController();
+    setVisits({ id: picked, purposes: null });
+    emrApi.visits(picked, ctl.signal).then(
+      (x) => setVisits((v) => (v && v.id === picked ? { id: picked, purposes: x.purposes } : v)),
+      () => setVisits((v) => (v && v.id === picked ? { id: picked, purposes: {} } : v)),
+    );
+    return () => ctl.abort();
+  }, [picked]);
+
   // 여는 동안 서버가 알려 주는 지금 단계 (실제 LLM 호출이 차례로 몇 번 이어진다)
   useEffect(() => {
     if (!busy) {
@@ -169,7 +184,10 @@ export function EmrPage() {
   function pick(p: WorklistPatient) {
     setConfirm(false);
     setPicked(p.fhirId);
-    setPurpose((p.purposes.find((x) => x.trialId === currentTrial) ?? p.purposes[0]).purpose);
+    const cur = p.purposes.find((x) => x.trialId === currentTrial);
+    setPurpose((cur ?? p.purposes[0]).purpose);
+    // 지금 연 대화가 고른 진단으로 연 것이면 그 진단을 골라 둔다 ('돌아가기'가 되게)
+    setChosen(cur && current?.visitChosen && current.visitEvent ? { [cur.purpose]: current.visitEvent } : {});
     window.setTimeout(() => {
       if (window.matchMedia('(max-width: 1023px)').matches) detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }, 0);
@@ -180,7 +198,7 @@ export function EmrPage() {
     setConfirm(false);
     setBusy(true);
     try {
-      const r = await emrApi.launch(patient.fhirId, purpose);
+      const r = await emrApi.launch(patient.fhirId, purpose, visitEvent);
       actions.resetAndReload();
       toast(`환자 ${patient.identifier}로 진료 지원 AI를 열었습니다${r.seconds != null ? ` (${Math.round(r.seconds)}초)` : ''}.`);
       navigate('/');
@@ -192,18 +210,35 @@ export function EmrPage() {
   }
 
   const sel = patient?.purposes.find((x) => x.purpose === purpose) ?? null;
-  // 진료 목적이 모두 같은 날 기준이면 날짜를 한 번만 보인다
+  const choices = (patient && purpose && visits?.id === patient.fhirId && visits.purposes?.[purpose]) || null;
+  const defaultChoice = choices?.find((c) => c.isDefault) ?? null;
+  // 기본과 다르게 고른 진단 (없으면 null = 기본 기준 진료)
+  const choice = (purpose && chosen[purpose] && choices?.find((c) => c.eventId === chosen[purpose] && !c.isDefault)) || null;
+  const visitEvent = choice?.eventId ?? null;
+  // 진료 목적이 모두 같은 날 기준이면 날짜를 한 번만 보인다 (오늘 진단을 골랐으면 카드마다)
   const days = [...new Set((patient?.purposes ?? []).map((x) => x.visitDate))];
-  const sameDay = days.length === 1 ? days[0] : null;
-  const selIsCurrent = !!sel && sel.trialId === currentTrial;
+  const sameDay = days.length === 1 && !choice ? days[0] : null;
+  const selIsCurrent =
+    !!sel && sel.trialId === currentTrial && (current?.visitChosen ? current.visitEvent === visitEvent : visitEvent === null);
   const switching = !!current && !!sel && !selIsCurrent;
 
-  // 환자 · 진료 목적을 고르고 1초쯤 머물면 서버가 첫 답을 뒤에서 미리 만들어 둔다 ('열기'가 짧아진다). 결과는 화면에 알리지 않는다.
-  const prefetchFor = sel && !selIsCurrent && patient ? `${patient.fhirId}|${sel.purpose}` : null;
+  function choose(eventId: string) {
+    if (!purpose) return;
+    setChosen((c) => {
+      const next = { ...c };
+      if (eventId === defaultChoice?.eventId) delete next[purpose];
+      else next[purpose] = eventId;
+      return next;
+    });
+    setConfirm(false);
+  }
+
+  // 환자 · 진료 목적(· 오늘 진단)을 고르고 1초쯤 머물면 서버가 첫 답을 뒤에서 미리 만들어 둔다 ('열기'가 짧아진다). 결과는 화면에 알리지 않는다.
+  const prefetchFor = sel && !selIsCurrent && patient ? JSON.stringify([patient.fhirId, sel.purpose, visitEvent]) : null;
   useEffect(() => {
     if (!prefetchFor) return;
-    const [fhirId, why] = prefetchFor.split('|');
-    const t = window.setTimeout(() => void emrApi.prefetch(fhirId, why), 1000);
+    const [fhirId, why, ev] = JSON.parse(prefetchFor) as [string, string, string | null];
+    const t = window.setTimeout(() => void emrApi.prefetch(fhirId, why, ev), 1000);
     return () => window.clearTimeout(t);
   }, [prefetchFor]);
 
@@ -355,6 +390,8 @@ export function EmrPage() {
                 <div role="radiogroup" aria-labelledby="purpose-label" className="mt-2 space-y-1.5">
                   {patient.purposes.map((x) => {
                     const on = x.purpose === purpose;
+                    // 오늘 진단을 골랐으면 고른 진료 목적 카드는 그 진단의 진료일 기준으로 보인다
+                    const v = on && choice ? { date: choice.date, dx: choice.label, item: choice.item, co: choice.comorbidity } : { date: x.visitDate, dx: x.mainDx, item: x.item, co: x.comorbidity };
                     return (
                       <label
                         key={x.trialId}
@@ -365,19 +402,42 @@ export function EmrPage() {
                           <span className="font-semibold text-ink">{x.purposeLabel}</span>
                           {!sameDay && (
                             <span className="num ml-2 text-xs text-ink-3" title="진료 지원 AI는 이 목적에 맞는 가장 최근 진료를 기준으로 환자 요약(나이 · 성별 · 주진단 · 동반질환 · 고려 중인 처치)을 만듭니다">
-                              {x.visitDate} 진료 기준
+                              {v.date} 진료 기준
                             </span>
                           )}
                           <span className="mt-0.5 block text-ink-2">
-                            {x.mainDx}
-                            {x.item ? ` · 고려 중: ${x.item}` : ''}
+                            {v.dx}
+                            {v.item ? ` · 고려 중: ${v.item}` : ''}
                           </span>
-                          {x.comorbidity && <span className="mt-0.5 block text-xs text-ink-3">동반질환: {x.comorbidity}</span>}
+                          {v.co && <span className="mt-0.5 block text-xs text-ink-3">동반질환: {v.co}</span>}
                         </span>
                       </label>
                     );
                   })}
                 </div>
+                {choices && choices.length > 1 && (
+                  <div className="mt-3">
+                    <label htmlFor="visit-pick" className="text-xs font-semibold text-ink-3">
+                      오늘 볼 진단
+                    </label>
+                    <select
+                      id="visit-pick"
+                      value={choice?.eventId ?? defaultChoice?.eventId ?? ''}
+                      onChange={(e) => choose(e.target.value)}
+                      className="mt-1 h-9 w-full rounded-control border border-line-input bg-surface px-2 text-[13px] text-ink focus:border-focus"
+                    >
+                      {choices.map((c) => (
+                        <option key={c.eventId} value={c.eventId}>
+                          {c.label} · {c.date}
+                          {c.isDefault ? ' (기본)' : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="mt-1 text-xs leading-5 text-ink-3">
+                      다른 진단을 고르면 그 진료일을 기준으로 환자 요약을 만들고 비슷한 사례를 찾습니다.
+                    </p>
+                  </div>
+                )}
               </div>
               <ChartList title="최근 진단" source="FHIR Condition" items={chart?.id === patient.fhirId ? chart.conditions : null} empty="진단 기록이 없습니다." />
               <ChartList title="최근 처방" source="FHIR MedicationRequest" items={chart?.id === patient.fhirId ? chart.meds : null} empty="처방 기록이 없습니다." />

@@ -95,11 +95,12 @@ class Monitor:
 
     # ── 감사 기록 ──
     def log(self, action: str, session: Any = None, *, user: dict[str, Any] | None = None, actor: str | None = None,
-            **kw: Any) -> dict[str, Any]:
+            trial: str | None = None, **kw: Any) -> dict[str, Any]:
+        """감사 기록 한 건. 대화가 없는 일(첫 답 미리 준비 등)은 trial만 준다."""
         with self._seq_lock:
             n = next(self._ids)
         e = dict(id=f"A{n:04d}", at=time.time(), actor=actor_label(user, actor or ACTOR), action=action,
-                 session=session.id if session else None, trial=session.trial_id if session else None, **kw)
+                 session=session.id if session else None, trial=session.trial_id if session else trial, **kw)
         if user:
             e["user_id"] = user["user_id"]
         self.audit.append(e)

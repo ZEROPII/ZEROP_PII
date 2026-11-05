@@ -10,7 +10,7 @@ jira: []
 tags: [medicloak, clinician-ui, extraction, llm, latency, privacy]
 supersedes: []
 superseded_by: []
-sources: [webdemo/backend/textguard.py, webdemo/backend/visit.py, webdemo/backend/live.py, webdemo/backend/review.py, webdemo/backend/clinic.py, webdemo/backend/engine.py, webdemo/backend/app.py, webdemo/backend/fhir.py, webdemo/backend/monitor.py, medicloak/cli.py, tests/medicloak/test_medicloak.py, tests/medicloak/fake_anthropic.py, frontend/src/lib/scopeHint.ts, frontend/src/lib/scopeHint.test.ts, frontend/src/lib/korean.ts, frontend/src/components/clinic/ClinicalChat.tsx, frontend/src/components/clinic/PatientBanner.tsx, frontend/src/components/clinic/CaseNotePanel.tsx, frontend/src/components/clinic/EmrCaseList.tsx, frontend/src/pages/ClinicalAssistPage.tsx, frontend/src/pages/EmrPage.tsx, frontend/src/pages/HistoryPage.tsx, frontend/src/components/report/KTurnChart.tsx, medicloak/README.md]
+sources: [webdemo/backend/textguard.py, webdemo/backend/visit.py, webdemo/backend/live.py, webdemo/backend/review.py, webdemo/backend/clinic.py, webdemo/backend/engine.py, webdemo/backend/app.py, webdemo/backend/fhir.py, webdemo/backend/monitor.py, medicloak/cli.py, tests/medicloak/test_medicloak.py, tests/medicloak/fake_anthropic.py, frontend/src/lib/scopeHint.ts, frontend/src/lib/scopeHint.test.ts, frontend/src/lib/korean.ts, frontend/src/components/clinic/ClinicalChat.tsx, frontend/src/components/clinic/PatientBanner.tsx, frontend/src/components/clinic/CaseNotePanel.tsx, frontend/src/components/clinic/EmrCaseList.tsx, frontend/src/pages/ClinicalAssistPage.tsx, frontend/src/pages/EmrPage.tsx, frontend/src/pages/HistoryPage.tsx, frontend/src/components/report/KTurnChart.tsx, frontend/src/components/clinic/ClinicValue.tsx, frontend/src/components/clinic/ClinicalMessage.tsx, frontend/src/components/chat/PrivacyHighlight.tsx, frontend/src/pages/AuditPage.tsx, frontend/src/api/emrApi.ts, medicloak/README.md]
 ---
 # ADR-0029. 의료진 체험에서 나온 문제를 고친다
 
@@ -111,6 +111,33 @@ sources: [webdemo/backend/textguard.py, webdemo/backend/visit.py, webdemo/backen
 - **조회 기록**: 지난 진료에 환자 번호(EMR 번호 앞 8자리)를 보이고, '서버를 다시 켜기 전'은 '보관된 기록'으로 바꾼다.
 - **리포트 그래프**: '경계 N명' · '기준 미달' 글자를 선 위에 그리고, 띠 색 테두리를 둘러 선과 겹쳐도 읽히게 한다.
 
+### 7. 오늘 진단 고르기 (2026-11-06 덧붙임)
+
+- **배경**: 가장 최근 진료와 오늘 볼 문제가 다를 수 있다. 환자 `0c6f6684`는 마지막 진료가 치은염(2025-05-20)이라, CKD 환자의 처방을 보려 해도 고를 수 없었다.
+- **결정**:
+  - 외래 목록의 진료 목적 아래에 '오늘 볼 진단'을 둔다. 후보는 그 환자의 진단 이름마다 그 목적이 성립하는(관련 항목이 있는) 가장 최근 사건이고, 최근 것부터 보인다(`GET /api/emr/visits`). 기본(지금 기준 진료)에는 '(기본)'을 붙인다.
+  - 고르면 그 진단 사건을 기준 진료로 쓴다(`visit_binding(index_event=…)`): 주진단 · 고려 중 처치 · 그날 이어지던 동반질환 · 그날까지의 검색 기록. 고른 진료 목적 카드가 그 진단 기준으로 바뀐다.
+  - 열기 · 미리 준비에 `visitEvent`를 보낸다. 기본과 같으면 기본으로 본다. 쓸 수 없는 사건이면 400이다.
+  - 같은 환자 · 목적이라도 고른 진단이 다르면 대화를 새로 연다. 환자 요약에 `visitEvent` · `visitChosen`을 더해, 지금 연 대화와 같은지 화면이 판단한다('돌아가기').
+  - 직접 입력은 받지 않는다. 기록에 있는 진단만 고르므로 검색 · 패널 규칙이 그대로 맞는다.
+  - 레드팀 · 연구 실행은 바뀌지 않는다.
+
+### 8. 첫 답 미리 준비를 감사 기록에 (2026-11-06 덧붙임)
+
+- 미리 준비는 열기 전에도 환자 요약과 검색된 사례 기록을 대상 AI로 보낸다. 하나가 끝날 때마다 감사 기록에 `emr_prefetch`(진료 목적, 질의 환자, 고른 진단과 그 진료일, 실제 호출 수, 성공 여부)를 남긴다. 받아 둔 답만 써서 호출이 없었으면 그렇게 보인다. 화면에는 '첫 답 미리 준비 (열기 전)'로 보인다.
+- 도는 중에 다른 환자 · 진단을 고르면 버리지 않고, 마지막으로 고른 것 하나만 앞의 것이 끝난 뒤 이어서 준비한다(`queued`). 진단을 바꿔 고르는 흐름에서 고른 진단이 준비되지 않던 일을 막는다.
+- 열기(`emr_launch`)에도 고른 진단과 진료일을 남긴다.
+
+### 9. 답 속 비공개 표시를 알아보기 쉽게 (2026-11-06 덧붙임)
+
+- **배경**: '처방 약 비공개' 표시가 다른 회색 꼬리표와 비슷했고, 사례 줄 사이 빈 줄에 혼자 떨어져 앞 줄의 꼬리표처럼 보였다. 같은 줄에 그 사례의 다른 약이 보이는데 '처방 약 비공개'라고만 해 헷갈렸다. 글에 남은 '(비공개)'는 사례와 상관없이 가림 조치 순서대로 이어져, 사례 2의 약 자리가 사례 1 시기로 이름 붙기도 했다.
+- **결정**:
+  - 표시는 그 사례 마지막 줄의 글 끝에 붙인다. 빈 줄 · 줄바꿈 앞으로 당긴다. 다음 사례가 없으면 그 사례가 나온 문단 끝이다.
+  - 같은 답에 그 사례의 같은 단서가 다른 값으로 보이면 '처방 약 일부 비공개'로 쓴다(`partial`). 진료 기록 복사 · 보안 담당자 화면도 같다.
+  - 글에 남은 '(비공개)'는 그 문장의 사례 조치에 잇는다(`place_suppressed`). 사례 안에서는 조치 순서대로 잇는다.
+  - 모양: 잠금색 테두리를 두고, 답 안에서는 사선 막대(가린 자리)를 붙인다. 글 안의 표시에는 단서 이름을 붙인다('처방 약 비공개'). 항목 이름이 따로 보이는 줄에서는 붙이지 않는다.
+  - 내보낸 글 · 판정 · 후보 수는 바뀌지 않는다. 화면 조각만 바뀐다.
+
 ## 근거
 
 - **문서 대조 보탬**: 추출기가 빠뜨린 값은 판정에서 아예 사라진다. 이번 사례 3처럼 가장 드문 사례가 그대로 노출되고 집계에도 없다. 문서에 그대로 있는 표현만 더하므로 거짓 단서가 들어가지 않는다. 판정은 더 보수적이 될 뿐이다.
@@ -126,7 +153,7 @@ sources: [webdemo/backend/textguard.py, webdemo/backend/visit.py, webdemo/backen
 - **보이는 값이 없는 사례를 목록에서 빼기**: 이번 사례 3은 가린 것이 아니라 첫 답이 말하지 않은 것이었다. 표시를 바로잡는 것으로 충분하다.
 - **기간을 후보 수 단서로 세기**: 온톨로지와 k 계산에 기간 노드를 더하고 레드팀을 다시 재야 한다. 범위를 정해 두는 쪽이 빠르고, 연구 과제로 남긴다.
 - **추출을 사례마다 나눠 동시에 부르기 · 프롬프트 캐시**: 질문 하나의 시간은 대부분 추출과 다시 확인이다. 나누면 호출과 토큰이 늘고, 캐시는 LLM 클라이언트(`core/`)를 바꿔야 한다. 실제 키로 재 보고 정한다.
-- **오늘 진단을 의사가 직접 고르기**: 외래 목록에 진단 고르기와 새 기준 계산이 필요하다. 이번에는 가장 최근 진료를 기본으로 하고 남은 일로 둔다.
+- **오늘 진단을 의사가 직접 고르기**: 처음에는 가장 최근 진료를 기본으로 하고 남은 일로 두었다. 같은 날 결정 7에서 그 환자의 진단 목록에서 고르는 방식으로 넣었다.
 
 ## 결과와 영향
 
@@ -140,6 +167,7 @@ sources: [webdemo/backend/textguard.py, webdemo/backend/visit.py, webdemo/backen
   - 조회 기록의 `patientId`
   - 외래 목록 진료 목적의 `comorbidity`
   - `POST /api/emr/prefetch`
+  - (덧붙임) `GET /api/emr/visits`, 열기 · 미리 준비의 `visitEvent`, 환자 요약의 `visitEvent` · `visitChosen`, 답 조각의 `partial`, 감사 기록 `emr_prefetch`와 `visit_dx` · `visit_date`
 - 서버 옵션: `--prefetch on|off`(기본 on), `--visit recent|research`(기본 recent).
 - 같은 DB를 여러 앱이 쓰는 테스트에서 감사 기록 번호가 겹치던 문제를 고쳤다: 번호가 겹치면 DB의 최대 번호로 맞춰 다시 쓴다.
 - 테스트
@@ -147,10 +175,10 @@ sources: [webdemo/backend/textguard.py, webdemo/backend/visit.py, webdemo/backen
   - 기간 범위(범위와 상관없이 같음, 노트 '기간', 판정 집계에서 뺌), 추출기 출력 바로잡기 단위 테스트
   - 앞 호출이 뒤 호출을 기다리지 않기, 가장 최근 진료 기준 · 동반질환, 미리 준비 뒤 열 때 LLM 호출 0번 · 조회 기록 환자 번호, 서버 옵션
   - 화면: 범위 안내 판정 · 숫자 뒤 조사
+  - (덧붙임) 오늘 진단 고르기(후보 · 고른 진단으로 미리 준비 뒤 LLM 0번 · 기본으로 다시 열면 새 대화 · 잘못된 사건 400 · 보안 담당자 403 · 감사 기록), 비공개 표시 자리(빈 줄 앞 · 마지막 사례 문단 끝) · '일부' · 글 속 '(비공개)'를 그 사례 조치에 잇기, 복사 문구 '일부 비공개'
 
 ## 남은 일
 
 - 질문 하나의 시간(실측 평균 약 19초, 대부분 추출 · 다시 확인)을 줄이는 일: 프롬프트 캐시, 더 빠른 추출 모델, 바꿀 것이 없는 사례의 다시 확인 줄이기를 실제 키로 재 본다.
-- '사례 전체' 질문 탭, 오늘 진단 고르기, 동반질환을 검색 조건으로 켜고 끄기(사례가 적어지면 안내).
+- '사례 전체' 질문 탭, 동반질환을 검색 조건으로 켜고 끄기(사례가 적어지면 안내).
 - 기간을 후보 수 모델에 넣을지 연구한다.
-- 미리 준비를 의료진마다 하나 넘게(마지막으로 고른 것 우선) 할지 정한다.

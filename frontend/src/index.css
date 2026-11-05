@@ -282,13 +282,25 @@
     border-bottom-color: var(--zp-iris);
     outline: none;
   }
-  /* 의료진 화면: 가린 값 (잠금 표시). 위험색을 쓰지 않는다. */
+  /*
+   * 의료진 화면: 가린 값 (잠금 표시). 위험색을 쓰지 않는다.
+   * 다른 회색 꼬리표('질문 2회' 등)와 헷갈리지 않게 잠금색 테두리를 두고, 답 안에서는 사선 막대(가린 자리)를 붙인다.
+   */
   .lock-token {
     @apply inline-flex items-center gap-1 whitespace-nowrap rounded-[6px] px-1.5 align-baseline font-semibold;
     font-size: 0.86em;
     line-height: 1.6;
     color: var(--emr-lock);
     background: var(--emr-lock-tint);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--emr-lock) 42%, transparent);
+  }
+  .lock-bar {
+    display: inline-block;
+    flex-shrink: 0;
+    width: 1.7em;
+    height: 0.8em;
+    border-radius: 2px;
+    background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--emr-lock) 70%, transparent) 0 1.5px, transparent 1.5px 4px);
   }
   /* 의료진 화면: 넓은 범위로 바꾼 값 */
   .range-value {

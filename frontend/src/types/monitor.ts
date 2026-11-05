@@ -380,8 +380,13 @@ export interface AuditEntry {
   turn?: number | null;
   release?: string | null;
   protected?: number;
-  /** EMR 열기(emr_launch): 진료 목적 */
+  /** EMR 열기(emr_launch) · 첫 답 미리 준비(emr_prefetch): 진료 목적, 의사가 고른 오늘 진단과 그 진료일 */
   purpose?: string;
+  visit_dx?: string;
+  visit_date?: string;
+  /** 첫 답 미리 준비(emr_prefetch): 실제 LLM 호출 수 · 성공 여부 */
+  calls?: number;
+  ok?: boolean;
   /** 로그인 기록: 접속 주소 */
   client?: string;
   /** 규칙 기록: 단서 종류 */

@@ -33,27 +33,29 @@ function caseIdOfRef(ref: string | undefined, cases: CaseSummary[]): string | nu
 }
 
 /** 조각 하나: 글이면 의료 용어 밑줄, 보호 조치가 걸린 값이면 범위 · 비공개 표시 */
-function Piece({ seg, tf, mentions }: { seg: MessageSegment; tf: Map<string, PrivacyTransformation>; mentions: TermMention[] | undefined }) {
+function Piece({ seg, tf, mentions, named }: { seg: MessageSegment; tf: Map<string, PrivacyTransformation>; mentions: TermMention[] | undefined; named: boolean }) {
   const terms = <TermText text={seg.text} mentions={mentions} />;
   if (seg.kind === 'text') return terms;
-  if (seg.placeholder) return <ClinicValue text={seg.text} transformation={tf.get(seg.transformationId)} placeholderLabel={seg.label ?? '값'} />;
+  if (seg.placeholder)
+    return <ClinicValue text={seg.text} transformation={tf.get(seg.transformationId)} placeholderLabel={seg.label ?? '값'} partial={seg.partial} />;
   return (
-    <ClinicValue text={seg.text} transformation={tf.get(seg.transformationId)}>
+    <ClinicValue text={seg.text} transformation={tf.get(seg.transformationId)} named={named}>
       {terms}
     </ClinicValue>
   );
 }
 
-function Pieces({ run, tf, mentions }: { run: Inline[]; tf: Map<string, PrivacyTransformation>; mentions: (TermMention[] | undefined)[] }) {
+/** named: 글 안의 '비공개' 표시에 단서 이름을 붙인다 ('처방 약 비공개'). 항목 이름이 따로 보이는 줄(fact)에서는 붙이지 않는다. */
+function Pieces({ run, tf, mentions, named = true }: { run: Inline[]; tf: Map<string, PrivacyTransformation>; mentions: (TermMention[] | undefined)[]; named?: boolean }) {
   return (
     <>
       {run.map((p) =>
         p.bold ? (
           <strong key={p.k} className="font-semibold">
-            <Piece seg={p.seg} tf={tf} mentions={mentions[p.k]} />
+            <Piece seg={p.seg} tf={tf} mentions={mentions[p.k]} named={named} />
           </strong>
         ) : (
-          <Piece key={p.k} seg={p.seg} tf={tf} mentions={mentions[p.k]} />
+          <Piece key={p.k} seg={p.seg} tf={tf} mentions={mentions[p.k]} named={named} />
         ),
       )}
     </>
@@ -61,7 +63,7 @@ function Pieces({ run, tf, mentions }: { run: Inline[]; tf: Map<string, PrivacyT
 }
 
 function Block({ b, tf, mentions, showCase }: { b: AnswerBlock; tf: Map<string, PrivacyTransformation>; mentions: (TermMention[] | undefined)[]; showCase: boolean }) {
-  const run = (r: Inline[]) => <Pieces run={r} tf={tf} mentions={mentions} />;
+  const run = (r: Inline[], named = true) => <Pieces run={r} tf={tf} mentions={mentions} named={named} />;
   switch (b.kind) {
     case 'fact':
       return (
@@ -75,7 +77,7 @@ function Block({ b, tf, mentions, showCase }: { b: AnswerBlock; tf: Map<string, 
               </span>
             )}
           </div>
-          <div className="min-w-0 break-words font-medium">{run(b.value)}</div>
+          <div className="min-w-0 break-words font-medium">{run(b.value, false)}</div>
         </div>
       );
     case 'heading':

@@ -114,4 +114,18 @@ describe('지워진 가린 값의 자리 표시', () => {
     );
     expect(text).toBe('사례1은 40~44세 (범위)였고 약을 처방받았습니다. (시기 비공개)');
   });
+
+  it('같은 사례의 같은 단서가 다른 값으로 보이면 일부 비공개로 남긴다', () => {
+    const tf = [
+      { id: 'm1', attribute: 'MED', attributeLabel: '사례 1 처방 약', action: 'suppress', disclosedValue: null, levelDescription: '가림', caseRef: '사례1' },
+    ] as unknown as ProtectionResult['transformations'];
+    const text = answerPlainText(
+      [
+        { kind: 'text', text: '사례1: simvastatin' },
+        { kind: 'disclosure', text: '(비공개)', transformationId: 'm1', placeholder: true, label: '처방 약', partial: true },
+      ],
+      tf,
+    );
+    expect(text).toBe('사례1: simvastatin (처방 약 일부 비공개)');
+  });
 });

@@ -124,7 +124,7 @@ export function requestDraft(caseLabel: string, names: string[]): string {
 
 /** 답을 진료 기록에 붙일 때 쓰는 평문. 넓힌 값에는 (범위)를 붙인다. */
 export function answerPlainText(
-  segments: { kind: string; text: string; transformationId?: string; placeholder?: boolean; label?: string }[],
+  segments: { kind: string; text: string; transformationId?: string; placeholder?: boolean; label?: string; partial?: boolean }[],
   tf: PrivacyTransformation[],
 ): string {
   const byId = new Map(tf.map((t) => [t.id, t]));
@@ -132,7 +132,7 @@ export function answerPlainText(
     .map((s) => {
       if (s.kind !== 'disclosure' || !s.transformationId) return s.text;
       const t = byId.get(s.transformationId);
-      if (s.placeholder) return ` (${s.label ?? (t ? attrName(t) : '값')} 비공개)`;
+      if (s.placeholder) return ` (${s.label ?? (t ? attrName(t) : '값')} ${s.partial ? '일부 ' : ''}비공개)`;
       if (t?.action === 'suppress') return '(비공개)';
       if (t?.action === 'generalize') return `${s.text} (범위)`;
       return s.text;

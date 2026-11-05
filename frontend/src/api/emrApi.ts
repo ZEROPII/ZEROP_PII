@@ -1,7 +1,7 @@
 // 가상 EMR API (python -m medicloak): 외래 진료 목록 · 진료 지원 AI 열기 · FHIR R4 읽기.
 // 의료진 계정만 쓴다. FHIR로는 외래 환자만 열리고, 유사 사례(과거 기록) 환자는 404다.
 
-import type { LaunchProgress, WorklistPatient } from '../types/domain';
+import type { LaunchProgress, VisitChoice, WorklistPatient } from '../types/domain';
 import { ApiError } from './types';
 import { API_BASE, FHIR_BASE, notifyUnauthorized } from './session';
 
@@ -48,17 +48,21 @@ export interface FhirBundle {
 
 export const emrApi = {
   worklist: (signal?: AbortSignal) => get<WorklistPatient[]>(`${API_BASE}/emr/worklist`, signal),
+  /** 오늘 볼 진단으로 고를 수 있는 것 (진료 목적마다, 최근 것부터) */
+  visits: (fhirId: string, signal?: AbortSignal) =>
+    get<{ purposes: Record<string, VisitChoice[]> }>(`${API_BASE}/emr/visits?fhirId=${encodeURIComponent(fhirId)}`, signal),
   launchProgress: (signal?: AbortSignal) => get<LaunchProgress>(`${API_BASE}/emr/launch/progress`, signal),
   /** 질문에 답하는 중의 단계 (실제 LLM 대화) */
   questionProgress: (signal?: AbortSignal) => get<LaunchProgress>(`${API_BASE}/clinic/progress`, signal),
-  launch: async (fhirId: string, purpose: string): Promise<{ trialId: string; seconds?: number; calls?: number }> => {
+  /** visitEvent: 의사가 고른 오늘 진단 (없으면 기본 기준 진료) */
+  launch: async (fhirId: string, purpose: string, visitEvent?: string | null): Promise<{ trialId: string; seconds?: number; calls?: number }> => {
     let res: Response;
     try {
       res = await fetch(`${API_BASE}/emr/launch`, {
         method: 'POST',
         credentials: 'include',
         headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fhirId, purpose }),
+        body: JSON.stringify({ fhirId, purpose, visitEvent: visitEvent ?? null }),
       });
     } catch {
       throw new ApiError('서버에 연결할 수 없습니다.');
@@ -78,15 +82,15 @@ export const emrApi = {
   },
   /**
    * 고른 환자 · 진료 목적의 첫 답을 서버가 뒤에서 미리 만들어 두게 한다 (열기를 짧게). 실패해도 화면에는 알리지 않는다.
-   * status: started · busy(이미 준비 중) · current(지금 연 대화) · off(서버 설정)
+   * status: started · queued(앞의 미리 준비가 끝나면 이어서) · current(지금 연 대화) · off(서버 설정)
    */
-  prefetch: async (fhirId: string, purpose: string): Promise<string> => {
+  prefetch: async (fhirId: string, purpose: string, visitEvent?: string | null): Promise<string> => {
     try {
       const res = await fetch(`${API_BASE}/emr/prefetch`, {
         method: 'POST',
         credentials: 'include',
         headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
-        body: JSON.stringify({ fhirId, purpose }),
+        body: JSON.stringify({ fhirId, purpose, visitEvent: visitEvent ?? null }),
       });
       if (!res.ok) return 'error';
       return ((await res.json()) as { status?: string }).status ?? 'error';

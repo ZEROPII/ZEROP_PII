@@ -29,6 +29,7 @@ function MessageBody({ message, mentions }: { message: ChatMessageModel; mention
             text={segment.text}
             transformation={byId.get(segment.transformationId)}
             placeholderLabel={segment.placeholder ? segment.label : undefined}
+            partial={segment.placeholder ? segment.partial : undefined}
           >
             {terms}
           </PrivacyHighlight>

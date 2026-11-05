@@ -31,7 +31,7 @@ from medical.retrieval import PANEL_LABEL, code_sets
 from webdemo.backend import intent as I
 from webdemo.backend.engine import ATTR_KO, QTYPE_KO, Engine, Session, parse_answer
 from webdemo.backend.review import CASE_DROPPED, ROUNDED, ref_no, same_text
-from webdemo.backend.textguard import duration_mentions
+from webdemo.backend.textguard import attribute_sentences, duration_mentions
 
 ATTR_LABEL = dict(AGE="나이", SEX="성별", REGION="거주 지역", DX="진단", PROC="시술", PERIOD="시기", MED="처방 약", PLAN="관리 계획",
                   DURATION="기간")
@@ -39,13 +39,59 @@ DURATION_NOTE = "기간은 범위로만 보여 줍니다"
 NOT_IN_FIRST = "첫 답에 나오지 않음"           # 사례 검색 첫 답이 이 사례를 말하지 않았다 (가린 것이 아니다)
 _CASE_LABEL = re.compile(r"사례\s*0*(\d+)(?!\d)")
 _SENTENCE_END = re.compile(r"[.!?。](?=\s|$)|\n")
+_PARA_BREAK = re.compile(r"\n[ \t]*\n")
+
+
+def place_suppressed(text: str, segments: list[dict[str, Any]], tf: list[dict[str, Any]], own_ref: str, n_cases: int) -> list[dict[str, Any]]:
+    """
+    글에 남은 '(비공개)' 자리를 그 문장의 사례에 맞는 가림 조치에 다시 잇는다.
+    segments_of는 '(비공개)'를 사례와 상관없이 가림 조치 순서대로 앞에서부터 잇는다. 값만 바꾼 답에서 사례 2의 약 자리가
+    사례 1의 시기로 이름 붙고, 정작 사례 1에는 표시가 빠졌다 (2026-11-06 화면 확인). 사례 안에서는 조치 순서(답에 나온 순서)대로 잇는다.
+    """
+    by_id = {t["id"]: t for t in tf}
+    slots: list[tuple[int, str]] = []
+    sents = attribute_sentences(text, n_cases)
+    pos = 0
+    for i, seg in enumerate(segments):
+        t = by_id.get(seg.get("transformationId") or "")
+        if seg["kind"] == "disclosure" and seg["text"] == SUPPRESSED and t is not None and t["action"] == SUPPRESS:
+            slots.append((i, _case_at(text, pos, sents) or own_ref))
+        pos += len(seg["text"])
+    if not slots:
+        return segments
+    order = [t["id"] for t in tf if t["action"] == SUPPRESS]
+    used: set[str] = set()
+    assign: dict[int, str] = {}
+    for want_case in (True, False):                     # 먼저 같은 사례의 조치, 남으면 아무 가림 조치
+        for i, ref in slots:
+            if i in assign:
+                continue
+            tid = next((x for x in order if x not in used and (not want_case or by_id[x].get("caseRef") == ref)), None)
+            if tid is not None:
+                assign[i] = tid
+                used.add(tid)
+    return [dict(seg, transformationId=assign[i]) if i in assign else seg for i, seg in enumerate(segments)]
+
+
+def _case_at(text: str, pos: int, sents: list[tuple[int, int, list[int], bool]]) -> str | None:
+    """pos가 든 문장의 사례: 사례가 하나면 그것, 여럿이면 그 문장에서 pos 바로 앞에 나온 '사례N'."""
+    for a, b, nums, _ in sents:
+        if a <= pos < b:
+            if len(nums) == 1:
+                return f"사례{nums[0]}"
+            before = [m for m in _CASE_LABEL.finditer(text, a, pos)]
+            return f"사례{int(before[-1].group(1))}" if before else None
+    return None
 
 
 def mark_hidden(text: str, segments: list[dict[str, Any]], tf: list[dict[str, Any]], own_ref: str) -> list[dict[str, Any]]:
     """
     실제 LLM 답은 재작성기가 가린 값을 문장에서 지워, 글에 '(비공개)' 자리가 남지 않는다 (사례 노트에만 보였다).
-    글에서 찾지 못한 '가림' 조치마다 그 사례 단락 끝(다음 사례가 시작하는 문장 앞, 없으면 답 끝)에 잠금 표시 조각을 넣는다.
-    조각에는 무엇을 가렸는지(단서 이름, 다른 사례면 사례 이름도)를 붙인다. 값은 넣지 않는다.
+    글에서 찾지 못한 '가림' 조치마다 그 사례 단락 끝(다음 사례가 시작하는 문장 앞, 없으면 그 사례가 나온 문단 끝)에 잠금 표시 조각을 넣는다.
+    자리는 그 사례 마지막 줄의 글 끝이다: 뒤따르는 빈 줄 · 줄바꿈 앞으로 당겨 그 줄 안에 붙인다 (빈 줄에 혼자 떨어지면
+    앞 줄의 꼬리표처럼 보였다, 의료진 체험 2026-11-05).
+    조각에는 무엇을 가렸는지(단서 이름, 다른 사례면 사례 이름도)를 붙인다. 값은 넣지 않는다. 같은 답에 그 사례의 같은 단서가
+    다른 값으로 보이면 partial(화면 '처방 약 일부 비공개')을 붙인다.
     사례째로 뺀 값은 뺀 사례 안내가 따로 있어 넣지 않는다. 내보낸 글 · 판정 · 후보 수는 그대로다 (화면 조각만 더한다).
     """
     matched = {s.get("transformationId") for s in segments if s.get("kind") == "disclosure"}
@@ -57,6 +103,7 @@ def mark_hidden(text: str, segments: list[dict[str, Any]], tf: list[dict[str, An
         return segments
     labels = [(m.start(), f"사례{int(m.group(1))}") for m in _CASE_LABEL.finditer(text)]
     end_of_text = len(text.rstrip())
+    shown = {(x["caseRef"], x["attribute"]) for x in tf if x["action"] != SUPPRESS and x.get("caseRef")}
 
     def block_end(ref: str) -> int:
         mine = [pos for pos, r in labels if r == ref]
@@ -64,9 +111,14 @@ def mark_hidden(text: str, segments: list[dict[str, Any]], tf: list[dict[str, An
             return end_of_text
         nxt = next((pos for pos, r in labels if pos > mine[-1] and r != ref), None)
         if nxt is None:
-            return end_of_text
-        ends = [m.start() if m.group() == "\n" else m.end() for m in _SENTENCE_END.finditer(text, mine[-1], nxt)]
-        return ends[-1] if ends else nxt
+            para = _PARA_BREAK.search(text, mine[-1])
+            at = para.start() if para else end_of_text
+        else:
+            ends = [m.start() if m.group() == "\n" else m.end() for m in _SENTENCE_END.finditer(text, mine[-1], nxt)]
+            at = ends[-1] if ends else nxt
+        while at > mine[-1] and text[at - 1].isspace():
+            at -= 1
+        return at
 
     order = {a: i for i, a in enumerate(("DX", "PROC", "MED", "PLAN", "PERIOD", "AGE", "SEX", "REGION"))}
     inserts = sorted((block_end(ref), ref_no(ref), order.get(attr, 99), x) for (ref, attr), x in want.items())
@@ -74,7 +126,8 @@ def mark_hidden(text: str, segments: list[dict[str, Any]], tf: list[dict[str, An
     def marker(x: dict[str, Any]) -> dict[str, Any]:
         name = ATTR_LABEL.get(x["attribute"], x["attribute"])
         label = name if x["caseRef"] == own_ref else f"{x['caseRef'].replace('사례', '사례 ')} {name}"
-        return dict(kind="disclosure", text=SUPPRESSED, transformationId=x["id"], placeholder=True, label=label)
+        return dict(kind="disclosure", text=SUPPRESSED, transformationId=x["id"], placeholder=True, label=label,
+                    partial=(x["caseRef"], x["attribute"]) in shown)
 
     out: list[dict[str, Any]] = []
     pos, k = 0, 0
@@ -302,7 +355,8 @@ class ClinicConversation:
         return dict(contextId=f"{self.workspace_id}:patient", ageSexLabel=f"{b['QUERY_AGE_BAND']} / {b['QUERY_SEX']}",
                     primaryDiagnosis=b["QUERY_MAIN_DX"], comorbidities=others, plannedProcedure=b["QUERY_RELATED_ITEM"],
                     queryPurpose=QTYPE_KO.get(p.query_type, p.query_type) + " 참고", source="backend", trialId=self.session.trial_id,
-                    visitDate=b["index_date"], aiSummary=[dict(label=lab, value=b["panel"][k]) for k, lab in PANEL_LABEL],
+                    visitDate=b["index_date"], visitEvent=b.get("index_event"), visitChosen=b.get("visit") == "chosen",
+                    aiSummary=[dict(label=lab, value=b["panel"][k]) for k, lab in PANEL_LABEL],
                     searchBasis=dict(until=b["index_date"], diagnoses=len(sets["DX"]), medications=len(sets["MED"]), procedures=len(sets["PROC"])))
 
     def similar_cases(self, context_id: str) -> list[dict[str, Any]]:
@@ -588,7 +642,8 @@ class ClinicConversation:
             self._fill_titles(entries)
             mode, text = rec["release_mode"], rec["response_text"]
             explanation = self._explain(s, rec, tf, k_before)
-            segments = [dict(kind="text", text=text)] if mode.startswith("REFUSAL") else mark_hidden(text, segments_of(text, tf), tf, s.ref)
+            segments = ([dict(kind="text", text=text)] if mode.startswith("REFUSAL")
+                        else mark_hidden(text, place_suppressed(text, segments_of(text, tf), tf, s.ref, len(self.slots)), tf, s.ref))
         acts = {t["action"] for t in tf if not t.get("duration")}
         decision = SUPPRESS if SUPPRESS in acts else GENERALIZE if GENERALIZE in acts else ALLOW
         k_after = self.k(s.case_id)
@@ -815,19 +870,23 @@ class ClinicDesk:
     def workspace_id(self) -> str:
         return self.current.workspace_id
 
-    def start(self, trial_id: str, *, launch: dict[str, Any] | None = None, on_call: Callable[[str, int], None] | None = None) -> ClinicConversation:
+    def start(self, trial_id: str, *, launch: dict[str, Any] | None = None, on_call: Callable[[str, int], None] | None = None,
+              visit_event: str | None = None) -> ClinicConversation:
         with self.lock:
             cur = self._current
             first = next((r for r in cur.session.logs[self.arm] if r.get("turn") == 0), None) if cur is not None else None
             refused0 = bool(first and first["release_mode"].startswith("REFUSAL"))          # 첫 답이 거절이면 새로 시도한다
-            if cur is not None and cur.session.trial_id == trial_id and cur.session.turn == 0 and not cur.session.messages and not refused0:
+            same_visit = cur is not None and getattr(cur.session, "visit_event", None) == visit_event
+            if (cur is not None and cur.session.trial_id == trial_id and same_visit and cur.session.turn == 0 and not cur.session.messages
+                    and not refused0):
                 # 같은 환자이고 아직 아무것도 묻지 않은 대화는 그대로 쓴다 (화면을 열 때 만든 기본 대화를 EMR에서 다시 열 때 등)
                 if launch is not None:
                     cur.session.launch = launch
                     self._changed(cur, "launch")
                 return cur
             with self.eng.lock:
-                s = self.eng.new_session(trial_id, source="clinic", budget=self.budget, llm_mode=self.llm_mode, on_call=on_call)
+                s = self.eng.new_session(trial_id, source="clinic", budget=self.budget, llm_mode=self.llm_mode, on_call=on_call,
+                                         visit_event=visit_event)
                 s.owner = self.owner
                 s.launch = launch
                 conv = ClinicConversation(self.eng, s, self.arm, compare=self.compare, location_label=self.location_label)

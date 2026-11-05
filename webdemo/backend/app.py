@@ -161,6 +161,7 @@ class LoginIn(BaseModel):
 class LaunchIn(BaseModel):
     fhirId: str = Field(..., min_length=1, max_length=64)
     purpose: str = Field(..., examples=["PRESCRIPTION"])
+    visitEvent: str | None = Field(None, max_length=64, description="의사가 고른 오늘 진단(진단 사건 번호). 없으면 기본 기준 진료")
 
 
 def create_app(engine: Engine | None = None, *, trial: str | None = None, simulations: bool | None = None,
@@ -558,6 +559,13 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
     step_ko = dict(target="비슷한 사례를 정리하는 중", extractor="답에 환자를 알아볼 수 있는 값이 있는지 확인하는 중",
                    recheck="고친 답을 한 번 더 확인하는 중", rewriter="알아볼 수 있는 값을 고쳐 쓰는 중")
 
+    def visit_note(session: Any) -> dict[str, Any]:
+        """감사 기록용: 의사가 오늘 진단을 골랐으면 그 진단 이름과 진료일 (기본 기준 진료면 없음)."""
+        if session is None or not getattr(session, "visit_event", None):
+            return {}
+        b = session.prefix.binding
+        return dict(visit_dx=b.get("QUERY_MAIN_DX"), visit_date=b.get("index_date"))
+
     def launch_key(request: Request) -> str:
         u = user_of(request)
         return str(u.get("id") or u.get("username")) if u else "-"
@@ -575,31 +583,54 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
             st["extracted"] = st["extracted"] or role == "extractor"
             st.update(label=step_ko.get(step, st["label"]), calls=n)
 
+        ev = guard(lambda: eng().check_visit(tid, body.visitEvent))
         with launching_lock:
             launching[key] = st
         try:
-            guard(lambda: d.start(tid, launch=dict(fhirId=body.fhirId, purpose=body.purpose), on_call=on_call))
+            guard(lambda: d.start(tid, launch=dict(fhirId=body.fhirId, purpose=body.purpose, visitEvent=ev), on_call=on_call, visit_event=ev))
         finally:
             with launching_lock:
                 if launching.get(key) is st:
                     launching.pop(key)
-        mon().log("emr_launch", d.session, user=user_of(request), actor="의료진", purpose=body.purpose)
+        mon().log("emr_launch", d.session, user=user_of(request), actor="의료진", purpose=body.purpose, **visit_note(d.session))
         return dict(status="ok", workspaceId=d.workspace_id, trialId=tid, seconds=round(time.time() - st["started"], 1), calls=st["calls"])
 
     @r.post("/emr/prefetch")
     def emr_prefetch(body: LaunchIn, request: Request) -> dict[str, Any]:
         """
-        진료 목적을 고른 채 잠시 머물면 화면이 부른다. 첫 답(대상 AI 답 · 추출)을 뒤에서 미리 만들어 '열기'를 짧게 한다 (engine.prefetch).
-        대화 · 기록은 만들지 않는다. 지금 연 환자 · 목적이면 하지 않는다. serve --prefetch off면 off.
+        진료 목적(· 오늘 진단)을 고른 채 잠시 머물면 화면이 부른다. 첫 답을 뒤에서 미리 만들어 '열기'를 짧게 한다 (engine.prefetch).
+        대화는 만들지 않는다. 지금 연 대화와 같으면 하지 않는다(current). 도는 중이면 이것을 다음에 한다(queued). serve --prefetch off면 off.
         """
         emr()
         if product is not None and not product.prefetch:
             return dict(status="off")
         tid = find_trial(eng(), body.fhirId, body.purpose)
+        ev = guard(lambda: eng().check_visit(tid, body.visitEvent))
         cur_conv = desk(request).peek()
-        if cur_conv is not None and cur_conv.session.trial_id == tid:
+        if cur_conv is not None and cur_conv.session.trial_id == tid and getattr(cur_conv.session, "visit_event", None) == ev:
             return dict(status="current")
-        return dict(status=eng().prefetch(tid, launch_key(request)))
+        # 열기 전에도 환자 요약 · 검색된 사례 기록이 대상 AI로 나가므로, 하나가 끝날 때마다 실제 호출 수와 함께 감사 기록에 남긴다
+        user = user_of(request)
+        b = eng().binding(tid, ev) or {}
+        visit = {"visit_dx": b.get("QUERY_MAIN_DX"), "visit_date": b.get("index_date")} if ev else {}
+
+        def done(calls: int, ok: bool) -> None:
+            mon().log("emr_prefetch", None, user=user, actor="의료진", trial=tid, purpose=body.purpose, calls=calls, ok=ok, **visit)
+
+        return dict(status=eng().prefetch(tid, launch_key(request), ev, on_done=done))
+
+    @r.get("/emr/visits")
+    def emr_visits(fhirId: str = Query(..., min_length=1, max_length=64)) -> dict[str, Any]:
+        """
+        오늘 볼 진단으로 고를 수 있는 것 (진료 목적마다): 진단 이름마다 그 목적이 성립하는 가장 최근 사건, 최근 것부터.
+        항목마다 진료일 · 고려 중 처치 · 동반질환. 기본(지금 기준 진료)에는 isDefault. 외래 환자만 (과거 기록 환자는 404).
+        """
+        emr()
+        e = eng()
+        tids = [(tid, qt) for tid, pid, qt, _ in e.plan if pid == fhirId]
+        if not tids:
+            raise HTTPException(404, "외래 진료 목록에 없는 환자입니다.")
+        return dict(purposes={qt: e.visit_choices(tid) for tid, qt in tids})
 
     @r.get("/emr/launch/progress")
     def emr_launch_progress(request: Request) -> dict[str, Any]:

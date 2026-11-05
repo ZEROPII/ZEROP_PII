@@ -11,12 +11,15 @@ export function PrivacyHighlight({
   transformation,
   children,
   placeholderLabel,
+  partial = false,
 }: {
   text: string;
   transformation: PrivacyTransformation | undefined;
   children?: ReactNode;
   /** 실제 LLM 답에서 지워진 값의 자리 표시 (단락 끝): 무엇을 가렸는지 이름을 붙인다 */
   placeholderLabel?: string;
+  /** 같은 사례의 같은 단서가 다른 값으로 보일 때: '처방 약 일부 가림' */
+  partial?: boolean;
 }) {
   const body = children ?? text;
   if (!transformation) return <>{body}</>;
@@ -43,7 +46,7 @@ export function PrivacyHighlight({
           title={`${label}: ${transformation.levelDescription ?? '가림'}`}
         >
           <span className="redact" style={{ minWidth: 44 }} aria-hidden />
-          {placeholderLabel ? `${placeholderLabel} 가림` : '가림'}
+          {placeholderLabel ? `${placeholderLabel} ${partial ? '일부 ' : ''}가림` : '가림'}
           <span className="sr-only"> ({label} 가림 처리됨)</span>
         </span>
       );

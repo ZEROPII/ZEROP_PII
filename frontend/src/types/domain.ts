@@ -29,6 +29,9 @@ export interface PatientContext {
   trialId?: string;
   /** 환자 요약 · 유사 사례 검색의 기준 진료일 */
   visitDate?: string;
+  /** 기준 진료의 진단 사건 번호, 의사가 오늘 진단을 골랐는지 */
+  visitEvent?: string;
+  visitChosen?: boolean;
   /** AI(대상 AI 지시문)에 실제로 보내는 환자 요약 줄 */
   aiSummary?: { label: string; value: string }[];
   /** 유사 사례 검색에 쓰는 이 환자 기록: 기준일까지의 진단 · 약 · 시술 코드 수 */
@@ -90,6 +93,8 @@ export type MessageSegment =
       /** 실제 LLM 답에서 지워진 가린 값의 자리 표시 (그 사례 단락 끝에 붙는다). label: '시기' · '사례 2 나이' */
       placeholder?: boolean;
       label?: string;
+      /** 같은 답에 그 사례의 같은 단서가 다른 값으로 보인다: '처방 약 일부 비공개' */
+      partial?: boolean;
     };
 
 /** 답변 한 건에 대한 보호 처리 결과. */
@@ -352,6 +357,16 @@ export interface WorklistPurpose {
   item?: string;
   /** 그 진료일에 이어지던 동반질환 (AI에 보내는 요약에 들어간다) */
   comorbidity?: string | null;
+}
+
+/** 오늘 볼 진단으로 고를 수 있는 것 (그 진단의 진료일 기준 환자 요약). isDefault: 지금 기본 기준 진료 */
+export interface VisitChoice {
+  eventId: string;
+  label: string;
+  date: string;
+  item?: string | null;
+  comorbidity?: string | null;
+  isDefault: boolean;
 }
 
 /** EMR 외래 목록 한 줄. 생년 · 거주 지역은 넣지 않는다 (환자를 고르는 데 필요 없다). */

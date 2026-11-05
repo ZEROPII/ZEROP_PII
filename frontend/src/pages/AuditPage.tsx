@@ -25,6 +25,7 @@ const ACTION_KO: Record<string, string> = {
   login_failed: '로그인 실패',
   login_blocked: '로그인 잠시 막음',
   emr_launch: 'EMR에서 진료 지원 AI 열기',
+  emr_prefetch: '첫 답 미리 준비 (열기 전)',
   clinic_question: '의료진 질문',
   assist_draft: '검토 보조 초안',
   redteam_compare: '레드팀 직전 점검과 비교',
@@ -64,7 +65,15 @@ function detailOf(a: AuditEntry): string | null {
       .join(' · ');
   if (a.action === 'redteam_compare')
     return [a.job, a.baseline ? `직전 ${a.baseline}` : null, LEVEL_KO[a.level ?? ''] ?? null, a.note].filter(Boolean).join(' · ');
-  if (a.action === 'emr_launch') return a.purpose ? `${PURPOSE_KO[a.purpose] ?? a.purpose} 참고` : null;
+  if (a.action === 'emr_launch' || a.action === 'emr_prefetch') {
+    const parts = [a.purpose ? `${PURPOSE_KO[a.purpose] ?? a.purpose} 참고` : null, a.visit_dx ? `오늘 진단 ${a.visit_dx}${a.visit_date ? ` (${a.visit_date})` : ''}` : null,
+      a.action === 'emr_prefetch'
+        ? a.calls
+          ? `환자 요약 · 검색된 사례를 대상 AI에 보냄 (호출 ${a.calls}번${a.ok === false ? ', 실패' : ''})`
+          : `받아 둔 첫 답을 씀 (대상 AI 호출 없음${a.ok === false ? ', 실패' : ''})`
+        : null];
+    return parts.filter(Boolean).join(' · ') || null;
+  }
   if (a.action === 'assist_draft') {
     const c = a.counts ?? {};
     const parts = [a.case ? caseLabel(a.case) : null, VERDICT_KO[a.verdict ?? ''] ?? null, c.release ? `공개 가능 ${c.release}` : null,
@@ -130,7 +139,8 @@ export function AuditPage() {
                           {e.trial}
                         </Link>
                       ) : (
-                        <span className="text-ink-3">{e.job ?? '–'}</span>
+                        // 대화가 없는 기록: 레드팀 실행 번호, 또는 열기 전 미리 준비한 질의 환자(trial)
+                        <span className="font-mono text-ink-3">{e.job ?? e.trial ?? '–'}</span>
                       )}
                     </td>
                     <td className="border-b border-line px-4 py-3 text-ink-2">

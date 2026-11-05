@@ -12,6 +12,10 @@
 #   - 유사 사례 검색은 연구와 같이 그날까지의 진단 · 약 · 시술 기록 전체로 한다 (기준일이 최근이라 동반질환 · 복용약이 들어간다).
 # make_prefix_with: medical.session.make_prefix와 같은 순서 · 같은 난수로 첫 답 요청을 만들되, 기준 진료만 바꿔 끼운다.
 # 레드팀 · 연구 실행(plan_all, make_prefix)은 바꾸지 않는다.
+#
+# 오늘 진단 고르기 (ADR-0029 덧붙임): 가장 최근 진료와 오늘 볼 문제가 다를 수 있다(CKD 환자가 마지막에 치은염으로 온 경우).
+# visit_binding(index_event=…)은 의사가 고른 진단 사건을 기준 진료로 쓴다. 고를 수 있는 목록은 engine.visit_choices
+# (진단 이름마다 그 목적이 성립하는 가장 최근 사건, 최근 것부터).
 
 from __future__ import annotations
 
@@ -56,14 +60,24 @@ def _items(data: Any, ev: list[dict[str, str]], qtype: str, day: str) -> tuple[l
     return items, same_day
 
 
-def visit_binding(data: Any, pid: str, qtype: str, rng: random.Random) -> dict[str, Any] | None:
-    """가장 최근 진료 기준 (위 설명). 그 목적이 성립하는 진료가 없으면 None. query_binding과 같은 열쇠에 visit · active를 더한다."""
+def diagnosis_events(data: Any, pid: str) -> list[tuple[dict[str, str], str]]:
+    """(진단 사건, ICD 세 자리 범주). 범주가 없는 진단은 기준 진료가 될 수 없다 (검색 · 패널이 범주를 쓴다)."""
+    return [(e, c) for e in data.by_pat[pid] if e["event_type"] == "CONDITION" for c in [_category(data, e["code_node"])] if c]
+
+
+def visit_binding(data: Any, pid: str, qtype: str, rng: random.Random, index_event: str | None = None) -> dict[str, Any] | None:
+    """
+    가장 최근 진료 기준 (위 설명). index_event를 주면 그 진단 사건을 기준 진료로 쓴다 (오늘 진단 고르기).
+    그 목적이 성립하는 진료가 없으면 None. query_binding과 같은 열쇠에 visit · active를 더한다.
+    """
     ev = data.by_pat[pid]
-    cond = [(e, c) for e in ev if e["event_type"] == "CONDITION" for c in [_category(data, e["code_node"])] if c]
+    cond = diagnosis_events(data, pid)
     if not cond:
         return None
     pick = None
     for e, c in sorted(cond, key=lambda x: (_d10(x[0]["start"]), x[0]["event_id"]), reverse=True):
+        if index_event is not None and e["event_id"] != index_event:
+            continue
         items, same_day = _items(data, ev, qtype, _d10(e["start"]))
         if items:
             pick = (e, c, items, same_day)
@@ -85,7 +99,8 @@ def visit_binding(data: Any, pid: str, qtype: str, rng: random.Random) -> dict[s
                  PANEL_COMORBIDITY=", ".join(latest[c] for c in co) or "없음", PANEL_CONSIDERED=rel, PANEL_PURPOSE=PURPOSE[qtype])
     return dict(QUERY_AGE_BAND=("10세 미만" if age < 10 else f"{age // 10 * 10}대"), QUERY_SEX="남성" if sex == "남" else "여성",
                 QUERY_MAIN_DX=main_label, QUERY_RELATED_ITEM=rel, index_event=idx["event_id"], index_date=day, main_dx_node=main,
-                panel=panel, visit="recent", active=sorted({data.label(e["code_node"]) for e, _ in active}))
+                panel=panel, visit="chosen" if index_event is not None else "recent",
+                active=sorted({data.label(e["code_node"]) for e, _ in active}))
 
 
 def make_prefix_with(ctx: Context, tid: str, qpid: str, qtype: str, role: str, binder: Binder) -> Prefix:

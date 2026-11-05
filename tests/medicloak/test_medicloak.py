@@ -77,6 +77,18 @@ def launch(c: TestClient, trial: str = "T0014", purpose: str = "PRESCRIPTION") -
     return row, sid
 
 
+def wait_prefetch(world, timeout: float = 60.0) -> None:
+    """뒤에서 도는 첫 답 미리 준비가 모두 끝날 때까지 (끝난 스레드는 목록에서 스스로 내려간다)."""
+    eng, end = world["eng"], time.time() + timeout
+    while time.time() < end:
+        with eng.lock:
+            running = [t for t in eng._prefetching.values() if t.is_alive()]
+        if not running:
+            return
+        running[0].join(0.5)
+    raise AssertionError("미리 준비가 끝나지 않았습니다")
+
+
 def fresh_first_answers(world) -> None:
     """가짜 LLM의 답을 바꾸는 테스트: 다른 대화가 받아 둔 첫 답(같은 요청)을 지운다 (실제 LLM은 온도 0이라 같은 요청에 같은 답)."""
     world["eng"].turn0_cache.answers.clear()
@@ -764,6 +776,26 @@ def test_hidden_marks_go_to_the_end_of_each_case_block_unit():
     t2 = "사례1 · 시기: (비공개)"
     tf2 = [dict(id="x", action="suppress", attribute="PERIOD", caseRef="사례1", disclosedValue=None)]
     assert not any(s.get("placeholder") for s in mark_hidden(t2, segments_of(t2, tf2), tf2, "사례1"))
+    # 사례 줄 사이에 빈 줄이 있어도 표시는 그 사례 줄 끝에 붙는다 (빈 줄에 혼자 떨어지지 않는다). 마지막 사례는 그 문단 끝.
+    # 같은 사례의 같은 단서가 답에 다른 값으로 보이면 '일부'(partial)
+    t3 = "공통 약은 A입니다.\n\n사례1: A (COPD 관리)\n\n사례2: B\n\n전체적으로 비슷합니다."
+    tf3 = [dict(id="m1", action="suppress", attribute="MED", caseRef="사례1", disclosedValue=None),
+           dict(id="m2", action="allow", attribute="MED", caseRef="사례1", disclosedValue="A"),
+           dict(id="m3", action="suppress", attribute="MED", caseRef="사례2", disclosedValue=None)]
+    out3 = mark_hidden(t3, segments_of(t3, tf3), tf3, "사례1")
+    flat = "".join(f"[{x['label']}{' 일부' if x.get('partial') else ''}]" if x.get("placeholder") else x["text"] for x in out3)
+    assert flat == "공통 약은 A입니다.\n\n사례1: A (COPD 관리)[처방 약 일부]\n\n사례2: B[사례 2 처방 약]\n\n전체적으로 비슷합니다."
+    # 글에 남은 '(비공개)'는 그 문장의 사례 조치에 잇는다 (앞에서부터 아무 가림 조치에 잇지 않는다)
+    from webdemo.backend.clinic import place_suppressed
+    t4 = "사례1 환자는 A를 처방받았습니다.\n\n사례2 환자는 (비공개)를 처방받았습니다."
+    tf4 = [dict(id="p1", action="suppress", attribute="PERIOD", caseRef="사례1", disclosedValue=None),
+           dict(id="m2", action="suppress", attribute="MED", caseRef="사례2", disclosedValue=None)]
+    seg4 = segments_of(t4, tf4)
+    assert next(x for x in seg4 if x["kind"] == "disclosure")["transformationId"] == "p1"          # 고치기 전: 사례 1 시기로 이어짐
+    out4 = mark_hidden(t4, place_suppressed(t4, seg4, tf4, "사례1", 5), tf4, "사례1")
+    flat4 = "".join(f"[{x['label']}]" if x.get("placeholder") else f"<{x['transformationId']}>" if x["kind"] == "disclosure" else x["text"]
+                    for x in out4)
+    assert flat4 == "사례1 환자는 A를 처방받았습니다.[시기]\n\n사례2 환자는 <m2>를 처방받았습니다."
 
 
 def _job(jid, *, status="done", fp=None, settings=None, viol=(0, 3), utility=0.6, overblock=0.05, started=0.0, finished=None, trigger=None,
@@ -1608,8 +1640,7 @@ def test_prefetch_makes_the_first_answer_ahead_and_launch_reuses_it(world):
     purpose = next(p["purpose"] for p in row["purposes"] if p["trialId"] == "T0016")
     r = doc.post("/api/emr/prefetch", json=dict(fhirId=row["fhirId"], purpose=purpose))
     assert r.status_code == 200 and r.json()["status"] == "started"
-    th = next(iter(t for t in world["eng"]._prefetching.values()))
-    th.join(30)
+    wait_prefetch(world)
     n0 = len(fake.calls)
     r = doc.post("/api/emr/launch", json=dict(fhirId=row["fhirId"], purpose=purpose))
     assert r.status_code == 200, r.text
@@ -1633,3 +1664,77 @@ def test_serve_options_for_visit_basis_and_prefetch():
     assert a.visit == "research" and a.prefetch == "off"
     d = _defaults(argparse.Namespace())
     assert d.visit == "recent" and d.prefetch == "on"
+
+
+def test_doctor_picks_todays_diagnosis_and_prefetch_is_audited(world):
+    """
+    오늘 진단 고르기: 그 환자의 진단 목록에서 고르면 그 진료일을 기준으로 연다 (가장 최근 진료와 오늘 볼 문제가 다를 때).
+    미리 준비도 고른 진단으로 하고, 열기 전에 대상 AI로 나간 일은 감사 기록에 남는다.
+    """
+    fake: FakeAnthropic = world["fake"]
+    fresh_first_answers(world)
+    add_user(world["store"], "doctor_dx", "진단고르기", "clinician", "내과", PW)
+    doc = login(world, "doctor_dx")
+    row = next(x for x in doc.get("/api/emr/worklist").json() if x["fhirId"].startswith("0c6f6684"))
+    v = doc.get("/api/emr/visits", params=dict(fhirId=row["fhirId"])).json()["purposes"]["PRESCRIPTION"]
+    assert sum(c["isDefault"] for c in v) == 1 and len({c["label"] for c in v}) == len(v)
+    ckd = next(c for c in v if c["label"] == "Chronic kidney disease stage 4")
+    assert ckd["date"] == "2021-04-27" and ckd["item"] and not ckd["isDefault"]
+
+    r = doc.post("/api/emr/prefetch", json=dict(fhirId=row["fhirId"], purpose="PRESCRIPTION", visitEvent=ckd["eventId"]))
+    assert r.status_code == 200 and r.json()["status"] == "started"
+    wait_prefetch(world)
+    n0 = len(fake.calls)
+    r = doc.post("/api/emr/launch", json=dict(fhirId=row["fhirId"], purpose="PRESCRIPTION", visitEvent=ckd["eventId"]))
+    assert r.status_code == 200, r.text
+    assert fake.roles()[n0:] == []                      # 고른 진단으로 미리 받은 첫 답을 그대로 쓴다
+    pc = doc.get("/api/patient-context").json()
+    assert pc["primaryDiagnosis"] == "Chronic kidney disease stage 4" and pc["visitDate"] == "2021-04-27" and pc["visitChosen"]
+    assert pc["visitEvent"] == ckd["eventId"] and pc["plannedProcedure"] == ckd["item"]
+    assert doc.post("/api/emr/prefetch", json=dict(fhirId=row["fhirId"], purpose="PRESCRIPTION",
+                                                    visitEvent=ckd["eventId"])).json()["status"] == "current"
+
+    # 기본 진료로 다시 열면 고른 진단의 대화를 다시 쓰지 않고 새로 연다
+    r = doc.post("/api/emr/launch", json=dict(fhirId=row["fhirId"], purpose="PRESCRIPTION"))
+    assert r.status_code == 200, r.text
+    pc2 = doc.get("/api/patient-context").json()
+    assert pc2["primaryDiagnosis"] != "Chronic kidney disease stage 4" and not pc2["visitChosen"]
+    # 쓸 수 없는 진단 사건 · 외래 목록에 없는 환자
+    bad = doc.post("/api/emr/launch", json=dict(fhirId=row["fhirId"], purpose="PRESCRIPTION", visitEvent="no-such-event"))
+    assert bad.status_code == 400 and "관련 항목" in bad.json()["detail"]
+    assert doc.get("/api/emr/visits", params=dict(fhirId="no-such-patient")).status_code == 404
+
+    sec = login(world, "privacy1")
+    assert sec.get("/api/emr/visits", params=dict(fhirId=row["fhirId"])).status_code == 403
+    audit = sec.get("/api/monitor/audit").json()
+    pre = next(a for a in audit if a["action"] == "emr_prefetch" and a.get("visit_dx") == "Chronic kidney disease stage 4")
+    assert pre["purpose"] == "PRESCRIPTION" and pre["trial"] and pre["visit_date"] == "2021-04-27" and pre["session"] is None
+    assert pre["calls"] >= 1 and pre["ok"] is True                   # 실제로 부른 호출 수
+    assert any(a["action"] == "emr_launch" and a.get("visit_dx") == "Chronic kidney disease stage 4" for a in audit)
+
+
+def test_prefetch_keeps_the_last_pick_while_one_is_running(world):
+    """미리 준비가 도는 중에 다른 진단을 고르면 버리지 않고 이어서 한다 (마지막으로 고른 것 하나만). 열 때 LLM을 다시 부르지 않는다."""
+    fake: FakeAnthropic = world["fake"]
+    fresh_first_answers(world)
+    add_user(world["store"], "doctor_q", "이어서", "clinician", "내과", PW)
+    doc = login(world, "doctor_q")
+    row = next(x for x in doc.get("/api/emr/worklist").json() if x["fhirId"].startswith("0c6f6684"))
+    v = doc.get("/api/emr/visits", params=dict(fhirId=row["fhirId"])).json()["purposes"]["PRESCRIPTION"]
+    others = [c for c in v if not c["isDefault"]][:2]
+    fake.delay = 0.15                                    # 첫 미리 준비가 도는 동안 다음 두 개를 고른다
+    try:
+        first = doc.post("/api/emr/prefetch", json=dict(fhirId=row["fhirId"], purpose="PRESCRIPTION")).json()["status"]
+        mid = doc.post("/api/emr/prefetch", json=dict(fhirId=row["fhirId"], purpose="PRESCRIPTION", visitEvent=others[0]["eventId"])).json()
+        last = doc.post("/api/emr/prefetch", json=dict(fhirId=row["fhirId"], purpose="PRESCRIPTION", visitEvent=others[1]["eventId"])).json()
+        assert (first, mid["status"], last["status"]) == ("started", "queued", "queued")
+        wait_prefetch(world)
+    finally:
+        fake.delay = 0.0
+    n0 = len(fake.calls)
+    r = doc.post("/api/emr/launch", json=dict(fhirId=row["fhirId"], purpose="PRESCRIPTION", visitEvent=others[1]["eventId"]))
+    assert r.status_code == 200, r.text
+    assert fake.roles()[n0:] == []                       # 마지막으로 고른 진단은 미리 준비됐다
+    sec = login(world, "privacy1")
+    dx = [a.get("visit_dx") for a in sec.get("/api/monitor/audit").json() if a["action"] == "emr_prefetch" and a["actor"].startswith("이어서")]
+    assert others[1]["label"] in dx and others[0]["label"] not in dx       # 사이에 고른 것은 버렸다
