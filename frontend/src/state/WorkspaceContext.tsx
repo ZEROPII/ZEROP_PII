@@ -21,6 +21,8 @@ export interface WorkspaceActions {
    * 그 사이 의료진이 새 대화를 시작했으면 처음부터 다시 불러온다.
    */
   refreshLive(): Promise<void>;
+  /** 사례 목록(카드의 진단 · 대표 항목 · 승인 표시)만 로딩 표시 없이 새로 받는다. 답을 받은 뒤 · 공개 승인이 온 뒤 */
+  refreshCases(): Promise<void>;
 }
 
 interface WorkspaceContextValue {
@@ -120,6 +122,19 @@ export function WorkspaceProvider({ children, api = defaultApi }: { children: Re
     );
   }, [api]);
 
+  const refreshCases = useCallback(async () => {
+    const ctx = stateRef.current.patient.data?.contextId;
+    if (!ctx) return;
+    try {
+      const cases = [...(await api.listSimilarCases(ctx))].sort((a, b) => a.similarityRank - b.similarityRank);
+      const now = stateRef.current;
+      if (now.patient.data?.contextId !== ctx) return; // 그 사이 다른 환자를 열었다
+      if (JSON.stringify(now.cases.data) !== JSON.stringify(cases)) dispatch({ type: 'resource/success', key: 'cases', data: cases });
+    } catch {
+      /* 다음에 다시 받는다 */
+    }
+  }, [api]);
+
   const sendQuestion = useCallback(
     async (caseId: CaseId, question: string, scope: QuestionScope = 'case'): Promise<boolean> => {
       const text = question.trim();
@@ -142,13 +157,14 @@ export function WorkspaceProvider({ children, api = defaultApi }: { children: Re
         const response = await api.sendQuestion({ caseId, sessionId: slot.data.sessionId, question: text, clientMessageId, scope });
         // 응답은 요청한 사례에만 반영한다 (그 사이 다른 사례를 골랐어도 섞이지 않음).
         dispatch({ type: 'send/success', caseId, clientMessageId, response });
+        void refreshCases(); // 첫 답에 없던 진단 · 항목이 이 답에 나왔으면 카드에 채운다
         return true;
       } catch (error) {
         if (!isAbort(error)) dispatch({ type: 'send/failure', caseId, clientMessageId, error: errorMessage(error) });
         return false;
       }
     },
-    [api],
+    [api, refreshCases],
   );
 
   const discardMessage = useCallback((caseId: CaseId, messageId: string) => {
@@ -222,8 +238,8 @@ export function WorkspaceProvider({ children, api = defaultApi }: { children: Re
   }, [state.selectedCaseId, loadSession, loadDisclosures]);
 
   const actions = useMemo<WorkspaceActions>(
-    () => ({ reloadAll, selectCase, loadSession, loadDisclosures, sendQuestion, retryMessage, discardMessage, restart, resetAndReload, refreshLive }),
-    [reloadAll, selectCase, loadSession, loadDisclosures, sendQuestion, retryMessage, discardMessage, restart, resetAndReload, refreshLive],
+    () => ({ reloadAll, selectCase, loadSession, loadDisclosures, sendQuestion, retryMessage, discardMessage, restart, resetAndReload, refreshLive, refreshCases }),
+    [reloadAll, selectCase, loadSession, loadDisclosures, sendQuestion, retryMessage, discardMessage, restart, resetAndReload, refreshLive, refreshCases],
   );
 
   const value = useMemo(() => ({ state, actions, api }), [state, actions, api]);

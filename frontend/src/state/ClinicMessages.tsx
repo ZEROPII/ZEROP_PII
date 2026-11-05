@@ -4,7 +4,7 @@
 // 읽음 표시는 대화마다 세션 저장소에 둔다 (새로 고침해도 읽은 답장이 다시 '새로 옴'이 되지 않게). 못 쓰면 메모리에만.
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import type { ClinicMessage, PostClinicMessageRequest } from '../types/domain';
+import type { CaseId, ClinicMessage, PostClinicMessageRequest } from '../types/domain';
 import { useWorkspace } from './WorkspaceContext';
 
 const POLL_MS = 4000;
@@ -23,8 +23,11 @@ interface ClinicMessagesValue {
   error: string | null;
   /** 머리줄 알림에서 '메시지 열기'를 눌렀다. 진료 화면이 이것을 보고 메시지 탭을 연 뒤 consumeOpen으로 지운다. */
   openPending: boolean;
-  requestOpen(): void;
+  /** caseId: 그 사례 이야기로 창을 연다 (알림 · 요청 상태에서 열 때). 새 세부 정보 요청의 기본 사례가 된다 */
+  requestOpen(caseId?: CaseId | null): void;
   consumeOpen(): void;
+  /** 마지막으로 창을 연 곳이 가리킨 사례 (없으면 null: 고른 사례를 쓴다) */
+  openCase: CaseId | null;
 }
 
 const Ctx = createContext<ClinicMessagesValue | null>(null);
@@ -51,7 +54,7 @@ function saveSeen(contextId: string | null, n: number): void {
 
 /** enabled가 false면(보안 담당자 화면) 메시지를 받아 오지 않는다. 읽음 표시와 목록은 그대로 둔다. */
 export function ClinicMessagesProvider({ children, enabled = true }: { children: ReactNode; enabled?: boolean }) {
-  const { api, state } = useWorkspace();
+  const { api, state, actions } = useWorkspace();
   const contextId = state.patient.data?.contextId ?? null;
   const [supported, setSupported] = useState<boolean | null>(api.listClinicMessages ? null : false);
   const [messages, setMessages] = useState<ClinicMessage[]>([]);
@@ -59,7 +62,10 @@ export function ClinicMessagesProvider({ children, enabled = true }: { children:
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [openPending, setOpenPending] = useState(false);
+  const [openCase, setOpenCase] = useState<CaseId | null>(null);
   const alive = useRef(true);
+  /** 이미 본 공개 승인 메시지 (새로 오면 사례 카드 · 노트를 새로 받는다). null이면 아직 첫 목록을 받지 않았다 */
+  const releases = useRef<Set<string> | null>(null);
 
   useEffect(() => {
     alive.current = true;
@@ -72,7 +78,20 @@ export function ClinicMessagesProvider({ children, enabled = true }: { children:
   useEffect(() => {
     setSeen(loadSeen(contextId));
     setMessages([]);
+    releases.current = null;
   }, [contextId]);
+
+  // 공개 승인이 새로 오면: 승인한 값이 사례 카드(진단 · 대표 항목)와 그 사례 노트에 바로 보이게 다시 받는다
+  useEffect(() => {
+    const ids = messages.filter((m) => m.kind === 'release').map((m) => m.messageId);
+    const known = releases.current;
+    releases.current = new Set(ids);
+    if (known === null) return; // 처음 받은 목록은 화면이 이미 최신이다
+    const fresh = messages.filter((m) => m.kind === 'release' && !known.has(m.messageId));
+    if (!fresh.length) return;
+    void actions.refreshCases();
+    for (const m of fresh) if (m.caseId) actions.loadDisclosures(m.caseId, true);
+  }, [messages, actions]);
 
   const markSeen = useCallback(
     (n: number) => {
@@ -150,10 +169,14 @@ export function ClinicMessagesProvider({ children, enabled = true }: { children:
       sending,
       error,
       openPending,
-      requestOpen: () => setOpenPending(true),
+      requestOpen: (caseId?: CaseId | null) => {
+        setOpenCase(caseId ?? null);
+        setOpenPending(true);
+      },
       consumeOpen,
+      openCase,
     };
-  }, [supported, messages, seen, markSeen, send, sending, error, openPending, consumeOpen]);
+  }, [supported, messages, seen, markSeen, send, sending, error, openPending, consumeOpen, openCase]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

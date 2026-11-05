@@ -1,4 +1,4 @@
-import { Lock, MessageSquareText, Table2 } from 'lucide-react';
+import { Lock, MessageSquareText, ShieldCheck, Table2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import { UNKNOWN, overviewOf, splitItem } from '../../lib/caseOverview';
 import { useClinicMessages } from '../../state/ClinicMessages';
@@ -61,6 +61,7 @@ export function EmrCaseList({ onSelected }: { onSelected?: () => void }) {
             const notes = msgs.messages.filter((m) => m.caseId === c.caseId).length;
             const differs = overview.commonItem !== null && c.description !== overview.commonItem && !UNKNOWN.test(c.description);
             const unknown = c.mentioned === false && UNKNOWN.test(c.diagnosis);
+            const approved = c.approved ?? [];
             return (
               <li key={c.caseId} className="border-b border-line last:border-b-0">
                 <button
@@ -89,8 +90,13 @@ export function EmrCaseList({ onSelected }: { onSelected?: () => void }) {
                       {differs && <span className="mr-1 rounded-[4px] bg-caution-tint px-1 text-[10.5px] font-semibold text-caution-text">다른 항목</span>}
                       <LockedText text={c.description} />
                     </span>
-                    {(restricted || asked > 0 || notes > 0) && (
+                    {(restricted || asked > 0 || notes > 0 || approved.length > 0) && (
                       <span className="mt-1.5 flex flex-wrap gap-1.5 text-[11px]">
+                        {approved.length > 0 && (
+                          <span className="inline-flex items-center gap-1 rounded-[5px] bg-safe-tint px-1.5 py-px font-semibold text-safe-text" title="보호 담당자가 세부 정보 요청을 승인해 공개한 값 (사례 노트에 남음)">
+                            <ShieldCheck className="h-3 w-3" aria-hidden /> 승인 공개 {approved.join(', ')}
+                          </span>
+                        )}
                         {restricted && (
                           <span className="inline-flex items-center gap-1 rounded-[5px] bg-emr-lock-tint px-1.5 py-px font-semibold text-emr-lock" title="새로 묻는 세부 값은 범위로 보이거나 비공개로 표시될 수 있습니다">
                             <Lock className="h-3 w-3" aria-hidden /> 세부 정보 제한

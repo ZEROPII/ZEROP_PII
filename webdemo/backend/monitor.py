@@ -37,8 +37,9 @@ import threading
 import time
 from typing import Any, Callable, Iterable
 
+from webdemo.backend import assist as A
 from webdemo.backend.auth import actor_label
-from webdemo.backend.clinic import Conflict
+from webdemo.backend.clinic import RELEASE_PARTIAL_KO, Conflict
 from webdemo.backend.engine import ARM_KO, Engine, Session
 
 LIVE_ARM = "C1"
@@ -457,20 +458,29 @@ class Monitor:
                                  f"고위험 승인 확인란에 표시하고 사유를 {HIGH_RISK_REASON}자 이상 써 주세요.")
             if high and len(reason) < HIGH_RISK_REASON:
                 raise ValueError(f"기준 아래로 내려가는 공개는 사유를 {HIGH_RISK_REASON}자 이상 써 주세요.")
+            # 요청한 값 가운데 이번에 공개하지 않는 것: 공개 전 State로 검토 보조와 같은 판정을 내려 까닭 · 대안을 붙인다 (ADR-0031)
+            request = next((m for m in reversed(s.messages) if m["sender"] == "clinician" and m["kind"] == "access_request"), None)
+            before = A.analyse(s, request) if request is not None else None
             ap = s.approve(item_ids, by=actor_label(user, ACTOR), reason=reason)
             ap["high_risk"] = high                      # 승인 기록(대화 상세 · DB 저장)에도 남긴다
-            text = conv.apply_approval(ap)
+            scope = {request["case"]} if request is not None and request.get("case") else {x["case"] for x in ap["items"]}
+            kept = [k for k in A.kept_items(before, ap["items"]) if k["case"] in scope] if before else []
+            text = conv.apply_approval(ap, kept)
         case = ap["items"][0]["case"] if len({x["case"] for x in ap["items"]}) == 1 else None
         self.log("approve_release", s, user=user, reason=reason, case=case,
                  items=[dict(turn=x["turn"], case=x["case"], attribute=x["attribute"]) for x in ap["items"]], k_after=ap["k_after"],
                  high_risk=high, k_min=min(ap["k_after"].values()) if ap["k_after"] else None,
+                 kept=[dict(case=k["case"], attribute=k["attribute"]) for k in kept],
                  **self.subjects(s, [x["case"] for x in ap["items"]]))
-        self.post_message(s, "security", "release", text[:2000], case, audit=False, user=user)
+        # 의료진 화면에서는 이 메시지가 요청에 대한 답이다: 요청한 사례로 보낸다 (요청 상태가 '승인됨 · 일부 승인'으로 바뀌게)
+        to_case = request["case"] if request is not None and request.get("case") else case
+        self.post_message(s, "security", "release", text[:2000], to_case, audit=False, user=user,
+                          kind_label=RELEASE_PARTIAL_KO if kept else None)
         return ap
 
     # ── 의료진 ↔ 보안 담당자 메시지 ──
     def post_message(self, s: Any, sender: str, kind: str, text: str, case: str | None = None, *,
-                     audit: bool = True, user: dict[str, Any] | None = None) -> dict[str, Any]:
+                     audit: bool = True, user: dict[str, Any] | None = None, kind_label: str | None = None) -> dict[str, Any]:
         if getattr(s, "archived", False):
             raise Conflict("지난 대화라 메시지를 보낼 수 없습니다 (서버를 다시 켜기 전 대화는 읽기만 합니다).")
         text = (text or "").strip()
@@ -488,7 +498,7 @@ class Monitor:
                 return dup                               # 방금 보낸 같은 메시지: 다시 보내지 않는다
             with self._seq_lock:
                 n = next(self._mids)
-            m = dict(id=f"M{n:04d}", at=time.time(), sender=sender, kind=kind, kind_label=MSG_KIND_KO[kind],
+            m = dict(id=f"M{n:04d}", at=time.time(), sender=sender, kind=kind, kind_label=kind_label or MSG_KIND_KO[kind],
                      case=case, text=text, actor=actor)
             s.messages.append(m)
             s.last_active = m["at"]

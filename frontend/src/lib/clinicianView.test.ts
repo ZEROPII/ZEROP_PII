@@ -46,6 +46,18 @@ describe('의료진 화면 문구', () => {
     expect(preflightNotice(assessment({ requiresWarning: false }), '사례 1')).toBeNull();
   });
 
+  it('실제 LLM 대화의 보내기 전 안내는 미리 센 것이라고 말하고, 확정처럼 쓰지 않는다 (ADR-0031)', () => {
+    const sup = preflightNotice(assessment({ plannedAction: 'suppress', affectedAttributes: ['처방 약'], estimate: 'oracle' }), '사례 5')!;
+    expect(sup.text).toBe('미리 세어 보면 사례 5의 처방 약은 비공개로 표시될 수 있습니다. 실제로 바꿀 값은 AI 답을 받은 뒤 다시 정합니다.');
+    const gen = preflightNotice(assessment({ plannedAction: 'generalize', estimate: 'oracle' }), '사례 2')!;
+    expect(gen.text).toContain('범위로 표시될 수 있습니다');
+    for (const n of [sup, gen]) expect(n.text).not.toMatch(RISK_NUMBER);
+    expect(preflightStatusLine('done', assessment({ requiresWarning: false, estimate: 'oracle' }))).toBe('미리 세어 보면 그대로 답할 수 있는 질문입니다');
+    // 규칙 · 조회 목적으로 가리는 것은 확정이라 그렇게 말한다
+    const purpose = preflightNotice(assessment({ plannedAction: 'suppress', affectedAttributes: ['거주지'], estimate: 'oracle', basis: 'purpose' }), '사례 1')!;
+    expect(purpose.text).toBe('이 질문에 답하면 사례 1의 거주지는 비공개로 표시됩니다. 나머지 내용은 그대로 답합니다.');
+  });
+
   it('입력칸 아래 상태 줄에도 숫자가 없다', () => {
     const lines = [
       preflightStatusLine('checking', null),

@@ -6,10 +6,11 @@ import { formatTime } from '../../lib/format';
 import { REQUEST_STATE_KO, statusOf } from '../../lib/requests';
 import { useClinicMessages } from '../../state/ClinicMessages';
 import { useSelectedCase, useWorkspace } from '../../state/WorkspaceContext';
+import type { CaseId } from '../../types/domain';
 
 /** 내 세부 정보 요청 아래 처리 상태 한 줄 */
 function RequestLine({ status }: { status: ReturnType<typeof statusOf> }) {
-  const tone = status.state === 'released' ? 'text-safe-text' : status.state === 'answered' ? 'text-iris-text' : 'text-ink-3';
+  const tone = status.state === 'released' ? 'text-safe-text' : status.state === 'answered' || status.state === 'partial' ? 'text-iris-text' : 'text-ink-3';
   return (
     <p className={`mt-1 text-right text-[11px] font-semibold ${tone}`}>
       {REQUEST_STATE_KO[status.state]}
@@ -21,7 +22,13 @@ function RequestLine({ status }: { status: ReturnType<typeof statusOf> }) {
 /** 주고받은 메시지와 보내기 칸. 창이 열려 있는 동안 새 메시지를 읽음으로 표시한다. */
 function DeskThread({ focusNonce }: { focusNonce: number }) {
   const msgs = useClinicMessages();
-  const { caseId, summary } = useSelectedCase();
+  const { state } = useWorkspace();
+  const { caseId } = useSelectedCase();
+  const cases = state.cases.data ?? [];
+  /** 새 세부 정보 요청의 사례: 창을 연 곳이 가리킨 사례(알림 · 요청 상태), 없으면 고른 사례. 의료진이 바꿀 수 있다 */
+  const [reqCase, setReqCase] = useState<CaseId | null>(msgs.openCase ?? caseId);
+  const picked = useRef(false);
+  const summary = cases.find((c) => c.caseId === reqCase) ?? null;
   const hasSecurity = msgs.messages.some((m) => m.sender === 'security');
   const [mode, setMode] = useState<'reply' | 'access_request'>(msgs.awaitingReply ? 'reply' : 'access_request');
   const [text, setText] = useState('');
@@ -43,7 +50,18 @@ function DeskThread({ focusNonce }: { focusNonce: number }) {
 
   useEffect(() => {
     inputRef.current?.focus();
-  }, [focusNonce]);
+    // 다시 열 때마다 연 곳이 가리킨 사례로 (없으면 고른 사례)
+    picked.current = false;
+    setReqCase(msgs.openCase ?? caseId);
+  }, [focusNonce]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // 창을 열어 둔 채 다른 사례를 고르면 따라간다 (의료진이 요청 사례를 직접 고른 뒤에는 그대로)
+  const lastSelected = useRef(caseId);
+  useEffect(() => {
+    if (lastSelected.current === caseId) return; // 처음 그릴 때는 연 곳이 가리킨 사례를 둔다
+    lastSelected.current = caseId;
+    if (!picked.current && caseId) setReqCase(caseId);
+  }, [caseId]);
 
   useEffect(() => {
     if (mode !== 'access_request' || !summary) return;
@@ -58,7 +76,7 @@ function DeskThread({ focusNonce }: { focusNonce: number }) {
   async function send() {
     const body = text.trim();
     if (body.length < 2) return;
-    const ok = await msgs.send({ kind: mode, text: body, caseId: mode === 'access_request' ? caseId : (msgs.awaitingReply?.caseId ?? null) });
+    const ok = await msgs.send({ kind: mode, text: body, caseId: mode === 'access_request' ? reqCase : (msgs.awaitingReply?.caseId ?? null) });
     if (ok) {
       autoDraft.current = '';
       setText('');
@@ -137,6 +155,26 @@ function DeskThread({ focusNonce }: { focusNonce: number }) {
             ))}
           </div>
         )}
+        {mode === 'access_request' && cases.length > 0 && (
+          <label className="mb-2 flex items-center gap-2 text-xs font-semibold text-ink-2">
+            요청할 사례
+            <select
+              value={reqCase ?? ''}
+              onChange={(e) => {
+                picked.current = true;
+                setReqCase(e.target.value || null);
+              }}
+              className="h-8 min-w-0 flex-1 rounded-cell border border-line-input bg-surface px-2 text-[13px] font-normal text-ink"
+            >
+              {!reqCase && <option value="">사례를 고르세요</option>}
+              {cases.map((c) => (
+                <option key={c.caseId} value={c.caseId}>
+                  {c.label} · {c.diagnosis.length > 28 ? `${c.diagnosis.slice(0, 27)}…` : c.diagnosis}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <label htmlFor="desk-msg" className="sr-only">
           {mode === 'reply' ? '답장' : '세부 정보 요청'}
         </label>
@@ -161,7 +199,7 @@ function DeskThread({ focusNonce }: { focusNonce: number }) {
           <span className="min-w-0 truncate text-[11px] text-ink-3">
             {mode === 'access_request' ? (summary ? `${summary.label}에 대한 요청으로 보냅니다` : '사례를 고르면 그 사례에 대한 요청이 됩니다') : '주고받은 내용은 조회 기록에 남습니다'}
           </span>
-          <button type="submit" className="btn-primary btn-sm shrink-0" disabled={msgs.sending || text.trim().length < 2}>
+          <button type="submit" className="btn-primary btn-sm shrink-0" disabled={msgs.sending || text.trim().length < 2 || (mode === 'access_request' && !reqCase)}>
             {msgs.sending ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden /> : <Send className="h-3.5 w-3.5" aria-hidden />}
             {mode === 'reply' ? '답장 보내기' : '요청 보내기'}
           </button>
@@ -259,17 +297,15 @@ export function ProtectionDesk() {
             <div className="relative w-[280px]">
               <button
                 type="button"
-                onClick={() => {
-                  setOpen(true);
-                  setFocusNonce((n) => n + 1);
-                }}
+                onClick={() => msgs.requestOpen(peek.caseId)}
                 className="w-full rounded-control border border-line bg-surface py-2.5 pl-3 pr-8 text-left shadow-overlay hover:border-iris"
               >
                 <span className="flex items-center gap-1.5 text-[11px] font-semibold text-iris-text">
                   <ShieldCheck className="h-3 w-3" aria-hidden />
                   보호 담당자 · {peek.kindLabel}
                 </span>
-                <span className="mt-0.5 line-clamp-2 block text-[13px] leading-5 text-ink">{peek.text}</span>
+                {/* line-clamp는 display:-webkit-box라 block을 함께 쓰면 두 줄로 줄지 않는다 (승인 결과처럼 긴 메시지가 버튼을 덮음) */}
+                <span className="mt-0.5 line-clamp-2 text-[13px] leading-5 text-ink">{peek.text}</span>
               </button>
               <button
                 type="button"
@@ -287,8 +323,8 @@ export function ProtectionDesk() {
             aria-expanded={open}
             aria-label={msgs.unread ? `개인정보 보호 담당자 창, 새 메시지 ${msgs.unread}건` : '개인정보 보호 담당자 창'}
             onClick={() => {
-              setOpen((o) => !o);
-              setFocusNonce((n) => n + 1);
+              if (open) setOpen(false);
+              else msgs.requestOpen(null); // 오른쪽 아래 단추: 고른 사례로
             }}
             className="relative inline-flex h-12 items-center gap-2 rounded-full bg-iris pl-3.5 pr-4 text-[13px] font-semibold text-iris-on shadow-overlay hover:brightness-110"
           >

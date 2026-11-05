@@ -36,11 +36,20 @@ export interface Notice {
   text: string;
 }
 
-/** 보내기 전 안내. 보내면 어떻게 답할지만 말한다. 안내할 것이 없으면 null. */
+/**
+ * 보내기 전 안내. 보내면 어떻게 답할지만 말한다. 안내할 것이 없으면 null.
+ * 실제 LLM 대화(estimate=oracle)는 '기록대로 답한다면'으로 미리 센 것이라, 확정이 아니라고 말한다 (실제 답은 받은 뒤 다시 판정, ADR-0031).
+ */
 export function preflightNotice(a: PreflightRiskAssessment, caseLabel: string): Notice | null {
   if (!a.requiresWarning) return null;
   const names = joinNames(a.affectedAttributes);
   const what = names ? `${caseLabel}의 ${josa(names, '은', '는')}` : `${caseLabel} 답의 일부는`;
+  // 규칙 · 조회 목적으로 가리는 것은 답이 어떻든 확정이다. 후보 수로 정하는 것만 미리 센 추정이라고 말한다
+  if (a.estimate === 'oracle' && a.basis !== 'rule' && a.basis !== 'purpose') {
+    const after = '실제로 바꿀 값은 AI 답을 받은 뒤 다시 정합니다.';
+    if (a.plannedAction === 'suppress') return { tone: 'lock', text: `미리 세어 보면 ${what} 비공개로 표시될 수 있습니다. ${after}` };
+    if (a.plannedAction === 'generalize') return { tone: 'range', text: `미리 세어 보면 ${what} 정확한 값 대신 범위로 표시될 수 있습니다. ${after}` };
+  }
   if (a.plannedAction === 'suppress')
     return { tone: 'lock', text: `이 질문에 답하면 ${what} 비공개로 표시됩니다. 나머지 내용은 그대로 답합니다.` };
   if (a.plannedAction === 'generalize')
@@ -56,7 +65,8 @@ export function preflightStatusLine(status: PreflightStatus, a: PreflightRiskAss
   if (status === 'error') return '미리 확인하지 못했습니다. 보내면 서버가 확인합니다';
   if (a?.supported === false) return '보내면 서버가 개인정보 보호 기준으로 확인합니다';
   if (a?.understood === false) return '묻는 항목을 찾지 못했습니다. 처방, 시술, 진단, 시기처럼 물어보세요';
-  if (a && !a.requiresWarning) return '확인했습니다. 그대로 답할 수 있는 질문입니다';
+  if (a && !a.requiresWarning)
+    return a.estimate === 'oracle' ? '미리 세어 보면 그대로 답할 수 있는 질문입니다' : '확인했습니다. 그대로 답할 수 있는 질문입니다';
   return '보내면 서버가 개인정보 보호 기준으로 다시 확인합니다';
 }
 

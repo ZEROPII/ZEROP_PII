@@ -514,7 +514,7 @@ class Session:
                                     event_group=self._event_group_for(c.committed, x, d)))
             out.append(dict(turn=x["turn"], case=x["case"], index=x["index"], attribute=d["attribute"], attribute_label=ATTR_KO.get(d["attribute"], d["attribute"]),
                             value=str(d.get("raw_value") or self.ctx.data.label(d["node_id"])), committed_index=len(c.committed) - 1,
-                            after_turn=self.turn))
+                            after_turn=self.turn, action="dropped" if x.get("dropped") else x.get("action")))   # 어떻게 가렸던 값인지 (의료진 메시지)
         k_after = {ref: kc.k(r.cases[ref].committed)["k"] for ref in dict.fromkeys(x["case"] for x in out)}
         ap = dict(id=f"AP{len(self.approvals) + 1}", at=time.time(), by=by, reason=reason, items=out, k_after=k_after)
         self.approvals.append(ap)

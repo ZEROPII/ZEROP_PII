@@ -93,7 +93,7 @@ export function ClinicalAssistPage() {
           <EmrCaseList onSelected={() => setTab('chat')} />
         </aside>
         <div id="panel-chat" className={panelClass('chat')}>
-          <ClinicalChat jump={jump} onJumpDone={onJumpDone} onOpenMessages={msgs.requestOpen} />
+          <ClinicalChat jump={jump} onJumpDone={onJumpDone} onOpenMessages={() => msgs.requestOpen()} />
         </div>
         <aside id="panel-note" className={`${panelClass('note')} ${noteOpen ? '' : 'lg:hidden'}`}>
           <CaseNotePanel onJump={onJump} onCollapse={() => setNoteOpen(false)} />

@@ -69,7 +69,8 @@ def disclosures(d: dict[str, Any]) -> dict[str, Any]:
 
 def preflight(a: dict[str, Any], *, live: bool = False) -> dict[str, Any]:
     out = dict(a, currentK=None, projectedK=None, message=None)
-    out.pop("estimate", None)
+    # estimate('oracle')는 숫자가 아니라 '기록대로 답한다면 미리 센 것'이라는 표시다. 의료진 화면이 확정처럼 말하지 않게 남긴다 (ADR-0031)
+    out["estimate"] = "oracle" if a.get("estimate") == "oracle" else None
     if live and a.get("understood") is False:
         # 실제 LLM은 어떤 문장이든 답하므로 '묻는 항목을 찾지 못함'으로 막지 않는다. 보내면 서버가 판정한다.
         out["supported"] = False

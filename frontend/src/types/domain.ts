@@ -51,6 +51,8 @@ export interface CaseSummary {
   similarity?: number;
   /** 사례 검색 첫 답에 이 사례가 나왔는지 (false면 진단 · 항목은 '가림'이 아니라 아직 모름) */
   mentioned?: boolean;
+  /** 보안 담당자가 세부 정보 요청을 승인해 공개한 단서 이름 (예: ['진단']). 카드의 진단 · 대표 항목은 승인한 값으로 보인다 */
+  approved?: string[];
 }
 
 // ── 보호 조치 ──────────────────────────────────────────────────────────────────
@@ -259,6 +261,10 @@ export interface PreflightRiskAssessment {
   /** 데모 백엔드만: 질문이 가리킨 사례 (고른 사례와 다를 수 있다. 예: 사례 1 탭에서 '사례5 환자의 나이는?') */
   targetCaseId?: CaseId | null;
   targetCaseLabel?: string | null;
+  /** oracle: 실제 LLM 대화에서 '기록대로 답한다면'으로 미리 센 값 (실제 답은 받은 뒤 다시 판정한다) */
+  estimate?: 'oracle' | null;
+  /** 왜 그렇게 답하는지: count 후보 수(실제 LLM은 추정) · rule 보호 담당자 규칙 · purpose 조회 목적. rule · purpose는 확정 */
+  basis?: 'count' | 'rule' | 'purpose' | null;
 }
 
 // ── 의료진 ↔ 개인정보 보호 담당자 메시지 ────────────────────────────────────────
@@ -276,6 +282,8 @@ export interface ClinicMessage {
   caseId: CaseId | null;
   caseLabel: string | null;
   text: string;
+  /** 공개 승인 메시지: 요청한 값 가운데 일부만 공개함 (나머지는 까닭 · 대안과 함께 본문에) */
+  partial?: boolean;
 }
 
 export interface PostClinicMessageRequest {

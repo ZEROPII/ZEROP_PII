@@ -29,6 +29,15 @@ describe('세부 정보 요청 상태', () => {
     // 다른 사례의 승인은 이 요청과 상관없다
     const other = msg({ sender: 'security', kind: 'release', caseId: 'case-2' });
     expect(statusOf([req, other], req).state).toBe('pending');
+    // 일부만 공개한 승인은 '일부 승인' (ADR-0031)
+    const part = msg({ sender: 'security', kind: 'release', partial: true, createdAt: '2026-11-05T10:07:00Z' });
+    expect(statusOf([req, part], req).state).toBe('partial');
+  });
+
+  it('답에서 값이 바뀐 사례가 여럿이면 그 가운데 어느 사례 요청이든 그 답의 요청으로 본다', () => {
+    const r2 = msg({ caseId: 'case-2', createdAt: '2026-11-05T10:10:00Z' });
+    expect(latestRequest([r2], ['case-1', 'case-2'], '2026-11-05T10:00:00Z')?.state).toBe('pending');
+    expect(latestRequest([r2], ['case-1', 'case-3'], '2026-11-05T10:00:00Z')).toBeNull();
   });
 
   it('답 뒤에 보낸 요청만 그 답의 요청으로 본다', () => {

@@ -1,5 +1,5 @@
 import { AlertCircle, Check, CircleHelp, Copy, Loader2, Lock, MailQuestion, RotateCw, Trash2 } from 'lucide-react';
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { parseAnswer, type AnswerBlock, type Inline } from '../../lib/answerLines';
 import { answerPlainText, attrName, chartCopyText, protectionNote, refLabel, requestDraft, whyText } from '../../lib/clinicianCopy';
 import { latestRequest, REQUEST_STATE_KO } from '../../lib/requests';
@@ -176,18 +176,45 @@ function ProtectionFooter({ message, caseLabel, cases, until }: { message: ChatM
   const [why, setWhy] = useState(false);
   const [draft, setDraft] = useState<string | null>(null);
   const [sent, setSent] = useState(false);
+  /** 요청할 사례: 이 답에서 값이 바뀐 사례가 여럿이면 의료진이 고른다 (기본은 첫 사례) */
+  const [pickRef, setPickRef] = useState<string | null>(null);
+  /** 화면이 채운 마지막 초안. 고치지 않았으면 사례를 바꿀 때 그 사례 초안으로 바꾼다 */
+  const autoDraft = useRef('');
   if (!note) return null;
 
   // 조회 목적에 필요 없어 뺀 값(거주 지역)은 세부 정보 요청 대상이 아니다
   const changed = p.transformations.filter((t) => t.action !== 'allow' && !t.purpose);
   const refs = [...new Set(changed.map((t) => t.caseRef).filter((r): r is string => !!r))];
   const who = refs.length === 1 ? refLabel(refs[0]) : refs.length > 1 ? '해당 사례' : caseLabel;
-  const requestCase = caseIdOfRef(refs[0], cases) ?? message.caseId;
-  const requestLabel = refs.length ? refLabel(refs[0]) : caseLabel;
+  const ref = pickRef && refs.includes(pickRef) ? pickRef : refs[0];
+  const requestCase = caseIdOfRef(ref, cases) ?? message.caseId;
+  const requestLabel = ref ? refLabel(ref) : caseLabel;
+  const namesFor = (r: string | undefined) => changed.filter((t) => !r || t.caseRef === r).map(attrName);
   const canRequest = msgs.supported === true && changed.length > 0;
-  // 이 답 뒤에 같은 사례로 보낸 요청이 있으면 그 처리 상태 (사례를 바꿨다 돌아와 다시 그려도 유지)
-  const status = latestRequest(msgs.messages, requestCase, message.createdAt, until);
+  // 이 답 뒤에 이 답의 사례(들)로 보낸 요청이 있으면 그 처리 상태 (사례를 바꿨다 돌아와 다시 그려도 유지)
+  const refCases = refs.map((r) => caseIdOfRef(r, cases)).filter((c): c is string => !!c);
+  const status = latestRequest(msgs.messages, refCases.length ? refCases : requestCase, message.createdAt, until);
   const requested = sent || status !== null;
+
+  function openDraft() {
+    if (draft !== null) {
+      setDraft(null);
+      return;
+    }
+    const d = requestDraft(requestLabel, namesFor(ref));
+    autoDraft.current = d;
+    setDraft(d);
+  }
+
+  function pick(r: string) {
+    setPickRef(r);
+    const next = requestDraft(refLabel(r), namesFor(r));
+    setDraft((cur) => {
+      if (cur !== null && cur !== autoDraft.current) return cur; // 의료진이 고친 초안은 그대로 둔다
+      autoDraft.current = next;
+      return next;
+    });
+  }
 
   async function send() {
     if (!draft?.trim()) return;
@@ -216,7 +243,7 @@ function ProtectionFooter({ message, caseLabel, cases, until }: { message: ChatM
               type="button"
               className="btn-ghost btn-sm h-7 text-iris-text"
               aria-expanded={draft !== null}
-              onClick={() => setDraft((d) => (d === null ? requestDraft(requestLabel, changed.map(attrName)) : null))}
+              onClick={openDraft}
             >
               <MailQuestion className="h-3.5 w-3.5" aria-hidden />
               세부 정보 요청
@@ -225,7 +252,7 @@ function ProtectionFooter({ message, caseLabel, cases, until }: { message: ChatM
           {canRequest && requested && (
             <button
               type="button"
-              onClick={msgs.requestOpen}
+              onClick={() => msgs.requestOpen(requestCase)}
               className={`btn-ghost btn-sm h-7 gap-1 text-xs font-semibold ${status?.state === 'released' ? 'text-safe-text' : 'text-iris-text'}`}
               title={`${requestLabel}에 대한 세부 정보 요청${status?.doneAt ? ` · ${formatTime(status.doneAt)} 처리` : ''}. 눌러서 보호 담당자 창 열기`}
             >
@@ -251,8 +278,25 @@ function ProtectionFooter({ message, caseLabel, cases, until }: { message: ChatM
             void send();
           }}
         >
+          {refs.length > 1 && (
+            <div role="radiogroup" aria-label="요청할 사례" className="mb-1.5 flex flex-wrap items-center gap-1.5 px-1">
+              <span className="text-xs font-semibold text-ink-2">요청할 사례</span>
+              {refs.map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  role="radio"
+                  aria-checked={r === ref}
+                  onClick={() => pick(r)}
+                  className={`h-6 rounded-full border px-2 text-xs ${r === ref ? 'border-iris bg-iris-tint font-semibold text-iris-text' : 'border-line-input text-ink-2 hover:text-ink'}`}
+                >
+                  {refLabel(r)}
+                </button>
+              ))}
+            </div>
+          )}
           <label htmlFor={`req-${message.messageId}`} className="mb-1 block px-1 text-xs font-semibold text-ink-2">
-            개인정보 보호 담당자에게 보낼 요청 (사유를 적어 주세요)
+            {requestLabel}에 대해 개인정보 보호 담당자에게 보낼 요청 (사유를 적어 주세요)
           </label>
           <textarea
             id={`req-${message.messageId}`}

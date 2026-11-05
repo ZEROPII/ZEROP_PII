@@ -37,6 +37,8 @@ ATTR_LABEL = dict(AGE="나이", SEX="성별", REGION="거주 지역", DX="진단
                   DURATION="기간")
 DURATION_NOTE = "기간은 범위로만 보여 줍니다"
 NOT_IN_FIRST = "첫 답에 나오지 않음"           # 사례 검색 첫 답이 이 사례를 말하지 않았다 (가린 것이 아니다)
+RELEASE_PARTIAL_KO = "일부 공개 승인"           # 요청한 값 가운데 일부만 공개한 승인 메시지의 종류 이름 (의료진 화면 '일부 승인')
+WAS_HIDDEN_KO = dict(suppress="가렸던 값", generalize="범위로 보였던 값", dropped="답에서 뺐던 값")
 _CASE_LABEL = re.compile(r"사례\s*0*(\d+)(?!\d)")
 _SENTENCE_END = re.compile(r"[.!?。](?=\s|$)|\n")
 _PARA_BREAK = re.compile(r"\n[ \t]*\n")
@@ -240,7 +242,8 @@ def _messages_view(raw: list[dict[str, Any]], case_of_ref: Callable[[str], str |
     for m in raw:
         cid = case_of_ref(m["case"]) if m.get("case") else None
         out.append(dict(messageId=m["id"], createdAt=_iso(m["at"]), sender=m["sender"], kind=m["kind"], kindLabel=m["kind_label"],
-                        caseId=cid, caseLabel=label_of(cid) if cid else None, text=m["text"]))
+                        caseId=cid, caseLabel=label_of(cid) if cid else None, text=m["text"],
+                        partial=m["kind"] == "release" and m.get("kind_label") == RELEASE_PARTIAL_KO))
     return out
 
 
@@ -363,6 +366,10 @@ class ClinicConversation:
         if context_id != f"{self.workspace_id}:patient":
             raise NotFound(context_id)
         out = []
+        approved: dict[str, list[str]] = collections.defaultdict(list)       # 보안 담당자가 승인해 공개한 단서 (사례 카드에 표시)
+        for ap in getattr(self.session, "approvals", None) or []:
+            for x in ap["items"]:
+                approved[x["case"]].append(ATTR_LABEL.get(x["attribute"], x["attribute"]))
         for s, (_, score) in zip(self.slots.values(), self.session.prefix.retrieval):
             t = self.titles.get(s.ref, {})
             item = next(((ATTR_LABEL[a], t[a]) for a in ("MED", "PROC", "PLAN") if a in t), None)
@@ -370,7 +377,8 @@ class ClinicConversation:
             blank = not t
             out.append(dict(caseId=s.case_id, label=s.label, diagnosis=t.get("DX", NOT_IN_FIRST if blank else "진단 미확인"),
                             description=(f"{item[0]} {item[1]}" if item else "물으면 답에 나온 값이 여기에 채워집니다" if blank else "관련 항목 미확인"),
-                            similarityRank=s.number, similarity=round(score, 3), mentioned=not blank))
+                            similarityRank=s.number, similarity=round(score, 3), mentioned=not blank,
+                            approved=list(dict.fromkeys(approved.get(s.ref, [])))))
         return out
 
     def conversation(self, case_id: str) -> dict[str, Any]:
@@ -440,22 +448,24 @@ class ClinicConversation:
                     msg = None
                 # plannedAction: 보내면 어떻게 답할지 (의료진 화면은 후보 수 대신 이것만 보고 안내 문구를 만든다)
                 planned = SUPPRESS if acts.get(SUPPRESS) else GENERALIZE if acts.get(GENERALIZE) else None
+                # basis: 왜 그렇게 답하는지. count(후보 수, 실제 LLM은 미리 센 추정) · rule(보안 담당자 규칙) · purpose(조회 목적) — 뒤의 둘은 확정
+                basis = "count" if planned else None
                 ruled = {(r["case"], r["attribute"]) for r in getattr(self.session, "rules", [])} if self.arm == "C1" else set()
                 if (mine["ref"], seed["target_qi"]) in ruled:
                     # 보안 담당자 규칙: 이 단서는 후보 수와 상관없이 가린다
-                    planned, warn = SUPPRESS, True
+                    planned, warn, basis = SUPPRESS, True, "rule"
                     msg = f"이 대화에서 {label}의 {ATTR_KO.get(seed['target_qi'], seed['target_qi'])}은(는) 보안 담당자 규칙으로 가리고 답합니다."
                 # targetCase*: 질문이 가리킨 사례 (고른 탭이 사례 1이어도 '사례5 환자의 나이'면 사례 5)
                 purpose = getattr(self.session.runs.get(self.arm), "purpose_blocked", frozenset())
                 if seed["target_qi"] in purpose:
                     # 조회 목적에 필요 없는 단서: 후보 수와 관계없이 가린다
-                    planned, warn = SUPPRESS, True
+                    planned, warn, basis = SUPPRESS, True, "purpose"
                     msg = f"{ATTR_KO.get(seed['target_qi'], seed['target_qi'])}은(는) 이번 조회 목적에 필요하지 않아 답에서 뺍니다."
                 alt = ([dict(label=x["label"], question=x["question"]) for x in clinical_questions(self.session.qtype, focus)][:2] if self.live else
                        [dict(label=f"{x['label']} 묻기", question=x["question"])
                         for x in self._ranked(focus, skip=(seed["target_qi"], "PERIOD", "AGE", "SEX", "REGION"))][:2])
                 return dict(base, requiresWarning=warn, understood=True, currentK=mine["k_now"], projectedK=mine["k_if_raw"], message=msg,
-                            affectedAttributes=mine["attributes"], plannedAction=planned,
+                            affectedAttributes=mine["attributes"], plannedAction=planned, basis=basis,
                             targetCaseId=self.case_of_ref(mine["ref"]), targetCaseLabel=label,
                             suggestions=alt if warn else [])
             return dict(base, understood=True)
@@ -698,8 +708,11 @@ class ClinicConversation:
         return f"{head}일부 값을 보호해 답했습니다 ({what}).{how}{unit}{tail}"
 
     # ── 보안 담당자 검토 반영 (review.py) ──
-    def apply_approval(self, ap: dict[str, Any]) -> str:
-        """승인해 공개한 값을 사례 노트(공개 이력)에 더하고, 의료진에게 보낼 메시지 문장을 돌려준다."""
+    def apply_approval(self, ap: dict[str, Any], kept: list[dict[str, Any]] | None = None) -> str:
+        """
+        승인해 공개한 값을 사례 노트(공개 이력)와 사례 목록 카드에 더하고, 의료진에게 보낼 메시지 문장을 돌려준다.
+        kept: 같은 요청에서 이번에 공개하지 않은 값과 그 까닭 · 대안 (assist.kept_items). 있으면 항목마다 결과를 나눠 적는다 (ADR-0031).
+        """
         lines = []
         for x in ap["items"]:
             cid = self.case_of_ref(x["case"])
@@ -709,10 +722,18 @@ class ClinicConversation:
                 sl = self.slots[cid]
                 sl.history.append(dict(entryId=self._id("dh"), turn=x["turn"], attribute=x["attribute"], attributeLabel=label, action=ALLOW,
                                        description=f"{x['value']} (보안 담당자 승인)", value=x["value"], approved=True))
-            lines.append(f"{x['case'].replace('사례', '사례 ')} {label}: {x['value']} ({where}에서 가렸던 값)")
+                if x["attribute"] in TITLE_ATTRS:            # 사례 카드의 진단 · 대표 항목도 가림 · 범위 대신 승인한 값으로
+                    self.titles[x["case"]][x["attribute"]] = x["value"]
+            was = WAS_HIDDEN_KO.get(x.get("action") or "", "가렸던 값")
+            lines.append(f"{x['case'].replace('사례', '사례 ')} {label}: {x['value']} ({where}에서 {was})")
         self.version += 1
         self.updated_at = _iso()
-        return "세부 정보 요청을 승인해 아래 값을 이 대화에서 공개합니다.\n" + "\n".join(lines)
+        if not kept:
+            return "세부 정보 요청을 승인해 아래 값을 이 대화에서 공개합니다.\n" + "\n".join(lines)
+        rest = [f"{k['case'].replace('사례', '사례 ')} {ATTR_LABEL.get(k['attribute'], k['attribute'])}: {k['reason']}"
+                + (f" {k['alternative']}" if k.get("alternative") else "") for k in kept]
+        return ("세부 정보 요청 가운데 일부를 승인했습니다.\n\n공개한 값\n" + "\n".join(f"· {ln}" for ln in lines)
+                + "\n\n이번에 공개하지 않은 값\n" + "\n".join(f"· {ln}" for ln in rest))
 
     def _question_no(self, cid: str | None, engine_turn: int) -> int | str:
         if cid:

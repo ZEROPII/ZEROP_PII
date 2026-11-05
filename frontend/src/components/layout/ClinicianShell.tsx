@@ -99,7 +99,8 @@ export function ClinicianShell({ role, product, onOpenPalette }: { role: Role; p
             <ChromeButton
               label={msgs.unread ? `개인정보 보호 담당자 메시지 ${msgs.unread}건 새로 옴` : '개인정보 보호 담당자 메시지'}
               badge={msgs.unread}
-              onClick={msgs.requestOpen}
+              // 알림이 가리키는 사례(보호 담당자의 마지막 메시지)로 연다: 새 요청의 기본 사례가 그 사례가 된다
+              onClick={() => msgs.requestOpen([...msgs.messages].reverse().find((m) => m.sender === 'security')?.caseId ?? null)}
             >
               <Bell className="h-4 w-4" aria-hidden />
             </ChromeButton>

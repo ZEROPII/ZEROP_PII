@@ -1,7 +1,9 @@
-import { ArrowLeft, ChevronRight, Info, Loader2, Search, Stethoscope } from 'lucide-react';
+import { AlertCircle, ArrowLeft, ChevronRight, Info, Loader2, RotateCw, Search, Stethoscope } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { emrApi, fhirDate, fhirLabel, type FhirResource } from '../api/emrApi';
+import { ApiError } from '../api/types';
+import { openFailure, type OpenFailure } from '../lib/openFailure';
 import { ErrorState, LoadingState } from '../components/common/StatusViews';
 import { useToast } from '../components/layout/Toast';
 import { useWorkspace } from '../state/WorkspaceContext';
@@ -86,6 +88,8 @@ export function EmrPage() {
   const [purpose, setPurpose] = useState<string | null>(null);
   const [chart, setChart] = useState<{ id: string; conditions: FhirResource[] | null; meds: FhirResource[] | null } | null>(null);
   const [busy, setBusy] = useState(false);
+  /** 열기가 실패한 까닭 (다시 시도하거나 닫을 때까지 남긴다) */
+  const [failed, setFailed] = useState<OpenFailure | null>(null);
   const [tab, setTab] = useState<StatusTab>('ACTIVE');
   const [confirm, setConfirm] = useState(false);
   const [progress, setProgress] = useState<LaunchProgress | null>(null);
@@ -183,6 +187,7 @@ export function EmrPage() {
 
   function pick(p: WorklistPatient) {
     setConfirm(false);
+    if (p.fhirId !== picked) setFailed(null); // 다른 환자를 고르면 앞의 실패 안내는 지운다
     setPicked(p.fhirId);
     const cur = p.purposes.find((x) => x.trialId === currentTrial);
     setPurpose((cur ?? p.purposes[0]).purpose);
@@ -196,14 +201,19 @@ export function EmrPage() {
   async function open() {
     if (!patient || !purpose) return;
     setConfirm(false);
+    setFailed(null);
     setBusy(true);
+    const started = Date.now();
     try {
       const r = await emrApi.launch(patient.fhirId, purpose, visitEvent);
       actions.resetAndReload();
       toast(`환자 ${patient.identifier}로 진료 지원 AI를 열었습니다${r.seconds != null ? ` (${Math.round(r.seconds)}초)` : ''}.`);
       navigate('/');
     } catch (e) {
-      toast(e instanceof Error ? e.message : '진료 지원 AI를 열지 못했습니다.');
+      const status = e instanceof ApiError ? (e.status ?? 0) : 0;
+      setFailed(openFailure(status, e instanceof Error ? e.message : '진료 지원 AI를 열지 못했습니다.', (Date.now() - started) / 1000));
+      // 앞단이 끊었어도 서버는 그 사이 환자를 열었을 수 있다: 진료 중 환자 띠를 다시 받는다
+      if (!status || status >= 500) actions.resetAndReload();
     } finally {
       setBusy(false);
     }
@@ -471,6 +481,27 @@ export function EmrPage() {
                 )}
                 {busy ? '진료 지원 AI를 여는 중' : !sel ? '진료 목적을 고르세요' : selIsCurrent ? '열린 진료 지원 AI로 돌아가기' : `${sel.purposeLabel} 참고로 진료 지원 AI 열기`}
               </button>
+              {failed && !busy && (
+                <div role="alert" className="mt-2.5 rounded-control border border-danger bg-danger-tint px-3 py-2.5">
+                  <p className="flex items-center gap-1.5 text-[13px] font-semibold text-danger-text">
+                    <AlertCircle className="h-4 w-4 shrink-0" aria-hidden />
+                    진료 지원 AI를 열지 못했습니다
+                  </p>
+                  <p className="mt-1 text-xs leading-5 text-ink">{failed.detail}</p>
+                  {failed.hint && <p className="mt-0.5 text-xs leading-5 text-ink-2">{failed.hint}</p>}
+                  <div className="mt-2 flex gap-2">
+                    {failed.retry && (
+                      <button type="button" className="btn-primary btn-sm" onClick={() => void open()}>
+                        <RotateCw className="h-3.5 w-3.5" aria-hidden />
+                        다시 시도
+                      </button>
+                    )}
+                    <button type="button" className="btn-ghost btn-sm" onClick={() => setFailed(null)}>
+                      닫기
+                    </button>
+                  </div>
+                </div>
+              )}
               {busy && (
                 <div role="status" aria-live="polite" className="mt-2.5">
                   <div className="h-1 overflow-hidden rounded-full bg-surface-2">

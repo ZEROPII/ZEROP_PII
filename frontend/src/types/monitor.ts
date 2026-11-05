@@ -426,8 +426,9 @@ export interface AuditEntry {
   client?: string;
   /** 규칙 기록: 단서 종류 */
   attribute?: string;
-  /** 공개 승인: 공개한 항목 (값 없음) */
+  /** 공개 승인: 공개한 항목 (값 없음) · 요청한 사례에서 이번에 공개하지 않은 단서 */
   items?: { turn: number; case: string; attribute: string }[];
+  kept?: { case: string; attribute: string }[];
   /** 레드팀 시작: live · oracle, 유형마다 질의 환자 수 */
   llm?: string;
   per_type?: number | null;

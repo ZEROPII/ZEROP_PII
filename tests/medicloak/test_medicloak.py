@@ -300,6 +300,7 @@ def test_real_llm_question_is_defended_and_redacted(world):
     _, sid = launch(doc, "T0014")
     pf = doc.post("/api/cases/case-1/preflight", json=dict(sessionId=sid, question=Q_DRUG)).json()
     assert pf["currentK"] is None and not redact.leaked_numbers(pf)
+    assert pf["estimate"] == "oracle"            # 기록대로 답한다면 미리 센 것: 의료진 화면이 확정처럼 말하지 않게 (ADR-0031)
     n0 = len(fake.calls)
     r = doc.post("/api/cases/case-1/messages", json=dict(sessionId=sid, question=Q_DRUG, clientMessageId="q1"))
     assert r.status_code == 200, r.text
@@ -1020,9 +1021,10 @@ def test_live_rewrite_retry_is_told_what_was_left(world):
     prompts = [c["payload"]["messages"][-1]["content"] for c, r in zip(fake.calls[n0:], fake.roles()[n0:]) if r == "rewriter"]
     head = [x.rsplit("\n[바꿀 표현]\n", 1)[0] for x in prompts]
     assert len(head) == 2
-    assert "6. 바꿀 값은 그 자리만이 아니라 답 전체에서 고친다" in head[0] and "'cetirizine'(사례4)" in head[0] and "10. 앞서" not in head[0]
+    assert "6. 바꿀 값은 그 자리만이 아니라 답 전체에서 고친다" in head[0] and "'cetirizine'(사례4)" in head[0] and "11. 앞서" not in head[0]
+    assert "10. 원래 답에 없던 원인 · 목적 · 진단을 짐작해 덧붙이지 않는다" in head[0]           # 짐작 금지 (ADR-0031)
     assert "8. 값을 빼서 내용이 없어진 줄" in head[0] and "9. 날짜를 빼더라도 기간" in head[0]
-    assert "10. 앞서 고친 답을 다시 확인하니" in head[1] and "남은 표현: 'cetirizine hydrochloride 5 mg oral tablet'" in head[1]
+    assert "11. 앞서 고친 답을 다시 확인하니" in head[1] and "남은 표현: 'cetirizine hydrochloride 5 mg oral tablet'" in head[1]
     sec = login(world, "privacy1")
     w = current_conv(sec, "재시도의사")
     assert sec.get(f"/api/monitor/sessions/{w}").json()["arms"]["C1"]["turns"][0]["mode"] == "REWRITTEN"
@@ -1256,7 +1258,7 @@ def test_residence_is_hidden_for_every_query_purpose(world):
     rec = world["eng"].sessions[w].logs["C1"][-1]
     region_d = [d for p in rec["release_plans"] for d in p["decisions"] if d["attribute"] == "REGION"]
     assert region_d and all(d["action"] == "suppress" and d.get("purpose") for d in region_d)
-    assert "medicloak-release-v5" == world["eng"].sessions[w].runs["C1"].trial["versions"]["medicloak_release"]
+    assert RELEASE_VERSION == world["eng"].sessions[w].runs["C1"].trial["versions"]["medicloak_release"] == "medicloak-release-v6"
     hidden = sec.get(f"/api/monitor/sessions/{w}/hidden").json()
     items = hidden["items"] if isinstance(hidden, dict) else hidden
     assert not any(x["attribute"] == "REGION" for x in items)
@@ -1396,7 +1398,8 @@ def test_drop_cases_and_rewrite_rules_unit():
           dict(case_ref="사례5", attribute="MED", raw_value="fexofenadine hydrochloride 30 MG Oral Tablet", action="generalize")]
     r1, r2 = rewrite_rules(prompt, ch), rewrite_rules(prompt, ch, "- 사례2 환자를 알아볼 수 있는 표현이 아직 남았다.")
     assert r1.index("6. 바꿀 값은") < r1.rindex("\n[바꿀 표현]\n") and "'naproxen'(사례2)" in r1 and "fexofenadine'(" not in r1
-    assert "10. 앞서" not in r1 and r2.index("10. 앞서 고친 답을") < r2.rindex("\n[바꿀 표현]\n")
+    assert "11. 앞서" not in r1 and r2.index("11. 앞서 고친 답을") < r2.rindex("\n[바꿀 표현]\n")
+    assert r1.index("10. 원래 답에 없던 원인") < r1.rindex("\n[바꿀 표현]\n")
     assert r1.endswith("[원 답변]\n원 답") and rewrite_rules("다른 지시문", ch) == "다른 지시문"
 
 def test_redact_unit():
@@ -1819,3 +1822,83 @@ def test_monitor_flags_repeat_subjects_focuses_requests_and_ignores_double_sends
         t.join(30)
     assert codes == [200, 200]
     assert len(sec.get(f"/api/monitor/sessions/{w2}/messages").json()["messages"]) == n1 + 1
+
+
+# ── 의료진 쪽: 승인 결과 · 사례 카드 · 짐작 금지 (ADR-0031) ─────────────────
+
+def test_partial_approval_reports_each_item_and_updates_case_card(world):
+    """
+    공개 승인 결과를 항목마다 알린다. 공개한 값은 어떻게 가렸던 값인지와 함께, 요청한 사례의 나머지 가린 값은 까닭 · 대안과 함께
+    (숫자 없음). 일부만 공개하면 '일부 공개 승인'(partial). 승인한 단서는 사례 목록 카드에 표시된다. 감사 기록에 공개하지 않은 단서.
+    """
+    add_user(world["store"], "doctor_pa", "부분의사", "clinician", "내과", PW)
+    doc = login(world, "doctor_pa")
+    _, sid = launch(doc, "T0014")
+    doc.post("/api/cases/case-1/messages", json=dict(sessionId=sid, question=Q_DRUG, clientMessageId="pa1"))
+    world["fake"].ages["사례1"] = "33-38세"                              # 나이를 물으면 사례 1을 이 범위로 답한다 (가림 대상)
+    try:
+        doc.post("/api/cases/case-1/messages", json=dict(sessionId=sid, question="사례1 환자의 나이를 알려 주세요", clientMessageId="pa2"))
+    finally:
+        world["fake"].ages.pop("사례1", None)
+    doc.post("/api/clinic/messages", json=dict(kind="access_request", text="사례 1의 시기와 나이가 약 조정에 필요합니다.", caseId="case-1"))
+    sec = login(world, "privacy1")
+    w = current_conv(sec, "부분의사")
+    hidden = [x for x in sec.get(f"/api/monitor/sessions/{w}/hidden").json() if x["case"] == "사례1" and not x["released"]]
+    assert {x["attribute"] for x in hidden} >= {"PERIOD", "AGE"}, hidden
+    period = next(x for x in hidden if x["attribute"] == "PERIOD")
+    r = sec.post(f"/api/monitor/sessions/{w}/approve",
+                 json=dict(items=[period["id"]], reason="처방 시작 시기가 약 조정 판단에 꼭 필요함", confirmLowK=True))
+    assert r.status_code == 200, r.text
+    msgs = doc.get("/api/clinic/messages").json()
+    rel = msgs[-1]
+    assert rel["kind"] == "release" and rel["kindLabel"] == "일부 공개 승인" and rel["partial"] is True
+    text = rel["text"]
+    assert text.startswith("세부 정보 요청 가운데 일부를 승인했습니다.")
+    assert "· 사례 1 시기: 2004-06-16 (질문 1의 답에서 가렸던 값)" in text
+    _, kept = text.split("이번에 공개하지 않은 값\n")
+    line = next(ln for ln in kept.splitlines() if ln.startswith("· 사례 1 나이: "))
+    assert "공개하지 않습니다" in line or "열지 않았습니다" in line or "범위로 둡니다" in line
+    assert not re.search(r"\d+\s*명", kept) and "후보" not in kept                 # 의료진에게는 후보 수를 알리지 않는다
+    # 사례 목록 카드: 승인한 단서 표시
+    ctx = doc.get("/api/patient-context").json()["contextId"]
+    cases = doc.get("/api/cases", params=dict(patientContextId=ctx)).json()
+    assert cases[0]["approved"] == ["시기"] and all(c["approved"] == [] for c in cases[1:])
+    # 감사 기록: 공개하지 않은 단서
+    log = next(a for a in sec.get("/api/monitor/audit").json() if a["action"] == "approve_release" and a["session"] == w)
+    assert {"case": "사례1", "attribute": "AGE"} in log["kept"]
+    # 관제의 메시지 종류 이름도 '일부 공개 승인' (값은 열람 전에는 지움)
+    th = sec.get(f"/api/monitor/sessions/{w}/messages").json()["messages"]
+    assert th[-1]["kind_label"] == "일부 공개 승인" and th[-1]["masked"] and "2004-06-16" not in th[-1]["text"]
+
+
+def test_approval_of_title_value_updates_card_and_says_how_it_was_hidden(world):
+    """승인한 진단 · 대표 항목은 사례 카드에 그 값으로 보이고, 범위로 보였던 값은 '범위로 보였던 값'이라고 알린다."""
+    from webdemo.backend.clinic import ClinicDesk
+    conv = ClinicDesk(world["eng"], "T0014").current                  # 결정적 응답기 대화 (등록부 밖, 이 테스트만 씀)
+    ref = conv.slots["case-1"].ref
+    conv.titles[ref]["DX"] = "(비공개)"
+    text = conv.apply_approval(dict(items=[dict(turn=1, case=ref, index=0, attribute="DX", value="Acute cystitis without hematuria",
+                                                action="generalize")]))
+    assert "(질문 1의 답에서 범위로 보였던 값)" in text and text.startswith("세부 정보 요청을 승인해")
+    assert conv.similar_cases(f"{conv.workspace_id}:patient")[0]["diagnosis"] == "Acute cystitis without hematuria"
+    ent = conv.disclosures("case-1")["entries"][-1]
+    assert ent["approved"] and ent["value"] == "Acute cystitis without hematuria"
+
+
+def test_answer_style_and_rewriter_forbid_guessing_causes():
+    """대상 AI 답 형식과 재작성기 지시에 '기록에 없는 원인 · 목적을 짐작하지 않는다'가 있다 (판정 규칙 v6)."""
+    from webdemo.backend.review import rewrite_rules
+    assert "짐작해 쓰지 않습니다" in ANSWER_STYLE and "'기록에 없음'" in ANSWER_STYLE
+    assert RELEASE_VERSION == "medicloak-release-v6"
+    out = rewrite_rules("지시\n[바꿀 표현]\n- 사례1 진단\n[원 답변]\n원 답", [dict(attribute="DX", action="generalize", case_ref="사례1")])
+    assert "10. 원래 답에 없던 원인 · 목적 · 진단을 짐작해 덧붙이지 않는다" in out
+
+
+def test_preflight_says_why_and_whether_it_is_an_estimate(world):
+    """보내기 전 확인은 왜 가리는지(basis)를 함께 준다. 조회 목적 · 규칙은 확정, 후보 수는 실제 LLM에서 미리 센 추정(estimate)."""
+    add_user(world["store"], "doctor_pfb", "확인의사", "clinician", "내과", PW)
+    doc = login(world, "doctor_pfb")
+    _, sid = launch(doc, "T0014")
+    pf = doc.post("/api/cases/case-1/preflight", json=dict(sessionId=sid, question="이 환자는 어디에 살았나요?")).json()
+    assert pf["requiresWarning"] and pf["plannedAction"] == "suppress" and pf["basis"] == "purpose" and pf["estimate"] == "oracle"
+    assert not redact.leaked_numbers(pf)

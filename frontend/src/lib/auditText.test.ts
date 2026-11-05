@@ -23,6 +23,10 @@ describe('감사 기록 글', () => {
       '사례 1 시기 · 공개 뒤 후보 1명 (기준 아래) · 사유: 약물 조정에 시작 시기가 꼭 필요함',
     );
     expect(detailOf(entry({ action: 'approve_release', items, k_min: 9, high_risk: false, reason: '시기 확인 필요' }))).toBe('사례 1 시기 · 공개 뒤 후보 9명 · 사유: 시기 확인 필요');
+    // 요청한 사례에서 이번에 공개하지 않은 단서 (ADR-0031)
+    expect(detailOf(entry({ action: 'approve_release', items, kept: [{ case: '사례1', attribute: 'AGE' }], k_min: 9, reason: '시기 확인 필요' }))).toBe(
+      '사례 1 시기 · 공개하지 않음: 사례 1 나이 · 공개 뒤 후보 9명 · 사유: 시기 확인 필요',
+    );
   });
 
   it('규칙 걸기 실패도 이름과 까닭이 보인다', () => {

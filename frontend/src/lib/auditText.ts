@@ -59,7 +59,9 @@ export function detailOf(a: AuditEntry): string | null {
   if (a.action === 'approve_release') {
     const items = (a.items ?? []).map((x) => `${caseLabel(x.case)} ${ATTR_KO[x.attribute] ?? x.attribute}`).join(', ');
     // 고위험 승인(기준 아래로 내려가는 공개)은 화면이 '고위험' 표시를 따로 붙인다
-    return join([items, a.k_min != null ? `공개 뒤 후보 ${a.k_min}명${a.high_risk ? ' (기준 아래)' : ''}` : null, a.reason ? `사유: ${a.reason}` : null]);
+    const kept = (a.kept ?? []).map((x) => `${caseLabel(x.case)} ${ATTR_KO[x.attribute] ?? x.attribute}`).join(', ');
+    return join([items, kept ? `공개하지 않음: ${kept}` : null, a.k_min != null ? `공개 뒤 후보 ${a.k_min}명${a.high_risk ? ' (기준 아래)' : ''}` : null,
+      a.reason ? `사유: ${a.reason}` : null]);
   }
   if (a.action === 'redteam_start')
     return join([a.job, a.trigger === 'change' ? '설정이 바뀌어 자동' : a.trigger === 'daily' ? '정기 자동' : null, a.llm === 'live' ? '실제 LLM' : '결정적 응답기', a.per_type ? `유형마다 ${a.per_type}명` : '전체']);

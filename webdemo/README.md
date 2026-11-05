@@ -93,7 +93,7 @@ tests/test_webdemo.py
 | `GET /api/watch` · `GET /api/watch/{대화}/…` | 보안 담당자: 의료진 대화 목록, 그 대화의 의료진 화면 계약을 숫자 그대로 (읽기 전용, `/preflight`는 질문 미리 세기) |
 | `GET /api/clinic/history` · `GET /api/monitor/policy` | 의료진 대화 목록(이 화면 · 계정) · 판정 기준과 서버 설정 |
 | `GET /api/cases/{id}/suggestions` · `GET /api/clinic/patients` · `POST /api/session/reset {trialId}` | 예시 질문, 질의 환자 목록, 새 대화 |
-| `GET /api/clinic/messages` · `POST /api/clinic/messages {kind, text, caseId}` | 의료진 ↔ 보호 담당자 메시지 (kind: access_request 세부 정보 요청 · reply 답장) |
+| `GET /api/clinic/messages` · `POST /api/clinic/messages {kind, text, caseId}` | 의료진 ↔ 보호 담당자 메시지 (kind: access_request 세부 정보 요청 · reply 답장). 공개 승인 메시지는 요청한 사례로 오고, 일부만 공개했으면 `partial` (ADR-0031) |
 | `GET /api/monitor/overview` · `GET /api/monitor/sessions/{sid}` | 관제 목록과 상세 (원래 값은 지워서 보냄) |
 | `POST /api/monitor/sessions/{sid}/reveal {reason, note}` · `/review {action, note}` · `GET /api/monitor/audit` | 원문 열람(`note`: 확인하려는 것, 운영 모드는 필수), 검토 표시(ask_clinician은 확인 요청 메시지도 보냄), 감사 기록 |
 | `POST /api/monitor/sessions/{sid}/what-if {items}` | 고른 가린 값을 함께 공개한 뒤의 사례별 후보 수 (State는 바꾸지 않음). 기준 아래로 내려가는 승인은 `approve`에 `confirmLowK`가 필요 (ADR-0030) |

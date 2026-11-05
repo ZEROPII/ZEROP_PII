@@ -165,6 +165,38 @@ def analyse(s: Any, request: dict[str, Any]) -> dict[str, Any]:
                 combinedK=min(combined.values()) if combined else None, counts=counts, verdict=verdict, verdictLabel=VERDICT_KO[verdict], steps=steps)
 
 
+# ── 공개 승인 결과: 요청에서 이번에 공개하지 않은 값 (ADR-0031) ──
+def kept_items(a: dict[str, Any], approved: list[dict[str, Any]], limit: int = 6) -> list[dict[str, Any]]:
+    """
+    analyse 결과에서 이번 승인에 들지 않은 값마다 의료진에게 보낼 까닭과 대안. 숫자는 쓰지 않는다 (의료진 화면 원칙).
+    같은 사례 · 단서는 한 줄로 모으고, 이번에 그 단서를 하나라도 공개했으면 뺀다 ('공개'와 '공개 안 함'이 같은 단서에 함께 보이지 않게).
+    """
+    done = {(x["case"], x["attribute"]) for x in approved}
+    ids = {f"{x['turn']}:{x['case']}:{x['index']}" for x in approved}
+    purpose = a.get("purposeLabel") or "진료"
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for i in a.get("items") or []:
+        key = (i["case"], i["attribute"])
+        if i["id"] in ids or key in done or key in seen:
+            continue
+        seen.add(key)
+        rec = i["rec"]
+        if rec == "keep":
+            why = f"지금 보이는 범위로도 {purpose} 판단에 충분하다고 보아 범위로 둡니다."
+        elif rec == "consider":
+            why = "그대로 보이면 과거 환자를 알아볼 수 있어 이번에는 열지 않았습니다. 진료에 꼭 필요한 이유를 알려 주시면 다시 검토합니다."
+        elif rec == "decline" and i["need"] == "low":
+            why = f"이번 {purpose} 참고 목적과 관련이 적어 공개하지 않습니다."
+        elif rec == "decline":
+            why = "공개하면 그 과거 환자를 알아볼 수 있어 공개하지 않습니다."
+        else:
+            why = "이번에는 공개하지 않았습니다. 필요하면 다시 요청해 주세요."
+        alt = ALT_REPLY.get(i["attribute"]) if rec in ("consider", "decline") else None
+        out.append(dict(case=i["case"], attribute=i["attribute"], action=i["action"], rec=rec, reason=why, alternative=alt))
+    return out[:limit]
+
+
 # ── 정해진 문장 (LLM이 없거나 실패했을 때) ──
 def template_text(a: dict[str, Any]) -> dict[str, str]:
     items, purpose, case = a["items"], a["purposeLabel"], a["caseLabel"]
