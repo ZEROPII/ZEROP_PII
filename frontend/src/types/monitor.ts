@@ -82,6 +82,8 @@ export interface MonitorPolicy extends ProtectionPolicy {
   persist: boolean;
   /** 실제 LLM 대화에 나이 · 날짜 규칙 추출을 켰는지 */
   ruleExtract?: boolean;
+  /** 실제 LLM 대상 AI에 짧은 답 형식을 붙였는지 (의료진 대화 · 레드팀 같은 설정) */
+  answerStyle?: boolean;
   /** 서버를 켠 뒤 의료진 대화 LLM 호출 (역할별 호출 수 · 토큰). LLM이 없으면 null */
   llmUsage?: { label: string; calls: number; by_role: Record<string, { calls: number; input_tokens: number; output_tokens: number }> } | null;
 }
@@ -354,6 +356,8 @@ export interface RedTeamJob {
   /** 서버의 실제 LLM으로 돌렸는지 (false = 결정적 응답기) */
   live?: boolean;
   model?: string | null;
+  /** 실제 LLM 실행의 대상 AI 답 형식. 이 설정이 생기기 전 실행은 없음(= 지시 없음) */
+  answer_style?: 'on' | 'off' | null;
   profile_label: string;
   fuzzer: string;
   fuzzer_label: string;

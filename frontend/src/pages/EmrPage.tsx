@@ -27,20 +27,24 @@ function who(p: WorklistPatient): string {
 }
 
 function StatusTag({ p }: { p: WorklistPatient }) {
-  const tone =
-    p.status === 'ACTIVE' ? 'bg-safe-tint text-safe-text' : p.status === 'DORMANT' ? 'border border-dashed border-line-input text-ink-3' : 'bg-surface-2 text-ink-3';
+  // 점 하나로 상태를 구분한다: 진료 중(채운 초록) · 완치(채운 회색) · 장기 미내원(빈 원)
+  const dot = p.status === 'ACTIVE' ? 'bg-safe' : p.status === 'RESOLVED' ? 'bg-ink-3' : 'border border-ink-3';
   return (
-    <span title={STATUS_TITLE[p.status](p)} className={`inline-flex items-center whitespace-nowrap rounded-[5px] px-1.5 py-px text-[11px] font-semibold ${tone}`}>
+    <span title={STATUS_TITLE[p.status](p)} className={`inline-flex items-center gap-1.5 whitespace-nowrap text-xs font-medium ${p.status === 'ACTIVE' ? 'text-ink' : 'text-ink-3'}`}>
+      <span aria-hidden className={`h-[7px] w-[7px] rounded-full ${dot}`} />
       {p.statusLabel}
     </span>
   );
 }
 
 /** 진단 · 처방 기록 몇 줄 (FHIR 검색 결과, 최근 것부터) */
-function ChartList({ title, items, empty }: { title: string; items: FhirResource[] | null; empty: string }) {
+function ChartList({ title, source, items, empty }: { title: string; source: string; items: FhirResource[] | null; empty: string }) {
   return (
     <section className="border-t border-line px-4 py-3.5">
-      <h3 className="text-xs font-semibold text-ink-3">{title}</h3>
+      <h3 className="flex items-baseline justify-between gap-2 text-xs font-semibold text-ink-2">
+        {title}
+        <span className="font-mono text-[10.5px] font-normal text-ink-3">{source}</span>
+      </h3>
       {!items ? (
         <p className="mt-2 text-[13px] text-ink-3">불러오는 중</p>
       ) : items.length === 0 ? (
@@ -290,13 +294,7 @@ export function EmrPage() {
                         <span className="line-clamp-2">{p.conditions.slice(0, 2).join(', ') || '기록 없음'}</span>
                       </td>
                       <td className="border-b border-line px-3 py-2.5 align-top">
-                        <span className="flex flex-wrap gap-1">
-                          {p.purposes.map((x) => (
-                            <span key={x.trialId} className="rounded-[5px] border border-line px-1.5 py-px text-[11.5px] text-ink-2">
-                              {x.purposeLabel}
-                            </span>
-                          ))}
-                        </span>
+                        <span className="text-xs leading-5 text-ink-2">{p.purposes.map((x) => x.purposeLabel).join(' · ')}</span>
                       </td>
                       <td className="num hidden border-b border-line px-3 py-2.5 text-right align-top text-xs text-ink-3 sm:table-cell">{p.lastRecord ?? '–'}</td>
                     </tr>
@@ -306,7 +304,7 @@ export function EmrPage() {
             </table>
             {shown.length === 0 && <p className="px-5 py-8 text-center text-[13px] text-ink-3">맞는 환자가 없습니다.</p>}
             <p className="px-4 py-3 text-xs text-ink-3 md:px-5">
-              외래 환자 {list.length}명 (Synthea 합성 데이터, 실제 환자 아님) · 기록은 가상 EMR의 FHIR R4 API에서 읽습니다.
+              외래 환자 {list.length}명 · 진단 · 처방 기록은 EMR의 FHIR R4 API에서 읽습니다.
             </p>
           </div>
         )}
@@ -359,8 +357,8 @@ export function EmrPage() {
                   })}
                 </div>
               </div>
-              <ChartList title="최근 진단 (FHIR Condition)" items={chart?.id === patient.fhirId ? chart.conditions : null} empty="진단 기록이 없습니다." />
-              <ChartList title="최근 처방 (FHIR MedicationRequest)" items={chart?.id === patient.fhirId ? chart.meds : null} empty="처방 기록이 없습니다." />
+              <ChartList title="최근 진단" source="FHIR Condition" items={chart?.id === patient.fhirId ? chart.conditions : null} empty="진단 기록이 없습니다." />
+              <ChartList title="최근 처방" source="FHIR MedicationRequest" items={chart?.id === patient.fhirId ? chart.meds : null} empty="처방 기록이 없습니다." />
             </div>
             <footer className="border-t border-line px-4 py-3.5">
               {confirm && current && (

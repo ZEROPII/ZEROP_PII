@@ -145,8 +145,13 @@ function dur(sec: number | null | undefined): string {
   return `${Math.floor(m / 60)}시간 ${m % 60}분`;
 }
 
+/** 실제 LLM 실행의 대상 AI 답 형식: 다른 설정끼리는 결과를 바로 비교하지 않는다 */
+function styleText(j: RedTeamJob): string {
+  return j.answer_style === 'on' ? '짧은 답 지시' : '답 형식 지시 없음';
+}
+
 function jobTitle(j: RedTeamJob): string {
-  const who = j.live ? (j.model ?? '실제 LLM') : `결정적 응답기 (${j.profile_label})`;
+  const who = j.live ? `${j.model ?? '실제 LLM'} · ${styleText(j)}` : `결정적 응답기 (${j.profile_label})`;
   const n = j.trials ?? Math.round(j.total / 3);
   const when = j.started_at ? new Date(j.started_at * 1000).toLocaleString('ko-KR', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
   const kept = j.kept ?? j.done;
@@ -352,7 +357,7 @@ export function ReportPage() {
               {STATUS_KO[job.status]}
             </StatusChip>
             <span className="font-mono text-xs text-ink-3">{job.id}</span>
-            <span className="text-ink-2">{job.live ? job.model ?? '실제 LLM' : '결정적 응답기'}</span>
+            <span className="text-ink-2">{job.live ? `${job.model ?? '실제 LLM'} · ${styleText(job)}` : '결정적 응답기'}</span>
             <span className="flex-1" />
             {running && job.status === 'running' && (
               <button type="button" className="btn-ghost btn-sm" onClick={() => void cancel()}>

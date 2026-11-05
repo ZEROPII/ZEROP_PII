@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import threading
 import time
@@ -128,7 +129,9 @@ def make_live_llm(choice: str, cfg: Any, env_file: str | None = None) -> tuple[A
     return ClientRoleLLM(LLMClient(s), models=dict(cfg.models), temperature=cfg.temperature), f"실제 LLM ({s.llm_model})"
 
 
-# 의료진 대화의 대상 AI에게 붙이는 답 형식 (진료 화면에서 읽기 쉽고, 생성 · 추출 · 재작성 호출이 짧아진다). 레드팀에는 붙이지 않는다.
+# 실제 LLM 대상 AI에게 붙이는 답 형식 (진료 화면에서 읽기 쉽고, 생성 · 추출 · 재작성 호출이 짧아진다).
+# 의료진 대화와 실제 LLM 레드팀에 똑같이 붙인다: 방어 효과를 잰 조건과 운영 조건이 같아야 레드팀 수치로 운영을 설명할 수 있다.
+# serve --answer-style off로 둘 다 끈다 (비교 실험용). 레드팀 실행 기록에 켬 · 끔과 지시문 해시를 남긴다.
 ANSWER_STYLE = """[답 형식]
 이 답은 진료 중인 의사의 화면에 그대로 보입니다.
 - 사례마다 짧은 문장 두세 개로 씁니다. 표, 머리글(#), 굵은 글씨(**)는 쓰지 않습니다.
@@ -136,8 +139,18 @@ ANSWER_STYLE = """[답 형식]
 - 기록에 없는 내용은 '-'로 채우지 말고 쓰지 않습니다."""
 
 
+ANSWER_STYLE_ID = "short-v1:" + hashlib.sha256(ANSWER_STYLE.encode("utf-8")).hexdigest()[:8]
+
+
+def styled(role: str, system: str) -> str:
+    """대상 AI(target) 지시문 끝에 답 형식을 붙인다. 다른 역할 · 이미 붙은 지시문은 그대로."""
+    return f"{system}\n\n{ANSWER_STYLE}" if role == "target" and ANSWER_STYLE not in system else system
+
+
 class AnswerStyleLLM:
-    """의료진 대화의 LLM을 감싼다. 대상 AI 지시문 끝에 답 형식을 붙이고, 다른 역할은 그대로 보낸다."""
+    """실제 LLM을 감싼다. 대상 AI 지시문 끝에 답 형식을 붙이고, 다른 역할은 그대로 보낸다."""
+
+    style_id = ANSWER_STYLE_ID                          # 첫 답 나눠 쓰기의 키에 넣는다 (답 형식이 다르면 다른 요청)
 
     def __init__(self, inner: Any) -> None:
         self.inner = inner
@@ -146,28 +159,27 @@ class AnswerStyleLLM:
         return getattr(self.inner, name)
 
     def complete(self, role: str, system: str, messages: list[dict[str, str]], **kw: Any) -> str:
-        if role == "target" and ANSWER_STYLE not in system:
-            system = f"{system}\n\n{ANSWER_STYLE}"
-        return self.inner.complete(role, system, messages, **kw)
+        return self.inner.complete(role, styled(role, system), messages, **kw)
 
 
 class Turn0Cache:
     """
     첫 답(턴 0) 요청과 받은 답을 대화 사이에 나눠 쓴다. 같은 환자 · 같은 진료 목적이면 검색 사례 · 질문 · 지시문이 같아 요청이
     글자까지 같다(온도 0). 다른 의료진이 같은 환자를 열거나 다시 열 때 실제 LLM을 다시 부르지 않는다. 메모리에만 둔다.
+    키는 요청의 SHA-256이다 (request_key). 지시문에는 검색된 과거 환자 기록이 들어 있어 원문을 키로 두지 않는다.
     """
 
     def __init__(self, cap: int = 4000) -> None:
         self.cap = cap
         self.lock = threading.Lock()
-        self.answers: dict[tuple[str, str, str], list[str]] = {}
+        self.answers: dict[str, list[str]] = {}
 
-    def get(self, key: tuple[str, str, str], n: int) -> str | None:
+    def get(self, key: str, n: int) -> str | None:
         with self.lock:
             got = self.answers.get(key)
             return got[n] if got is not None and n < len(got) else None
 
-    def put(self, key: tuple[str, str, str], n: int, out: str) -> None:
+    def put(self, key: str, n: int, out: str) -> None:
         with self.lock:
             got = self.answers.setdefault(key, [])
             if len(got) == n:
@@ -175,10 +187,16 @@ class Turn0Cache:
             while len(self.answers) > self.cap:                 # 오래된 요청부터 지운다
                 self.answers.pop(next(iter(self.answers)))
 
-    def forget(self, keys: set[tuple[str, str, str]]) -> None:
+    def forget(self, keys: set[str]) -> None:
         with self.lock:
             for k in keys:
                 self.answers.pop(k, None)
+
+
+def request_key(style: str, role: str, system: str, messages: list[dict[str, str]]) -> str:
+    """첫 답 나눠 쓰기의 키: 답 형식 판 · 역할 · 지시문 · 대화를 이은 글의 SHA-256 (원문은 남기지 않는다)."""
+    raw = "\x00".join((style, role, system, json.dumps(messages, ensure_ascii=False)))
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
 class Turn0LLM:
@@ -198,9 +216,10 @@ class Turn0LLM:
         self.live, self.det = live, det
         self.cache = cache if cache is not None else Turn0Cache()
         self.on_call = on_call
-        self.keys: set[tuple[str, str, str]] = set()
+        self.keys: set[str] = set()
         self.calls = 0
-        self._used: dict[tuple[str, str, str], int] = {}
+        self._used: dict[str, int] = {}
+        self.style = getattr(live, "style_id", "")       # 답 형식이 붙는 LLM이면 그 지시문 판
 
     def next_arm(self) -> None:
         """다음 갈래의 턴 0을 시작한다: 같은 요청을 처음부터 차례대로 다시 쓴다."""
@@ -212,7 +231,7 @@ class Turn0LLM:
     def complete(self, role: str, system: str, messages: list[dict[str, str]], **kw: Any) -> str:
         if role in QUESTION_ROLES:
             return self.det.complete(role, system, messages, **kw)
-        key = (role, system, json.dumps(messages, ensure_ascii=False))
+        key = request_key(self.style, role, system, messages)
         n = self._used.get(key, 0)
         self._used[key] = n + 1
         self.keys.add(key)

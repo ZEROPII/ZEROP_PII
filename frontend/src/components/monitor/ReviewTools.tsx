@@ -90,6 +90,10 @@ export function CountsSection({ d, onReveal }: { d: MonitorDetail; onReveal(): v
           )}
         </span>
       </div>
+      <p className="mt-1 max-w-[62ch] text-xs leading-5 text-ink-3">
+        {josa(caseLabel(focus), '은', '는')} 과거 기록 환자 한 명입니다. 지금까지 답에 나온 이 사람의 단서를 모두 가진 사람이 {max.toLocaleString()}명 중 몇 명인지
+        셉니다. {g}명 아래로 줄면 누구인지 좁혀지고, 1명이면 특정됩니다.
+      </p>
       <div className="mt-2.5">
         <ArmCompare rows={rows} max={max} g={g} s={s} />
       </div>

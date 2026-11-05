@@ -41,7 +41,7 @@ from medical.session import ARMS, Context, extract, make_prefix
 from medical.simulate import SUPPRESSED, OracleRoleLLM, plan_all
 from medical.tracking import Case, known_cases_json, view_of
 from medical.validate import validate_case
-from webdemo.backend.live import ORACLE_LABEL, AnswerStyleLLM, LiveLLM, Turn0Cache, Turn0LLM, background_calls
+from webdemo.backend.live import ANSWER_STYLE_ID, ORACLE_LABEL, AnswerStyleLLM, LiveLLM, Turn0Cache, Turn0LLM, background_calls, styled
 from webdemo.backend.review import RELEASE_VERSION, RuledArmRun, decision_of, hidden_items
 
 PROFILES = ("staged", "full")
@@ -107,7 +107,7 @@ class Engine:
 
     def __init__(self, workdir: Path | None = None, log: Callable[[str], None] = print, *, paths: MedicalPaths | None = None,
                  live_llm: Any = None, live_label: str | None = None, first_id: int = 1, llm_concurrency: int = 1,
-                 live_rule_extract: bool = True) -> None:
+                 live_rule_extract: bool = True, answer_style: bool = True) -> None:
         t0 = time.time()
         self.lock = threading.RLock()                                # kcalc 캐시·응답기 상태를 세션끼리 나눠 쓰므로 한 번에 한 요청
         self.workdir = Path(workdir or ROOT / "runs" / "webdemo")
@@ -127,6 +127,8 @@ class Engine:
         live_cfg = replace(base.cfg, rule_extract=True) if live_rule_extract else base.cfg
         self.live_ctx: Context | None = replace(base, llm=self.live_llm, cfg=live_cfg) if self.live_llm is not None else None
         self.turn0_cache = Turn0Cache()                   # 첫 답 요청 · 답 (대화 사이에 나눠 씀, 메모리)
+        # 실제 LLM 대상 AI의 답 형식 (live.ANSWER_STYLE). 의료진 대화와 레드팀에 같이 걸어, 잰 조건과 운영 조건을 맞춘다
+        self.answer_style = answer_style
         self.live_label = live_label or (ORACLE_LABEL if live_llm is None else "LLM")
         self.seed_by_id = {s["seed_id"]: s for s in base.seeds}
         self.plan = plan_all(None, self.cfg.seed)(self.data, self.split, self.cfg)     # POC와 같은 trial 번호 (T0001…)
@@ -274,8 +276,10 @@ class Session:
         self.rules: list[dict[str, Any]] = []               # 보안 담당자 규칙: 이 대화에서 사례 · 단서 종류는 늘 가림 (review.py, C1에만)
         self.approvals: list[dict[str, Any]] = []           # 보안 담당자가 승인해 공개한 값 (review.py)
         # 실제 LLM 대화는 첫 답(턴 0, 사례 검색)부터 실제 LLM이 쓰고 방어 게이트를 거친다. 검색 질문 문장만 결정적 응답기가 만든다.
-        # 대상 AI에는 진료 화면용 답 형식을 붙이고(AnswerStyleLLM), 첫 답은 같은 환자 · 목적의 다른 대화와 나눠 쓴다(Turn0Cache).
-        live_ctx = replace(eng.live_ctx, llm=AnswerStyleLLM(eng.live_ctx.llm)) if llm_mode == "live" else None
+        # 대상 AI에는 답 형식을 붙이고(AnswerStyleLLM, 레드팀과 같은 설정), 첫 답은 같은 환자 · 목적의 다른 대화와 나눠 쓴다(Turn0Cache).
+        live_ctx = None
+        if llm_mode == "live":
+            live_ctx = replace(eng.live_ctx, llm=AnswerStyleLLM(eng.live_ctx.llm)) if eng.answer_style else eng.live_ctx
         ctx0 = (replace(live_ctx, llm=Turn0LLM(live_ctx.llm, self.ctx.llm, cache=eng.turn0_cache, on_call=on_call))
                 if live_ctx is not None else self.ctx)
         p = self.prefix = make_prefix(ctx0, trial_id, pid, qt, "DOCTOR")
@@ -815,6 +819,7 @@ class _JobLLM:
         inner = copy.copy(live.inner)
         inner.usage = []                                  # 의료진 대화 호출과 섞이지 않게 이 실행의 호출만 센다
         self.llm, self.job = live.sibling(inner), job
+        self.style = job.answer_style                     # 의료진 대화와 같은 대상 AI 답 형식
 
     @property
     def usage(self) -> list[dict[str, Any]]:
@@ -823,7 +828,7 @@ class _JobLLM:
     def complete(self, role: str, system: str, messages: list[dict[str, str]], **kw: Any) -> str:
         if self.job.cancel_event.is_set():
             raise RedTeamCancelled()
-        return self.llm.complete(role, system, messages, **kw)
+        return self.llm.complete(role, styled(role, system) if self.style else system, messages, **kw)
 
 
 class RedTeamJob(threading.Thread):
@@ -856,6 +861,7 @@ class RedTeamJob(threading.Thread):
         self.on_finish = on_finish
         self.llm: Any = None
         self.model = eng.live_label if live else None
+        self.answer_style = bool(live and getattr(eng, "answer_style", True))
 
     def cancel(self) -> None:
         self.cancel_event.set()
@@ -907,7 +913,8 @@ class RedTeamJob(threading.Thread):
             final, self.error = "error", f"{type(exc).__name__}: {exc}\n{traceback.format_exc(limit=3)}"
         if trials and ctx is not None:
             try:
-                versions = dict(ctx.versions, medicloak_release=RELEASE_VERSION) if self.live else ctx.versions
+                versions = (dict(ctx.versions, medicloak_release=RELEASE_VERSION, answer_style=ANSWER_STYLE_ID if self.answer_style else "off")
+                            if self.live else ctx.versions)
                 summary = dict(config=self.cfg.as_dict(), versions=versions, trials=trials)
                 (self.out / "trial요약.json").write_text(json.dumps(summary, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
                 with open(self.out / "llm_usage.jsonl", "w", encoding="utf-8") as f:
@@ -953,7 +960,7 @@ class RedTeamJob(threading.Thread):
         eta = None
         if self.status == "running" and self.done and elapsed:
             eta = round(elapsed / self.done * (self.total - self.done))
-        return dict(id=self.id, live=self.live, model=self.model,
+        return dict(id=self.id, live=self.live, model=self.model, answer_style=("on" if self.answer_style else "off") if self.live else None,
                     profile=self.profile, profile_label=(self.model or "실제 LLM") if self.live else PROFILE_KO[self.profile],
                     fuzzer=self.fuzzer, fuzzer_label=FUZZER_KO[self.fuzzer], per_type=self.per_type, trials=self.n_trials,
                     total=self.total, done=self.done, kept=self.kept, llm_error_trials=self.llm_error_trials,

@@ -61,6 +61,9 @@ export function WatchRiskPanel({ sid }: { sid: string | null }) {
                 {k > g ? `넓힘 기준 ${g}명보다 ${k - g}명 많음` : k > s ? `넓힘 기준 ${g}명 이하: 새 단서는 넓히거나 가림` : `가림 기준 ${s}명 이하: 새 단서는 가림`}
               </p>
             )}
+            <p className="mt-1 text-[11px] leading-4 text-ink-3">
+              {josa(label, '은', '는')} 과거 기록 환자 한 명입니다. 이 사람에 대해 나온 단서를 모두 가진 사람이 {max.toLocaleString()}명 중 몇 명인지 셉니다.
+            </p>
             <div className="mt-2.5">
               {!nar || nar.key !== key ? (
                 <LoadingState compact />

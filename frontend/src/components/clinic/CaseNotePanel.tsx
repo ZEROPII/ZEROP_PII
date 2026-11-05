@@ -1,8 +1,8 @@
 import {
   CalendarDays,
+  ChevronRight,
   CircleDot,
   ClipboardList,
-  CornerDownRight,
   Hourglass,
   Lock,
   MapPin,
@@ -114,22 +114,26 @@ function NoteView({ onJump }: { onJump(caseId: CaseId, messageId: string): void 
   const asked = session?.data?.questionCount ?? 0;
   return (
     <div className="px-4 pb-20 pt-4">
-      <h3 className="text-xl font-bold tracking-[-0.02em] text-ink">{summary.label}</h3>
+      <div className="flex items-baseline gap-2">
+        <h3 className="text-lg font-bold tracking-[-0.02em] text-ink">{summary.label}</h3>
+        <span className="min-w-0 truncate text-[13px] font-semibold text-ink-2" title={summary.diagnosis}>
+          {summary.diagnosis}
+        </span>
+      </div>
       <p className="mt-0.5 text-xs text-ink-3">
-        비슷한 사례 {summary.similarityRank}위 · 과거 환자 한 명의 기록{asked ? ` · 질문 ${asked}회` : ''}
+        과거 환자 한 명의 기록 · 유사도 {summary.similarityRank}위{asked ? ` · 질문 ${asked}회` : ''}
       </p>
 
-      <SectionTitle>답에 나온 내용</SectionTitle>
-      <p className="-mt-0.5 mb-2 text-[11px] leading-4 text-ink-3">AI 답에 실제로 보인 값만 모읍니다. 범위로 바꾼 값과 비공개 값은 답과 같은 모양으로 보입니다.</p>
+      <SectionTitle>지금까지 보인 내용</SectionTitle>
       {note.properties.length === 0 ? (
         <p className="text-[13px] text-ink-3">아직 답에 나온 내용이 없습니다.</p>
       ) : (
-        <dl className="rounded-control border border-line bg-surface">
+        <dl className="overflow-hidden rounded-control border border-line bg-surface">
           {note.properties.map((p) => {
             const Icon = ATTR_ICON[p.attribute] ?? CircleDot;
             const linkable = TERM_ATTRS.has(p.attribute);
             return (
-              <div key={p.attribute} className="grid grid-cols-[18px_72px_minmax(0,1fr)] items-start gap-x-2 border-b border-line px-3 py-2 last:border-b-0">
+              <div key={p.attribute} className="grid grid-cols-[16px_64px_minmax(0,1fr)] items-start gap-x-2.5 border-b border-line px-3 py-2.5 last:border-b-0">
                 <Icon className="mt-[3px] h-3.5 w-3.5 text-ink-3" aria-hidden />
                 <dt className="text-[13px] text-ink-3">{p.label}</dt>
                 <dd className="min-w-0 space-y-1 break-words text-[13px] font-medium text-ink">
@@ -147,15 +151,15 @@ function NoteView({ onJump }: { onJump(caseId: CaseId, messageId: string): void 
           })}
         </dl>
       )}
+      <p className="mt-1.5 text-[11px] leading-4 text-ink-3">AI 답에 실제로 보인 값만 모읍니다. 범위 · 비공개 값은 답과 같은 모양입니다.</p>
 
-      <SectionTitle count={note.backlinks.length}>연결된 질문</SectionTitle>
-      <ul className="space-y-0.5">
+      <SectionTitle count={note.backlinks.length}>질문별 기록</SectionTitle>
+      <ol className="relative ml-1 border-l border-line">
         {note.backlinks.map((b) => {
           const elsewhere = b.askedIn && b.askedIn !== caseId;
           const content = (
             <>
               <span className="flex items-center gap-1.5 text-[11px] font-semibold text-iris-text">
-                <CornerDownRight className="h-3 w-3" aria-hidden />
                 {b.turn === 0 ? '사례 검색' : b.questionNo != null ? `질문 ${b.questionNo}` : '질문'}
                 {elsewhere && <span className="font-normal text-ink-3">{b.askedInLabel} 대화에서</span>}
               </span>
@@ -172,7 +176,8 @@ function NoteView({ onJump }: { onJump(caseId: CaseId, messageId: string): void 
             </>
           );
           return (
-            <li key={b.turn}>
+            <li key={b.turn} className="relative pl-4">
+              <span aria-hidden className="absolute -left-[4.5px] top-[11px] h-2 w-2 rounded-full border-2 border-surface bg-iris" />
               {b.messageId && b.askedIn ? (
                 <button
                   type="button"
@@ -188,12 +193,16 @@ function NoteView({ onJump }: { onJump(caseId: CaseId, messageId: string): void 
             </li>
           );
         })}
-      </ul>
+      </ol>
 
       {note.linked.length > 0 && (
-        <>
-          <SectionTitle>같은 값이 나온 사례</SectionTitle>
-          <ul className="space-y-1.5 text-[13px]">
+        <details className="group mt-5 rounded-control border border-line bg-surface">
+          <summary className="flex cursor-pointer list-none items-center gap-1.5 px-3 py-2.5 text-[13px] font-semibold text-ink [&::-webkit-details-marker]:hidden">
+            <ChevronRight className="h-3.5 w-3.5 text-ink-3 transition-transform group-open:rotate-90" aria-hidden />
+            다른 사례와 같은 값
+            <span className="num text-xs font-medium text-ink-3">{note.linked.length}</span>
+          </summary>
+          <ul className="space-y-1.5 border-t border-line px-3 py-2.5 text-[13px]">
             {note.linked.map((l) => (
               <li key={`${l.label}:${l.value}`} className="leading-6">
                 <span className="text-ink-3">{l.label}</span> <span className="font-medium text-ink">{l.value}</span>
@@ -207,8 +216,8 @@ function NoteView({ onJump }: { onJump(caseId: CaseId, messageId: string): void 
               </li>
             ))}
           </ul>
-          <p className="mt-2 text-[11px] leading-4 text-ink-3">여러 사례에 같이 나온 값은 비슷한 환자 무리에 공통인 특징입니다.</p>
-        </>
+          <p className="px-3 pb-2.5 text-[11px] leading-4 text-ink-3">여러 사례에 같이 나온 값은 비슷한 환자 무리에 공통인 특징입니다.</p>
+        </details>
       )}
     </div>
   );

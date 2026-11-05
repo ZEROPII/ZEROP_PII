@@ -34,15 +34,27 @@ export function GuidePage() {
           </p>
         </header>
 
+        <Section title="무엇을 막는지">
+          <p>
+            비슷한 사례 하나는 병원 과거 기록의 환자 한 명입니다. 그 사람의 진단이나 처방을 보는 것만으로는 누구인지 알 수 없습니다. 위험은 답이 쌓이면서
+            그 사람을 다른 환자와 구별할 수 있게 될 때 생깁니다. 예를 들어 '90대 여성, 2018년 3월 급성 기관지염'까지는 같은 조건의 환자가 여럿이지만,
+            정확한 나이와 날짜가 더해지면 한 사람만 남을 수 있습니다.
+          </p>
+          <p>
+            MediCloak은 사례마다 지금까지 나온 내용을 모아, 같은 조건의 환자가 기준보다 적어지게 만드는 값을 범위로 바꾸거나 뺍니다. 그와 별도로 나이는 5세
+            구간, 날짜는 월 단위보다 자세히 보이지 않습니다.
+          </p>
+        </Section>
+
         <Section title="답에 보이는 표시">
           <dl className="space-y-3">
             <div className="grid grid-cols-[112px_minmax(0,1fr)] items-baseline gap-3">
-              <dt className="font-medium text-ink">Massachusetts</dt>
+              <dt className="font-medium text-ink">Acute bronchitis</dt>
               <dd>표시가 없는 값은 기록 그대로입니다.</dd>
             </div>
             <div className="grid grid-cols-[112px_minmax(0,1fr)] items-baseline gap-3">
               <dt className="font-medium text-ink">
-                <span className="range-value">0~9세</span>
+                <span className="range-value">90~94세</span>
                 <span className="range-tag">범위</span>
               </dt>
               <dd>정확한 값 대신 한 단계 넓은 범위로 바꾼 값입니다. 뜻은 같고 덜 자세합니다.</dd>

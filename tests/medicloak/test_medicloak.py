@@ -27,6 +27,8 @@ from webdemo.backend.app import Product, create_app  # noqa: E402
 from webdemo.backend.auth import COOKIE, add_user, ensure_initial_accounts, hash_password, token_hash, verify_password  # noqa: E402
 from webdemo.backend.engine import Engine  # noqa: E402
 from webdemo.backend.persist import Persist  # noqa: E402
+from webdemo.backend.live import ANSWER_STYLE, ANSWER_STYLE_ID  # noqa: E402
+from webdemo.backend.review import RELEASE_VERSION  # noqa: E402
 from webdemo.backend.store import Store  # noqa: E402
 
 PW = "pw-test-1234"
@@ -295,6 +297,7 @@ def test_real_llm_question_is_defended_and_redacted(world):
     assert target["headers"]["x-api-key"] == KEY and target["url"].startswith("https://llm.example.invalid")
     p = target["payload"]
     assert p["model"] == "fake-model-1" and p["temperature"] == 0.0 and "[검색된 사례]" in p["system"]
+    assert p["system"].endswith(ANSWER_STYLE)                                    # 대상 AI 답 형식 (레드팀과 같은 설정)
     assert p["messages"][-1]["content"] == f"사례1에 대한 질문: {Q_DRUG}"          # 고른 사례를 가리키도록 앞에 붙인다
     assert len(p["messages"]) == 3                                              # 턴 0 사례 검색 질문 · 답 + 이번 질문
     assert fake.roles()[n0:n0 + 4] == ["target", "extractor", "rewriter", "extractor"]
@@ -761,6 +764,12 @@ def test_live_redteam_runs_on_real_llm_path_and_is_kept(world, tmp_path):
         fake.drop_labels = False
     assert j["status"] == "done", j.get("error")
     out = Path(j["out"]) if Path(j["out"]).is_absolute() else ROOT / j["out"]
+    # 레드팀 대상 AI도 의료진 대화와 같은 답 형식으로 부른다 (잰 조건 = 운영 조건). 실행 기록에 지시문 판을 남긴다
+    targets = [c["payload"]["system"] for c in fake.calls[n0:] if c["payload"].get("system")]
+    assert targets and all(s.endswith(ANSWER_STYLE) for s in targets)
+    assert j["answer_style"] == "on"
+    versions = json.loads((out / "trial요약.json").read_text(encoding="utf-8"))["versions"]
+    assert versions["answer_style"] == ANSWER_STYLE_ID and versions["medicloak_release"] == RELEASE_VERSION
     recs = [json.loads(x) for x in (out / "턴기록.jsonl").read_text(encoding="utf-8").splitlines() if x.strip()]
     reasons = {c.get("reason") for r in recs for a in r.get("release_attempts") or [] for c in a.get("checks") or []}
     assert "NO_CASE_FOUND" in reasons and "rewriter" in fake.roles()[n0:]
@@ -785,6 +794,29 @@ def test_live_redteam_runs_on_real_llm_path_and_is_kept(world, tmp_path):
     doc = login(world, "doctor1")
     assert doc.post("/api/redteam", json=dict(per_type=1)).status_code == 403
 
+
+
+def test_answer_style_off_is_one_switch_and_does_not_reuse_styled_first_answers(world):
+    """--answer-style off: 의료진 대화의 대상 AI 지시문에 답 형식이 없고, 보호 정책에 꺼짐으로 보인다.
+    답 형식이 붙은 요청으로 받아 둔 첫 답은 키가 달라 다시 쓰지 않는다."""
+    fake: FakeAnthropic = world["fake"]
+    eng = world["eng"]
+    add_user(world["store"], "doctor_ns", "형식있음", "clinician", "내과", PW)
+    add_user(world["store"], "doctor_ns2", "형식없음", "clinician", "내과", PW)
+    launch(login(world, "doctor_ns"), "T0014")             # 답 형식이 붙은 첫 답을 받아 둔다 (이미 있으면 그대로)
+    n0 = len(fake.calls)
+    eng.answer_style = False
+    try:
+        launch(login(world, "doctor_ns2"), "T0014")        # 같은 환자 · 목적이어도 형식이 다르면 새로 부른다
+        targets = [c["payload"]["system"] for c in fake.calls[n0:] if c["payload"].get("system")]
+        assert targets and not any(ANSWER_STYLE in s for s in targets)
+        sec = login(world, "privacy1")
+        assert sec.get("/api/monitor/policy").json()["answerStyle"] is False
+    finally:
+        eng.answer_style = True
+    assert login(world, "privacy1").get("/api/monitor/policy").json()["answerStyle"] is True
+    assert all(len(k) == 64 for k in eng.turn0_cache.answers)                          # 키는 해시: 지시문 원문을 두지 않는다
+    assert not any("[검색된 사례]" in k for k in eng.turn0_cache.answers)
 
 
 def test_redteam_with_every_llm_call_failing_ends_as_error(world):

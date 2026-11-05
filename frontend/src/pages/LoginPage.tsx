@@ -62,7 +62,7 @@ export function LoginPage() {
             ))}
           </dl>
         </div>
-        <p className="text-xs leading-5 text-ink-3">연결된 EMR: MediCloak 가상 EMR (Synthea 합성 환자 576명, 실제 환자 정보 없음)</p>
+        <p className="text-xs leading-5 text-ink-3">연결된 EMR · FHIR R4 · 환자 기록 576명은 Synthea로 만든 합성 데이터입니다</p>
       </section>
 
       <section aria-label="로그인" className="flex items-center justify-center px-6 py-10">
