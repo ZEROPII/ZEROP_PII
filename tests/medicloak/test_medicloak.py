@@ -1258,7 +1258,7 @@ def test_residence_is_hidden_for_every_query_purpose(world):
     rec = world["eng"].sessions[w].logs["C1"][-1]
     region_d = [d for p in rec["release_plans"] for d in p["decisions"] if d["attribute"] == "REGION"]
     assert region_d and all(d["action"] == "suppress" and d.get("purpose") for d in region_d)
-    assert RELEASE_VERSION == world["eng"].sessions[w].runs["C1"].trial["versions"]["medicloak_release"] == "medicloak-release-v7"
+    assert RELEASE_VERSION == world["eng"].sessions[w].runs["C1"].trial["versions"]["medicloak_release"] == "medicloak-release-v8"
     hidden = sec.get(f"/api/monitor/sessions/{w}/hidden").json()
     items = hidden["items"] if isinstance(hidden, dict) else hidden
     assert not any(x["attribute"] == "REGION" for x in items)
@@ -1889,7 +1889,7 @@ def test_answer_style_and_rewriter_forbid_guessing_causes():
     """대상 AI 답 형식과 재작성기 지시에 '기록에 없는 원인 · 목적을 짐작하지 않는다'가 있다 (판정 규칙 v6, v7에서 출력 확인을 더함)."""
     from webdemo.backend.review import rewrite_rules
     assert "짐작해 쓰지 않습니다" in ANSWER_STYLE and "'기록에 없음'" in ANSWER_STYLE
-    assert RELEASE_VERSION == "medicloak-release-v7"
+    assert RELEASE_VERSION == "medicloak-release-v8"
     out = rewrite_rules("지시\n[바꿀 표현]\n- 사례1 진단\n[원 답변]\n원 답", [dict(attribute="DX", action="generalize", case_ref="사례1")])
     assert "10. 원래 답에 없던 원인 · 목적 · 진단을 짐작해 덧붙이지 않는다" in out
 

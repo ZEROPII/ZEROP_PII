@@ -384,3 +384,33 @@ def test_policy_shows_the_hardening(hard):
     assert pr["ledger"]["on"] and pr["ledger"]["windowDays"] == 90.0 and pr["ledger"]["persistent"]
     assert pr["inputGate"]["on"] and pr["sensitivity"]["on"] and pr["sensitivity"]["excludedPatients"] == 0
     assert "다른 대화" in p["stateModeLabel"]
+
+
+# ── 날짜 값 바로잡기 (RAG 재측정 R5 원본 대조에서 찾은 숨은 위반) ──────────────
+def test_period_value_written_as_description_is_repaired():
+    """
+    실제 LLM 추출기가 날짜 단서의 값에 설명('Gingivitis 진단 시작')을 쓰고 날짜는 근거 문장에만 두면 정규화가 실패해 State에 안 들어가고,
+    공개 판정이 그 날짜를 보지 못해 원 답 그대로 나갔다 (결과 ⑥ 기록 T0003 턴 4, 원본 대조 k 1). 근거 문장의 날짜를 값으로 쓴다.
+    """
+    from webdemo.backend.textguard import fix_extraction, fix_period_value
+    resp = "사례1의 Gingivitis는 2017-11-20에 시작되었고, 2017-12-04에 종료되었습니다."
+    obs = [dict(attribute="PERIOD", raw_value="Gingivitis 진단 시작", evidence_spans="2017-11-20에 시작되었고", time_role="CONDITION_START",
+                case_ref="사례1"),
+           dict(attribute="PERIOD", raw_value="Gingivitis 진단 종료", evidence_spans=["2017-12-04에 종료되었습니다"], time_role="CONDITION_END",
+                case_ref="사례1"),
+           dict(attribute="PERIOD", raw_value="2017-11-20", evidence_spans=["2017-11-20"], case_ref="사례1"),
+           dict(attribute="DX", raw_value="Gingivitis", evidence_spans=["Gingivitis"], case_ref="사례1")]
+    got = json.loads(fix_extraction(json.dumps(obs, ensure_ascii=False), resp, None))
+    assert [o["raw_value"] for o in got] == ["2017-11-20", "2017-12-04", "2017-11-20", "Gingivitis"]
+    assert got[0]["raw_value_was"] == "Gingivitis 진단 시작" and "raw_value_was" not in got[2]
+    # 날짜가 둘 이상이거나 없으면 그대로 (어느 날짜인지 모른다)
+    two = dict(attribute="PERIOD", raw_value="치료 기간", evidence_spans=["2017-11-20부터 2017-12-04까지"])
+    assert fix_period_value(two) == two
+    assert fix_period_value(dict(attribute="PERIOD", raw_value="2018년 3월", evidence_spans=["작년 봄"]))["raw_value"] == "2018-03"
+    assert fix_period_value(dict(attribute="PERIOD", raw_value="첫 진단", evidence_spans=["2019년 5월에 처음"]))["raw_value"] == "2019-05"
+    # 정규화기가 읽지 못하는 꼴: 재작성기가 '2014년 4월 1일'로 바꿔 다시 확인을 지나쳤다 (결과 ⑥ 기록 T0004 턴 6)
+    assert fix_period_value(dict(attribute="PERIOD", raw_value="2014년 4월 1일"))["raw_value"] == "2014-04-01"
+    assert fix_period_value(dict(attribute="PERIOD", raw_value="2014.04.01"))["raw_value"] == "2014-04-01"
+    assert fix_period_value(dict(attribute="PERIOD", raw_value="처방 시작", evidence_spans=["2014년 9월 17일부터"]))["raw_value"] == "2014-09-17"
+    assert fix_period_value(dict(attribute="PERIOD", raw_value="2014-13-40"))["raw_value"] == "2014-13-40"      # 날짜가 아니면 그대로
+    assert fix_period_value(dict(attribute="PERIOD", raw_value="2014년 4월 1일부터 2015년 3월 2일까지"))["raw_value"].startswith("2014년")

@@ -48,7 +48,7 @@ CASE_DROPPED = "CASE_DROPPED"                 # 통과하지 못한 사례를 �
 ROUNDED = "ROUNDED"
 #: 조회 목적마다 진료 판단에 쓰지 않는 단서 (실제 LLM 갈래에서 늘 가림)
 PURPOSE_UNNEEDED: dict[str, frozenset[str]] = {q: frozenset({"REGION"}) for q in ("PRESCRIPTION", "TREATMENT_PROCEDURE", "COURSE_CARE")}                           # 나이 · 날짜를 최소 공개 단위로만 바꾼 답 (재작성기 없이)
-RELEASE_VERSION = "medicloak-release-v7"       # v6(… 짐작 금지 지시, ADR-0031) + 내보낼 글 다듬기: 횟수 · 간격 범위, 부재 · 배타 진술과 짐작 문장 빼기 (ADR-0032)
+RELEASE_VERSION = "medicloak-release-v8"       # v7(내보낼 글 다듬기, ADR-0032) + 날짜 값 바로잡기: 날짜 자리에 설명을 쓴 추출을 근거 문장의 날짜로 (ADR-0033)
 
 # 최소 공개 단위: 이 노드보다 자세한 값은 내지 않는다 (온톨로지 노드 이름 규칙: AGE_Y93 · AGE5_90 · AGE10_90, …_DAY_ · _MONTH_ …)
 FLOOR_ATTRS = ("AGE", "PERIOD")

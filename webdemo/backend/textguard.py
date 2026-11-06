@@ -227,6 +227,70 @@ def grounded_observations(response: str, docs: list[dict[str, Any]], found: list
     return out
 
 
+# 날짜 표현 → 정규화기가 읽는 꼴 (2017-11-20 · 2017-11 · 2017). 정규화기는 '2017년 11월 20일' · '2017.11.20'을 읽지 못한다
+_DATE_FORMS: list[tuple[re.Pattern[str], str]] = [
+    (re.compile(r"(?<!\d)(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일"), "day"),
+    (re.compile(r"(?<![\d.])(\d{4})\s*[./]\s*(\d{1,2})\s*[./]\s*(\d{1,2})(?!\d)"), "day"),
+    (re.compile(r"(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)"), "day"),
+    (re.compile(r"(?<!\d)(\d{4})\s*년\s*(\d{1,2})\s*월"), "month"),
+    (re.compile(r"(?<![\d.])(\d{4})[./](\d{1,2})(?![\d./])"), "month"),
+    (re.compile(r"(?<!\d)(\d{4})-(\d{2})(?![\d-])"), "month"),
+    (re.compile(r"(?<!\d)(\d{4})\s*년(?!\s*\d)"), "year"),
+]
+
+
+def dates_in(text: str) -> list[str]:
+    """글 속 날짜를 앞에서부터 정규화기 꼴로 (겹치는 것은 더 자세한 꼴 하나만). 달 1~12 · 날 1~31이 아니면 버린다."""
+    taken: list[tuple[int, int]] = []
+    found: list[tuple[int, str]] = []
+    for rx, level in _DATE_FORMS:
+        for m in rx.finditer(text or ""):
+            if any(a < m.end() and m.start() < b for a, b in taken):
+                continue
+            y = m.group(1)
+            if level == "year":
+                val = y
+            else:
+                mo = int(m.group(2))
+                if not 1 <= mo <= 12:
+                    continue
+                if level == "month":
+                    val = f"{y}-{mo:02d}"
+                else:
+                    d = int(m.group(3))
+                    if not 1 <= d <= 31:
+                        continue
+                    val = f"{y}-{mo:02d}-{d:02d}"
+            taken.append(m.span())
+            found.append((m.start(), val))
+    return [v for _, v in sorted(found)]
+
+
+def fix_period_value(ob: dict[str, Any]) -> dict[str, Any]:
+    """
+    날짜 단서의 값을 정규화기가 읽는 꼴로 바로잡는다. 그대로 두면 정규화가 실패해(UNMAPPED) State에 들어가지 않고, 공개 판정이
+    그 날짜를 위험으로 보지 않아 원 답 그대로 나간다 (실제 LLM 결과 ⑥ 기록, RAG 재측정 R5 원본 대조에서 찾음, ADR-0033).
+      - 값 자리에 설명('Gingivitis 진단 시작')을 쓰고 날짜는 근거 문장('2017-11-20에 시작되었고')에만 둔 경우 (T0003 턴 4: 시스템 k 8, 원본 대조 k 1)
+      - '2014년 4월 1일' · '2014.04.01' 꼴 (T0004 턴 6: 재작성기가 날짜를 이 꼴로 바꿔 다시 확인을 지나침)
+    값 · 근거 문장에 날짜가 하나만 있을 때만 바꾼다 (둘 이상이면 어느 것인지 모른다).
+    """
+    if ob.get("attribute") != "PERIOD":
+        return ob
+    raw = str(ob.get("raw_value") or "").strip()
+    own = list(dict.fromkeys(dates_in(raw)))
+    if len(own) > 1:
+        return ob
+    if len(own) == 1:
+        return ob if own[0] == raw else dict(ob, raw_value=own[0], raw_value_was=ob.get("raw_value"))
+    found: list[str] = []
+    for sp in clean_spans(ob.get("evidence_spans")):
+        found += dates_in(sp)
+    found = list(dict.fromkeys(found))
+    if len(found) != 1:
+        return ob
+    return dict(ob, raw_value=found[0], raw_value_was=ob.get("raw_value"))
+
+
 def fix_extraction(output: str, response: str | None, docs: list[dict[str, Any]] | None, data: Any = None) -> str:
     """추출기 출력(JSON 배열 글)을 바로잡아 다시 글로. 배열을 찾지 못하면 그대로 돌려준다 (연구 모듈이 다시 추출한다)."""
     obs = parse_json(output, "array")
@@ -237,7 +301,7 @@ def fix_extraction(output: str, response: str | None, docs: list[dict[str, Any]]
         o = dict(item)
         if "evidence_spans" in o or isinstance(o.get("raw_value"), str):
             o["evidence_spans"] = fix_spans(o, response)
-        fixed.append(o)
+        fixed.append(fix_period_value(o))
     if response and docs:
         fixed += grounded_observations(response, docs, fixed, data)
     return json.dumps(fixed, ensure_ascii=False)
