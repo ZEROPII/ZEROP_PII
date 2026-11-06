@@ -53,6 +53,7 @@ AUDIT_LIMIT = 2000
 DUP_WINDOW = 15.0                    # 같은 메시지 · 확인 요청을 이 초 안에 또 보내면 한 번으로 본다 (두 번 누름)
 REPEAT_WINDOW = 30 * 86400           # 같은 과거 환자를 다른 대화에서도 물었는지 볼 기간
 REPEAT_FLAG = "같은 과거 환자 다른 대화에서도 조회"
+GLOBAL_LOW_FLAG = "다른 대화와 합치면 기준 아래"     # 공개 원장으로 합친 후보 수가 기준 아래 (ADR-0032)
 HIGH_RISK_REASON = 15                # 기준 아래로 내려가는 공개 승인의 사유 최소 글자 수
 
 MSG_KINDS = dict(clinician=("access_request", "reply"), security=("check_request", "reply", "release"))
@@ -255,10 +256,21 @@ class Monitor:
         # 승인으로 기준 아래가 된 사례: 승인 전까지는 기준 이상이었다 (경보가 아니라 '승인 공개'로 따로 센다)
         approved_low = sorted(ref for ref in low if ref in approved_cases and k_sys.get(ref, p_ref) >= k_req)
         violated = sorted(low - set(approved_low))
+        # 공개 원장(ADR-0032): 다른 대화에서 같은 과거 환자에 대해 나간 값까지 합치면 기준 아래인 사례 (이 대화만으로는 기준 이상)
+        # 이 대화에서 값이 나간 사례만 센다: 가리기만 한 사례가 낮은 것은 이 대화가 아니라 값을 낸 다른 대화의 위험이다
+        k_glob: dict[str, int] = {}
+        mine: set[str] = set()
+        if getattr(s, "ledger", None) is not None and hasattr(s, "k_global"):
+            run = s.runs.get(LIVE_ARM)
+            mine = {ref for ref, c in (run.cases.items() if run is not None else ()) if c.committed}
+            for ref in mine | ({focus} if focus else set()):
+                k_glob[ref] = s.k_global(ref)
+        global_low = sorted(ref for ref in mine if 1 <= k_glob[ref] < k_req and ref not in low)
         repeated = [ref for ref, n in sup_by_case.items() if n >= 2]
         last_q = next((r.get("user_question") or r["query_text"] for r in reversed(recs) if r["turn"] > 0), None)
         awaiting = bool(last_msg and last_msg["sender"] == "security" and last_msg["kind"] == "check_request")
-        flag = FLAG_KO[last_msg["kind"]] if pending else "같은 환자 반복 질문" if repeated else None
+        flag = (FLAG_KO[last_msg["kind"]] if pending else "같은 환자 반복 질문" if repeated else
+                GLOBAL_LOW_FLAG if global_low else None)
         # 질문에 대한 답에 나온 사례(턴 1부터): 다른 대화에서도 같은 과거 환자를 물었는지 보는 데 쓴다 (기호만)
         asked = sorted({p["ref"] for r in recs if r["turn"] > 0 for p in (r.get("release_plans") or [])})
         _, past = self._numbers(s)
@@ -269,7 +281,8 @@ class Monitor:
                     k_if_raw=min_raw.get(focus) if focus else None, k_now=k_now.get(focus) if focus else None,
                     repeated=repeated, flag=flag, violated=violated, approved_low=approved_low, asked_subjects=asked_subjects,
                     repeat_subjects=[], last_question=last_q, last_active=s.last_active, created=s.created,
-                    review=s.review, needs_review=(bool(repeated) and not s.review) or pending,
+                    k_global=k_glob.get(focus) if focus else None, global_low=global_low,
+                    review=s.review, needs_review=((bool(repeated) or bool(global_low)) and not s.review) or pending,
                     messages=len(s.messages), pending_request=pending, awaiting_clinician=awaiting,
                     request_case=last_msg.get("case") if pending else None,
                     owner=s.owner["label"] if getattr(s, "owner", None) else None, archived=False,
@@ -338,6 +351,7 @@ class Monitor:
                    identified=sum(len(r["violated"]) for r in rows), needs_review=sum(r["needs_review"] for r in rows),
                    approved_low=sum(len(r.get("approved_low") or []) for r in rows),
                    repeat_subjects=sum(bool(r.get("repeat_subjects")) for r in rows),
+                   global_low=sum(len(r.get("global_low") or []) for r in rows),
                    blocked_sessions=sum(r["status"] == "danger" for r in rows), requests=sum(r["pending_request"] for r in rows))
         return dict(kpi=kpi, sessions=rows, simulations=self.sim_status, live_arm=LIVE_ARM, live_arm_label=ARM_KO[LIVE_ARM],
                     k_req=self.eng.cfg.k_req, suppress_threshold=self.eng.cfg.suppress_threshold,
@@ -554,6 +568,8 @@ def mask(view: dict[str, Any]) -> dict[str, Any]:
     v["patient"] = None
     for r in v.get("retrieval", []):
         r["patient"] = None
+        if r.get("sensitive"):                          # 민감 범주 이름도 열람 전에는 '있음'만 (ADR-0032)
+            r["sensitive"] = ["민감 기록 있음"]
     for name, a in (v.get("arms") or {}).items():
         for val in a.get("validation", {}).values():
             val["patient"] = None
@@ -576,6 +592,8 @@ def mask(view: dict[str, Any]) -> dict[str, Any]:
                 for it in p["items"]:
                     if it["action"] != "allow":
                         it["raw_value"] = None
+            for e in t.get("post_edits") or []:          # 내보낼 글에서 뺀 문장에는 가린 값이 섞여 있을 수 있다
+                e["before"] = None
     for ap in v.get("approvals") or []:                 # 승인해 공개한 값도 열람 전에는 지운다 (의료진에게는 나갔다)
         for it in ap["items"]:
             it["value"] = None

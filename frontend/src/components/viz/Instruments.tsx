@@ -106,6 +106,7 @@ export type LadderRow = { kind: 'step'; index: number; place: number } | { kind:
 
 /** 승인 공개는 턴이 아니다: 공개한 턴 바로 뒤 자리(턴 + 0.5)에 놓는다 */
 function placeOf(st: Narrowing['steps'][number]): number {
+  if (st.prior) return -1; // 다른 대화에서 공개된 값: 이 대화의 검색보다 앞
   return st.approved ? (st.afterTurn ?? Number.MAX_SAFE_INTEGER - 1) + 0.5 : (st.turn ?? Number.MAX_SAFE_INTEGER);
 }
 
@@ -137,7 +138,7 @@ export function NarrowingLadder({ data, labelOf }: { data: Narrowing; labelOf?: 
       return (
         <Row
           key={`s${row.index}`}
-          sub={st.approved ? (st.afterTurn != null ? `${where(st.afterTurn)} 뒤 승인` : '승인 공개') : where(st.turn)}
+          sub={st.prior ? '다른 대화' : st.approved ? (st.afterTurn != null ? `${where(st.afterTurn)} 뒤 승인` : '승인 공개') : where(st.turn)}
           label={
             <>
               <span className="text-ink-2">{lab(st.attribute, st.attributeLabel)}</span> <span className="font-semibold">{st.value}</span>

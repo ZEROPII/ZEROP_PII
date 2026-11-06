@@ -34,19 +34,21 @@ from __future__ import annotations
 
 import copy
 import re
+import time
 from dataclasses import replace
 from typing import Any, Callable
 
 from medical.defense import ALLOW, GENERALIZE, SUPPRESS, Decision, apply_changes_deterministic
-from medical.session import ArmRun, Release
+from medical.prompts import REFUSAL_TEXT
+from medical.session import ArmRun, Release, _empty_view
 from medical.tracking import view_of
-from webdemo.backend.textguard import clean_spans, coarsen_durations
+from webdemo.backend.textguard import clean_spans, post_release
 
 CASE_DROPPED = "CASE_DROPPED"                 # 통과하지 못한 사례를 뺀 답
 ROUNDED = "ROUNDED"
 #: 조회 목적마다 진료 판단에 쓰지 않는 단서 (실제 LLM 갈래에서 늘 가림)
 PURPOSE_UNNEEDED: dict[str, frozenset[str]] = {q: frozenset({"REGION"}) for q in ("PRESCRIPTION", "TREATMENT_PROCEDURE", "COURSE_CARE")}                           # 나이 · 날짜를 최소 공개 단위로만 바꾼 답 (재작성기 없이)
-RELEASE_VERSION = "medicloak-release-v6"       # v5(… 기간 범위 · 근거 문장 정리, ADR-0029) + 기록에 없는 원인 · 목적을 짐작하지 않는 지시 (대상 AI · 재작성기, ADR-0031)
+RELEASE_VERSION = "medicloak-release-v7"       # v6(… 짐작 금지 지시, ADR-0031) + 내보낼 글 다듬기: 횟수 · 간격 범위, 부재 · 배타 진술과 짐작 문장 빼기 (ADR-0032)
 
 # 최소 공개 단위: 이 노드보다 자세한 값은 내지 않는다 (온톨로지 노드 이름 규칙: AGE_Y93 · AGE5_90 · AGE10_90, …_DAY_ · _MONTH_ …)
 FLOOR_ATTRS = ("AGE", "PERIOD")
@@ -73,10 +75,12 @@ class RuleDefender:
     floors=True(실제 LLM 갈래)면 나이 · 날짜를 최소 공개 단위로 올리고, 답의 글자가 센 노드보다 자세하면 노드 이름으로 바꾼다.
     """
 
-    def __init__(self, inner: Any, blocked: Callable[[str], set[str]], *, floors: bool = False) -> None:
+    def __init__(self, inner: Any, blocked: Callable[[str], set[str]], *, floors: bool = False,
+                 strict: Callable[[str], bool] | None = None, strict_k: int = 10) -> None:
         self.inner = inner
         self.blocked = blocked
         self.floors = floors
+        self.strict, self.strict_k = strict, strict_k    # 민감 값(sensitivity.py 등급 2): 내보낸 뒤 후보가 strict_k명 이상일 때만 (ADR-0032)
         self.last_plans: list[Any] = []                 # 이번 공개의 계획과 바꿀 값 (RuledArmRun._verify가 다시 확인에 씀)
         self.last_changes: list[dict[str, Any]] = []
 
@@ -98,7 +102,33 @@ class RuleDefender:
         plan = self._plan(ref, basis, new, sources)
         if self.floors:
             self._floor(plan)
+        if self.strict is not None:
+            self._strict(plan, basis)
         return plan
+
+    def _strict(self, plan: Any, basis: list[dict[str, Any]]) -> None:
+        """
+        민감 값: 그대로 · 넓혀 내기로 한 값이라도 내보낸 뒤 후보가 strict_k명 미만이면, 민감하지 않은 상위 범주 가운데 후보가
+        strict_k명 이상인 가장 가까운 것으로 넓히고, 없으면 가린다. 기준은 이 사례의 State(원장 포함) + 그 값 하나다.
+        """
+        data, k = self.inner.data, (lambda ds: self.inner.kc.k(ds)["k"])
+        for i, x in enumerate(plan.decisions):
+            if x.action == SUPPRESS:
+                continue
+            node = x.to_node or x.disclosure["node_id"]
+            if not (self.strict(x.disclosure["node_id"]) or self.strict(node)):
+                continue
+            if k(list(basis) + [dict(x.disclosure, node_id=node)]) >= self.strict_k:
+                continue
+            chain = data.anc(node)
+            safe = next((c for c in chain if not self.strict(c) and not data.is_root(c)
+                         and k(list(basis) + [dict(x.disclosure, node_id=c)]) >= self.strict_k), None)
+            full = data.anc(x.disclosure["node_id"])
+            d = (Decision(x.disclosure, x.source, GENERALIZE, safe, x.k_raw, full.index(safe) if safe in full else x.max_steps, x.max_steps)
+                 if safe is not None else Decision(x.disclosure, x.source, SUPPRESS, None, x.k_raw, x.max_steps, x.max_steps))
+            d.strict = True                             # 민감 값이라 더 엄격하게 (화면 설명 · 감사용)
+            plan.decisions[i] = d
+            plan.risky = True
 
     def _floor(self, plan: Any) -> None:
         """허용 · 넓힘으로 정한 나이 · 날짜를 최소 공개 단위 이상으로, 글자가 센 노드보다 자세하면 그 노드 이름으로 (넓힘)."""
@@ -194,6 +224,7 @@ class RewriteHintLLM:
 
     def complete(self, role: str, system: str, messages: list[dict[str, str]], **kw: Any) -> str:
         if role == "rewriter":
+            self.arm._check_budget()                    # 시간 예산을 넘겼으면 재작성기를 더 부르지 않는다 (ADR-0032)
             system = rewrite_rules(system, list(kw.get("plan") or []), self.arm._retry_note)
         return self.inner.complete(role, system, messages, **kw)
 
@@ -329,16 +360,38 @@ def drop_note(refs: set[str]) -> str:
 
 # ── 갈래 ────────────────────────────────────────────────────
 
+class AnswerBudgetExceeded(Exception):
+    """한 턴의 공개 처리가 시간 예산을 넘겼다 (재작성 · 다시 확인을 더 하지 않고 보수적으로 막는다)."""
+
+
+REFUSAL_TIMEOUT = "REFUSAL_TIMEOUT"           # 시간 예산 안에 안전하게 확인하지 못해 거절 문장으로 막은 답 (ADR-0032)
+POST_EMPTY_TEXT = "질문하신 내용 가운데 기록으로 확인할 수 없는 부분은 답에서 뺐습니다."
+
+
 class RuledArmRun(ArmRun):
     """
     보안 담당자 규칙을 지키는 갈래. rules()는 [(사례 표기, 단서 종류)]. 규칙이 없으면 확인 보강만 ArmRun과 다르다.
     live=True(실제 LLM)이면 재작성 지시 보강과 사례 단위로 빼기를 더한다.
+    ADR-0032 (연구자 4인 검토):
+      prior(ref)  : 과거 환자 단위 공개 원장에서 다른 대화가 이미 내보낸 그 사례의 값 (C1만). 판정 기준 State 앞에 붙인다.
+      gate(run)   : 대상 AI를 부르기 전에 지금 State로 사례 문서를 게이팅한 지시문 (C1 실제 LLM, 턴 1부터. 턴 0은 첫 답 요청에서)
+      budget      : 한 턴 공개 처리의 시간 예산(초). 넘기면 재작성 · 다시 확인을 멈추고 거절 문장(REFUSAL_TIMEOUT)으로 막는다
+      sensitivity : 민감도 정책 (민감 값은 후보가 strict_k명 이상일 때만, 실제 LLM 갈래 C1 · C1S)
     """
 
     def __init__(self, ctx: Any, prefix: Any, arm: str, log: Callable[[dict[str, Any]], None],
-                 rules: Callable[[], list[tuple[str, str]]], *, live: bool = False) -> None:
+                 rules: Callable[[], list[tuple[str, str]]], *, live: bool = False,
+                 prior: Callable[[str], list[dict[str, Any]]] | None = None, gate: Callable[["RuledArmRun"], str | None] | None = None,
+                 budget: float | None = None, sensitivity: Any = None) -> None:
         self.rules = rules
         self.live = live
+        self.prior = prior if arm == "C1" else None
+        self.gate = gate if arm == "C1" else None
+        self.budget = budget if arm == "C1" and budget and budget > 0 else None
+        self.sensitivity = sensitivity if live and arm != "C0" else None
+        self._t_turn = time.monotonic()
+        self.last_post: list[dict[str, Any]] = []     # 이번 턴에 내보낼 글을 다듬은 것 (textguard.post_release)
+        self.last_gate: list[dict[str, Any]] | None = None     # 이번 턴 대상 AI 입력 게이팅 집계
         self._retry_note: str | None = None          # 다시 확인에 떨어진 뒤 다음 재작성에 알려 줄 것 (실제 LLM)
         # 조회 목적에 필요 없는 단서: 사례와 관계없이 늘 가림 (실제 LLM 갈래, 의료진 대화 · 레드팀 같음)
         self.purpose_blocked = PURPOSE_UNNEEDED.get(getattr(prefix, "query_type", ""), frozenset()) if live else frozenset()
@@ -349,6 +402,40 @@ class RuledArmRun(ArmRun):
     def blocked(self, ref: str) -> set[str]:
         return {a for r, a in self.rules() if r == ref} | set(self.purpose_blocked)
 
+    def _basis(self, ref: str) -> list[dict[str, Any]]:
+        """판정 기준 State. C1이고 원장이 있으면 다른 대화가 이 과거 환자에 대해 내보낸 값을 앞에 붙인다 (ADR-0032)."""
+        base = super()._basis(ref)
+        if self.prior is not None:
+            pre = self.prior(ref)
+            if pre:
+                return list(pre) + base
+        return base
+
+    # ── 시간 예산 (ADR-0032) ──
+    def _check_budget(self) -> None:
+        if self.budget is not None and time.monotonic() - self._t_turn > self.budget:
+            raise AnswerBudgetExceeded()
+
+    def _turn(self, turn: int, query: str, raw: str | None, raw_obs: list[dict[str, Any]] | None, raw_ok: bool | None,
+              n_raw_ext: int, meta: dict[str, Any], intent: dict[str, Any] | None = None) -> dict[str, Any]:
+        self._t_turn = time.monotonic()
+        self.last_post, self.last_gate = [], None
+        if raw is None and self.gate is not None:
+            system = self.gate(self)                     # 지금 State로 사례 문서를 게이팅한 대상 AI 지시문
+            if system and system != self.p.system:
+                self.p = replace(self.p, system=system)
+        return super()._turn(turn, query, raw, raw_obs, raw_ok, n_raw_ext, meta, intent)
+
+    def _timeout_release(self) -> Release:
+        """시간 예산을 넘긴 공개: 거절 문장. 계획 · 바꿀 값은 마지막 계획을 남긴다 (가린 값 목록 · 감사용)."""
+        d = self._ctx.defender
+        plans = [p.as_dict() for p in getattr(d, "last_plans", []) or []]
+        changes = list(getattr(d, "last_changes", []) or [])
+        n = sum(len(p["decisions"]) for p in plans)
+        return Release(REFUSAL_TEXT, _empty_view(), REFUSAL_TIMEOUT, plans, changes,
+                       [dict(mode=REFUSAL_TIMEOUT, text=REFUSAL_TEXT, ok=False, checks=[dict(ref=None, reason="TIME_BUDGET", ok=False)])],
+                       0.0 if n else None, 0)
+
     @property
     def ctx(self) -> Any:
         return self._ctx
@@ -356,8 +443,11 @@ class RuledArmRun(ArmRun):
     @ctx.setter
     def ctx(self, c: Any) -> None:
         # 문맥을 바꿔 끼울 때(실제 LLM 문맥 등)마다 Defender를 규칙으로, 실제 LLM이면 LLM을 재작성 지시 보강으로 감싼다
+        sens = getattr(self, "sensitivity", None)
         if not isinstance(c.defender, RuleDefender):
-            c = replace(c, defender=RuleDefender(c.defender, self.blocked, floors=self.live))
+            c = replace(c, defender=RuleDefender(c.defender, self.blocked, floors=self.live,
+                                                 strict=sens.strict if sens is not None else None,
+                                                 strict_k=sens.strict_k if sens is not None else 10))
         if self.live and not (isinstance(c.llm, RewriteHintLLM) and c.llm.arm is self):
             inner = c.llm.inner if isinstance(c.llm, RewriteHintLLM) else c.llm
             c = replace(c, llm=RewriteHintLLM(inner, self))
@@ -365,17 +455,28 @@ class RuledArmRun(ArmRun):
 
     def release(self, query: str, raw: str, raw_obs: list[dict[str, Any]], raw_ok: bool) -> Release:
         self._raw_len = len(raw or "")
-        return self._ranged(self._release(query, raw, raw_obs, raw_ok))
+        try:
+            rel = self._release(query, raw, raw_obs, raw_ok)
+        except AnswerBudgetExceeded:
+            self._retry_note = None
+            return self._timeout_release()
+        return self._ranged(rel)
 
     def _ranged(self, rel: Release) -> Release:
         """
-        실제 LLM 방어 갈래(C1 · C1S): 내보낼 글의 상대 기간을 범위로 ('약 12일' → '약 1~2주', textguard.coarsen_durations).
-        기간은 후보 수 계산에 없는 값이라 묻는 범위(사례 하나 · 전체)와 상관없이 늘 같은 범위로만 보인다. 거절 문장 · C0는 그대로.
+        실제 LLM 방어 갈래(C1 · C1S): 내보낼 글을 다듬는다 (textguard.post_release, ADR-0029 · ADR-0032).
+          상대 기간 · 간격 · 횟수는 정해 둔 범위로 ('약 12일' → '약 1~2주'): 후보 수 계산에 없는 값이라 묻는 범위와 상관없이 같은 범위로만.
+          사례 문장의 부재 · 배타 진술('…만 처방', '다른 약은 없음')과 짐작 문장('…목적으로 보입니다')은 뺀다.
+          설명 안 되는 영문 용어는 기록만 한다. 거절 문장 · C0는 그대로. 무엇을 바꿨는지는 last_post (턴 기록 post_edits).
         """
+        self.last_post = []
         if not self.live or self.arm == "C0" or rel.mode.startswith("REFUSAL"):
             return rel
-        text, changed = coarsen_durations(rel.text)
-        return replace(rel, text=text) if changed else rel
+        text, edits = post_release(rel.text, len(self.p.docs), self.p.docs, getattr(self._ctx, "data", None))
+        self.last_post = edits
+        if not text.strip():
+            text = POST_EMPTY_TEXT                       # 사례 문장을 모두 뺐으면 빈 답 대신 안내 한 줄
+        return replace(rel, text=text) if text != rel.text else rel
 
     def _release(self, query: str, raw: str, raw_obs: list[dict[str, Any]], raw_ok: bool) -> Release:
         self._retry_note = None
@@ -407,6 +508,8 @@ class RuledArmRun(ArmRun):
             for x, xd in zip(p.decisions, pd["decisions"]):
                 if getattr(x, "floor", False):
                     xd["floor"] = True
+                if getattr(x, "strict", False):
+                    xd["strict"] = True                 # 민감 값이라 더 엄격하게 넓히거나 가림 (ADR-0032)
         return rel
 
     def _rounded(self, query: str, raw: str, raw_obs: list[dict[str, Any]], raw_ok: bool) -> tuple[Release | None, list[dict[str, Any]], int]:
@@ -433,6 +536,7 @@ class RuledArmRun(ArmRun):
         return self._mark_floor(Release(text, v, ROUNDED, [p.as_dict() for p in plans], changes, [attempt], util, n)), [], 0
 
     def _verify(self, query: str, text: str):
+        self._check_budget()                             # 시간 예산을 넘겼으면 다시 확인(추출 호출)을 더 하지 않는다 (ADR-0032)
         if len(text) > max(6000, 4 * getattr(self, "_raw_len", 0)):
             # 고친 답이 원 답보다 터무니없이 길면(값 치환 사고) 추출기에 보내지 않고 떨어뜨린다 (HTTP 400 · 토큰 낭비를 막는다)
             if self.live:

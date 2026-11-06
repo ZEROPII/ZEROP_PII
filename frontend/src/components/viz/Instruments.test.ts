@@ -44,3 +44,17 @@ describe('후보 수 계기', () => {
     expect(h1 && 'at' in h1 && h1.at).toBe(1);
   });
 });
+
+describe('공개 원장 단계 (ADR-0032)', () => {
+  it('다른 대화에서 공개된 값은 이 대화의 검색보다 앞에 놓는다', () => {
+    const data: Narrowing = {
+      ...base,
+      steps: [
+        ...base.steps,
+        { attribute: 'PRIOR', attributeLabel: '다른 대화에서 공개된 값', value: '2개', turn: null, approved: false, afterTurn: null, kBefore: 461, kAfter: 40, prior: true },
+      ],
+    };
+    const rows = ladderRows(data);
+    expect(rows[0]).toMatchObject({ kind: 'step', index: 3 });
+  });
+});

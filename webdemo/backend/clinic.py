@@ -30,7 +30,7 @@ from medical.defense import ALLOW, GENERALIZE, SUPPRESS, SUPPRESSED_MARK as SUPP
 from medical.retrieval import PANEL_LABEL, code_sets
 from webdemo.backend import intent as I
 from webdemo.backend.engine import ATTR_KO, QTYPE_KO, Engine, Session, parse_answer
-from webdemo.backend.review import CASE_DROPPED, ROUNDED, ref_no, same_text
+from webdemo.backend.review import CASE_DROPPED, REFUSAL_TIMEOUT, ROUNDED, ref_no, same_text
 from webdemo.backend.textguard import attribute_sentences, duration_mentions
 
 ATTR_LABEL = dict(AGE="나이", SEX="성별", REGION="거주 지역", DX="진단", PROC="시술", PERIOD="시기", MED="처방 약", PLAN="관리 계획",
@@ -155,6 +155,8 @@ TITLE_ATTRS = ("DX", "MED", "PROC", "PLAN")          # 사례 목록 제목에 �
 STATE_MODE_LABEL = dict(C0="방어 없음", C1="누적 판정 (대화 전체 기억)", C1S="턴별 판정 (매 턴 새로)")
 DEMO_LOCATION = "MediCloak 데모 (Synthea 합성 환자)"
 MAX_QUESTION = 1000                     # 의료진 질문 한 건의 최대 글자 수 (실제 LLM 호출 비용 · 지연 상한)
+PREFLIGHT_LIMIT = 20                    # 보내기 전 확인: 대화마다 PREFLIGHT_WINDOW초 안에 판정을 알려 주는 횟수 (ADR-0032)
+PREFLIGHT_WINDOW = 600.0
 _REF = re.compile(r"사례(\d+)")
 
 
@@ -262,6 +264,8 @@ class ClinicConversation:
         self.version = 1
         self.updated_at = _iso()
         self.saved_turns: set[tuple[str, int]] = set()          # DB에 이미 넣은 턴 기록 (persist.py)
+        self._preflights: collections.deque = collections.deque()    # 보내기 전 확인 시각 (사용 한도, ADR-0032)
+        self.preflight_limited = 0                              # 한도를 넘겨 판정 없이 돌려준 수
         self.save_lock = threading.Lock()                       # 저장 한 번(스냅숏 만들기 + DB 쓰기)을 대화마다 줄 세운다
         self.slots = {f"case-{i}": Slot(i) for i in range(1, len(session.prefix.docs) + 1)}
         rec0 = self._records()[0]
@@ -312,7 +316,11 @@ class ClinicConversation:
 
     # ── k와 위험 표시 ──
     def k(self, case_id: str) -> int:
-        c = self.session.runs[self.arm].cases.get(self.slots[case_id].ref)
+        """이 사례의 후보 수. 공개 원장을 켠 서버는 다른 대화에서 같은 과거 환자에 대해 나간 값까지 합쳐 센다 (ADR-0032)."""
+        ref = self.slots[case_id].ref
+        if self.arm == "C1" and getattr(self.session, "ledger", None) is not None:
+            return self.session.k_global(ref)
+        c = self.session.runs[self.arm].cases.get(ref)
         ctx = self.session.ctx
         return ctx.kc.k(c.committed)["k"] if c and c.committed else ctx.p_ref
 
@@ -405,6 +413,10 @@ class ClinicConversation:
                  "사례마다 따로 셉니다. 한 사례에 나온 단서는 다른 사례의 후보 수에 더하지 않습니다."]
         if self.live:
             notes.append("대상 AI는 실제 LLM입니다. 공개된 답을 다시 추출해 확인한 값만 누적 State에 넣습니다.")
+        if self.arm == "C1" and getattr(self.session, "ledger", None) is not None:
+            notes.append("같은 과거 환자에 대해 다른 진료 대화(다른 의료진 포함)에서 이미 공개된 값까지 합쳐 셉니다.")
+        if getattr(self.session, "gated", False):
+            notes.append("대상 AI에는 이 기준으로 공개할 수 있는 값만 넣습니다. 그 밖의 값은 넓히거나 '(비공개)'로 바꿔 넣습니다.")
         return dict(caseId=case_id, currentK=risk["k"], minK=d.g, suppressK=d.s, arm=self.arm,
                     disclosedQis=[dict(attributeLabel=ATTR_LABEL.get(x["attribute"], x["attribute"]), levelDescription=data.label(x["node_id"]))
                                   for x in (c.committed if c else []) if x.get("node_id") in data.N],
@@ -418,7 +430,12 @@ class ClinicConversation:
     def _seed_for(self, it: I.Intent):
         return I.candidates(self.session.ctx.seeds, it)[:14]
 
-    def preflight(self, case_id: str, session_id: str, question: str) -> dict[str, Any]:
+    def preflight(self, case_id: str, session_id: str, question: str, *, limit: bool = True) -> dict[str, Any]:
+        """
+        보내기 전 확인. limit=True(의료진 화면)이면 대화마다 PREFLIGHT_WINDOW초 안에 PREFLIGHT_LIMIT번까지만 판정을 미리 알려 준다.
+        넘으면 판정 없이 limited=True만 돌려준다: 질문을 바꿔 가며 미리 세기로 드문 값을 찾는 것(후보 수 조회 도구)을 막는다 (ADR-0032).
+        보안 담당자의 '질문 미리 세기'(limit=False)는 서버가 계정마다 따로 센다 (app.py).
+        """
         with self.eng.lock:
             s = self._check(case_id, session_id)
             k_now = self.k(case_id)
@@ -429,6 +446,15 @@ class ClinicConversation:
                         targetCaseId=None, targetCaseLabel=None, estimate="oracle" if self.live else None)
             if not it.understood:
                 return dict(base, understood=False)
+            if limit:
+                now, dq = time.time(), self._preflights
+                while dq and now - dq[0] > PREFLIGHT_WINDOW:
+                    dq.popleft()
+                if len(dq) >= PREFLIGHT_LIMIT:
+                    self.preflight_limited += 1
+                    return dict(base, understood=True, limited=True, currentK=None,
+                                message="보내기 전 확인을 짧은 시간에 많이 써서 잠시 멈춥니다. 질문을 보내면 답을 받을 때 확인합니다.")
+                dq.append(now)
             for seed in self._seed_for(it):
                 pv = self.session.preview(seed["seed_id"], self.arm, focus, question)
                 if not pv.get("applicable"):
@@ -566,7 +592,9 @@ class ClinicConversation:
                 k_raw = x.get("k_raw") if x.get("k_raw") is not None else cand.get(p["ref"])
                 floor = bool(x.get("floor")) and not refusal
                 if action == GENERALIZE:
-                    value, desc = to_label, (f"정해진 공개 단위로 바꿔 공개: {to_label}" if floor else f"넓은 범주로 바꿔 공개: {to_label}")
+                    value, desc = to_label, (f"정해진 공개 단위로 바꿔 공개: {to_label}" if floor else
+                                             f"민감한 값이라 넓은 범주로 바꿔 공개: {to_label}" if x.get("strict") and not refusal else
+                                             f"넓은 범주로 바꿔 공개: {to_label}")
                 elif action == SUPPRESS:
                     value = None
                     if refusal:
@@ -577,6 +605,8 @@ class ClinicConversation:
                         desc = "보안 담당자 규칙으로 가림"
                     elif x["attribute"] in purpose:
                         desc = "조회 목적에 필요 없는 값이라 가림"
+                    elif x.get("strict"):
+                        desc = "민감한 값이라 더 엄격한 기준으로 가림"
                     else:
                         desc = f"가림 (그대로면 후보 {k_raw}명)" if k_raw is not None else "가림"
                 else:
@@ -677,8 +707,29 @@ class ClinicConversation:
         mode, g = rec["release_mode"], self.session.ctx.defender.g
         if mode == "REFUSAL_EXTRACTION_FAILED":
             return "답에서 단서를 확인하지 못해 위험을 판단할 수 없었습니다. 그래서 답 대신 거절 문장을 보냈습니다."
+        if mode == REFUSAL_TIMEOUT:
+            return ("정해진 시간 안에 고친 답을 안전하게 확인하지 못해 답 대신 거절 문장을 보냈습니다. "
+                    "질문을 사례 하나씩 나누어 다시 물어보세요.")
         if mode.startswith("REFUSAL"):
             return "고친 답이 다시 확인을 통과하지 못해 거절 문장을 보냈습니다."
+        extra = self._extra_notes(rec, s.ref)
+        return (self._explain_main(rec, tf, mode, g) + extra).strip()
+
+    def _extra_notes(self, rec: dict[str, Any], ref: str) -> str:
+        """ADR-0032 설명 덧붙임: 내보낼 글에서 뺀 짐작 · 부재 진술, 다른 대화의 공개를 합쳐 판정한 것 (숫자 없음)."""
+        kinds = {e.get("kind") for e in rec.get("post_edits") or []}
+        out = []
+        if "speculation" in kinds:
+            out.append("기록에 없는 짐작 문장은 답에서 뺐습니다.")
+        if kinds & {"absence", "exclusive"}:
+            out.append("'…만 처방', '다른 기록 없음'처럼 환자를 좁힐 수 있는 표현은 답에서 뺐습니다.")
+        if kinds & {"count", "interval"}:
+            out.append("횟수 · 간격은 정해 둔 범위로만 보입니다.")
+        if self.arm == "C1" and (rec.get("cases_global") or {}).get(ref) is not None:
+            out.append("이 사례는 다른 진료 대화에서 이미 공개된 정보까지 합쳐 판단했습니다.")
+        return (" " + " ".join(out)) if out else ""
+
+    def _explain_main(self, rec: dict[str, Any], tf: list[dict[str, Any]], mode: str, g: int) -> str:
         if mode == CASE_DROPPED:
             dropped = sorted({t["caseRef"] for t in tf if t.get("dropped")}, key=ref_no)
             names = ", ".join(r.replace("사례", "사례 ") for r in dropped)
@@ -831,7 +882,7 @@ class ArchivedConversation:
         labels = self.snap.get("labels") or {}
         return _messages_view(self.raw_messages, self.case_of_ref, lambda cid: labels.get(cid, cid))
 
-    def preflight(self, case_id: str, session_id: str, question: str) -> dict[str, Any]:
+    def preflight(self, case_id: str, session_id: str, question: str, **kw: Any) -> dict[str, Any]:
         self._case(case_id)
         return dict(caseId=case_id, question=question, requiresWarning=False, currentK=None, projectedK=None,
                     message="보관된 지난 대화라 보내기 전 확인을 할 수 없습니다.", affectedAttributes=[], suggestions=[], source="backend",
@@ -907,7 +958,7 @@ class ClinicDesk:
                 return cur
             with self.eng.lock:
                 s = self.eng.new_session(trial_id, source="clinic", budget=self.budget, llm_mode=self.llm_mode, on_call=on_call,
-                                         visit_event=visit_event)
+                                         visit_event=visit_event, owner=self.owner)
                 s.owner = self.owner
                 s.launch = launch
                 conv = ClinicConversation(self.eng, s, self.arm, compare=self.compare, location_label=self.location_label)

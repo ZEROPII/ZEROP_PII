@@ -73,6 +73,10 @@ python -m medicloak serve [옵션]          # serve는 생략해도 됨
 | `--extractor-model 모델` · `--rewriter-model 모델` | 추출기(단서 뽑기 · 다시 확인) · 재작성기만 다른 모델로. 질문 하나에 이 둘이 3번쯤 불리므로 빠른 모델을 쓰면 기다림이 크게 준다 (ADR-0026) |
 | `--prefetch off` | 외래 목록에서 환자 · 진료 목적을 고르면 첫 답을 뒤에서 미리 만들어 두는 것을 끔. 기본은 켬: 열기가 짧아지지만, 고르기만 하고 열지 않은 환자의 호출이 생김 (ADR-0029) |
 | `--visit research` | 의료진 대화의 진료 기준을 연구 계획 기준(가장 많이 나온 진단 범주의 첫 진료)으로. 기본 `recent`: 진료 목적마다 가장 최근 진료와 그날 이어지던 동반질환 (ADR-0029) |
+| `--ledger off` · `--ledger-window-days 90` | 과거 환자 단위 공개 원장. 기본은 켬: 같은 과거 환자에 대해 다른 대화 · 다른 의료진에게 공개된 값(최근 90일, 0이면 기간 없이)까지 합쳐 판정 (ADR-0032) |
+| `--input-gate off` | 대상 AI 입력 게이팅을 끔. 기본은 켬: 사례 기록을 대상 AI에 넣기 전에 값마다 판정해 가릴 값은 '(비공개)', 넓힐 값은 상위 범주, 횟수는 범위로 넣음 (ADR-0032) |
+| `--answer-budget 45` | 질문 한 번의 공개 처리 시간 한도(초). 넘기면 확인하지 못한 답 대신 안내 문장(`REFUSAL_TIMEOUT`). 0이면 끔 (ADR-0032) |
+| `--sensitivity off` · `--strict-k 10` | 민감도 등급. 기본은 켬: 물질 사용 · 정신 건강 · 생식 · HIV 값은 후보가 10명 이상일 때만 내고, 미성년 시기 물질 사용 장애 과거 환자는 유사 사례 검색에서 뺌 (ADR-0032) |
 | `--db 경로` | DB 파일 (기본 `runs/medicloak/medicloak.db`) |
 
 ## 실제 LLM 호출 수
@@ -84,6 +88,8 @@ python -m medicloak serve [옵션]          # serve는 생략해도 됨
 - **다시 확인을 통과하지 못했을 때**: 두 번째 재작성에는 무엇이 남았는지 알려 주고, 값만 바꾼 답까지 통과하지 못하면 통과하지 못한 사례만 빼고 한 번 더 확인합니다(추출 1번 더). 그래도 안 되면 거절 문장입니다.
 - **의료진 질문 한 번**: 위와 같습니다. 비교 갈래 C1S는 의료진 답을 보낸 뒤 뒤에서 계산하므로 의료진은 기다리지 않지만, 값을 바꿀 때 재작성 · 확인 호출이 더 듭니다(`--no-compare`로 끔). C0은 같은 원 응답을 쓰므로 호출이 없습니다.
 - **레드팀 점검**: 질의 환자 한 명마다 갈래 3개 × 최대 10턴, 턴마다 공격 질문 만들기 · 확인 · 대상 AI · 추출 · 재작성 · 다시 확인으로 약 6번으로 어림합니다. 유형마다 1명(3명)이면 약 540번입니다. 위험에 닿은 대화는 일찍 끝나 줄고, 형식 오류로 다시 부르면 늘어납니다. 의료진 질문 호출이 기다리면 그쪽을 먼저 보냅니다.
+
+입력 게이팅 · 공개 원장 · 공개 직전 문장 처리 · 민감도 등급은 LLM을 더 부르지 않습니다(서버 안에서 셈). 답 시간 한도를 넘기면 남은 재작성 · 다시 확인 호출을 하지 않습니다.
 
 LLM을 부르지 않는 것: 입력칸의 '보내기 전 확인'과 보안 담당자의 '질문 미리 세기'(사례 기록대로 답한다고 보고 세는 추정), 예시 질문. 대상 AI 이름은 관제 화면 머리줄에, 서버를 켠 뒤의 역할별 호출 수와 토큰은 '보호 정책' 화면(`/api/monitor/policy`)에, 레드팀 실행의 호출 수 · 토큰은 리포트 화면에 나옵니다.
 
@@ -136,12 +142,13 @@ python -m medicloak users passwd doctor1                   # 비밀번호 바꾸
 | `POST /api/emr/prefetch {fhirId, purpose, visitEvent}` | 의료진 | 고른 환자 · 목적(· 오늘 진단)의 첫 답을 뒤에서 미리 부름. `started` · `queued`(앞의 것이 끝나면 마지막으로 고른 것 하나만) · `current`(지금 연 대화) · `off`. 끝날 때마다 실제 호출 수와 함께 감사 기록에 남김 |
 | `GET /api/emr/visits?fhirId=` | 의료진 | 오늘 볼 진단 후보 (진료 목적마다, 진단 이름마다 가장 최근 사건 · 진료일 · 고려 중 처치 · 동반질환). 열기 · 미리 준비에 `visitEvent`로 보냄 |
 | `POST /api/cases/{사례}/messages {…, scope}` · `GET /api/clinic/progress` | 의료진 | 질문 (`scope`: `case` 고른 사례 · `all` 찾은 사례 전체), 답하는 동안의 단계 |
-| `POST /api/cases/{사례}/preflight {sessionId, question}` | 의료진 | 보내기 전 확인. 숫자 없이 `plannedAction` · `basis`(count 후보 수 · rule 규칙 · purpose 조회 목적) · `estimate`(실제 LLM 대화면 `oracle`: 미리 센 추정) |
+| `POST /api/cases/{사례}/preflight {sessionId, question}` | 의료진 | 보내기 전 확인. 숫자 없이 `plannedAction` · `basis`(count 후보 수 · rule 규칙 · purpose 조회 목적) · `estimate`(실제 LLM 대화면 `oracle`: 미리 센 추정). 대화마다 10분에 20번을 넘기면 판정 없이 `limited: true` |
 | `GET /api/cases?patientContextId=` | 의료진 | 비슷한 사례 목록. 승인 공개한 단서는 `approved` (카드의 진단 · 대표 항목은 승인한 값) |
 | `GET /fhir/metadata` · `/fhir/Patient` · `/fhir/Patient/{id}` · `/fhir/{Condition·MedicationRequest·Procedure·CarePlan}?patient=` | 의료진 | 가상 EMR FHIR R4 (외래 환자만) |
 | `GET /api/clinic/history` | 의료진 | 이 계정의 대화 목록 |
 | `GET /api/watch` · `GET /api/watch/{대화}/…` | 보안 담당자 | 의료진 대화 목록, 그 대화의 의료진 화면 계약을 숫자 그대로 |
-| `GET /api/monitor/policy` | 보안 담당자 | 판정 기준과 서버 설정 |
+| `GET /api/monitor/policy` | 보안 담당자 | 판정 기준과 서버 설정 (`protections`: 공개 원장 · 입력 게이팅 · 답 시간 한도 · 민감도 등급) |
+| `POST /api/watch/{대화}/cases/{사례}/preflight {sessionId, question}` | 보안 담당자 | 질문 미리 세기 (숫자 그대로). 계정마다 10분에 30번(넘으면 429), 부를 때마다 감사 기록 |
 | `GET /api/watch/{대화}/cases/{사례}/narrowing` | 보안 담당자 | 후보가 줄어든 과정 (단서마다 전 → 후, 가린 값의 그대로였다면, 규칙) |
 | `GET /api/monitor/sessions/{대화}/hidden` · `POST …/what-if {items}` · `POST …/approve {items, reason, confirmLowK}` | 보안 담당자 | 가린 값 목록(값 없음), 고른 값을 함께 공개한 뒤의 사례별 후보 수(`kAfter` · `lowest`), 골라서 공개 승인. 기준 아래로 내려가는 공개는 `confirmLowK: true`와 사유 15자 이상이 있어야 함(아니면 422) |
 | `POST /api/monitor/sessions/{대화}/reveal {reason, note}` | 보안 담당자 | 원문 열람. 운영 모드는 `note`(확인하려는 것) 5자 이상 필수(아니면 422) |
@@ -169,6 +176,12 @@ python -m medicloak users passwd doctor1                   # 비밀번호 바꾸
 - 최소 공개 단위: 실제 LLM 답의 나이는 5세 구간(93세 → 90~94세), 날짜는 월(2018-03-24 → 2018-03)보다 자세히 내지 않습니다. 답의 글자가 후보를 센 노드보다 자세하면(노드 90~99세로 센 '93-98세') 노드 이름으로 바꿉니다. 이것만 바꾸면 재작성기 없이 글자를 바꾸고 다시 확인합니다(공개 방식 `ROUNDED`). 보안 담당자의 공개 승인은 정확한 값을 엽니다(ADR-0024).
 - 사례 노트: 내보낸 답을 다시 추출해 State에 넣은 단서와 맞춰, 답에 실제로 나온 글자만 적습니다. 재작성기가 뺀 값은 노트에도 없습니다.
 - 조회 목적 규칙: 거주 지역은 어느 조회 목적에도 진료 판단에 쓰지 않아, 실제 LLM 갈래(의료진 대화 · 레드팀)에서 후보 수와 관계없이 가립니다. 세부 정보 요청 · 공개 승인 대상도 아닙니다(ADR-0026).
+- 과거 환자 단위 공개 원장: 의료진 대화에서 공개된 값과 승인 공개한 값을 과거 환자마다 DB(`disclosure_ledger`)에 적고, 같은 과거 환자가 나온 다른 대화의 판정(출력 단계 · 입력 게이팅 · 공개 승인 · 보내기 전 확인)에 최근 90일 값을 합칩니다. 이 대화에서 값이 나간 사례가 다른 대화와 합치면 기준 아래이면 관제 목록에 '다른 대화와 합치면 기준 아래'로 올라옵니다. 의료진 화면에는 숫자 없이 '다른 진료 대화에서 이미 공개된 정보까지 합쳐 판단했습니다'만 보입니다(ADR-0032).
+- 대상 AI 입력 게이팅: 사례 기록을 대상 AI에 넣기 전에 사실 줄마다 그 사례의 지금 State(원장 포함)로 출력 단계와 같은 판정을 합니다. 가릴 값은 '(비공개)', 넓힐 값은 상위 범주 이름, 횟수는 범위, 가리거나 넓힌 날짜 사이 기간은 '(시작부터 약 1~2주)'로 넣고, 지시문에 짐작해 채우지 말라는 한 줄을 붙입니다. 첫 답(열 때 · 미리 준비)과 다음 질문 모두 그때 State로 다시 게이팅합니다(ADR-0032).
+- 공개 직전 문장 처리: 사례 문장의 기간 · 간격 · 횟수는 범위로, '…만 처방' · '다른 약은 없음' · '처방 약이 없습니다' 같은 부재 · 배타 진술과 기록에 없는 원인 · 목적 짐작은 빼거나 고칩니다. 남는 말이 없으면 '기록으로 확인할 수 없는 부분은 답에서 뺐습니다' 한 줄을 보냅니다. 레드팀 실제 LLM 갈래에도 같이 걸립니다(판정 규칙 v7, ADR-0032).
+- 민감도 등급: 물질 사용 · 정신 건강 · 생식 · 피임 · 임신 · HIV · 성매개 감염 값(약 이름으로 거꾸로 알 수 있는 것 포함)은 후보가 `--strict-k`명 이상일 때만 내고, 아니면 민감하지 않은 상위 범주로 넓히거나 가립니다. 입력 게이팅과 출력 단계가 같은 규칙입니다. 미성년 시기 물질 사용 장애 과거 환자는 유사 사례 검색에서 뺍니다(ADR-0032).
+- 답 시간 한도: 질문을 받은 때부터 `--answer-budget`초를 넘기면 확인하지 못한 답을 내보내지 않고 안내 문장을 보냅니다. State와 원장은 바뀌지 않습니다(ADR-0032).
+- 미리 확인 한도: 의료진 '보내기 전 확인'은 대화마다 10분에 20번(넘으면 판정 없이 안내만, 감사 기록), 보안 담당자 '질문 미리 세기'는 계정마다 10분에 30번(넘으면 429)이고 부를 때마다 감사 기록에 사례와 질문 글자 수만 남깁니다(ADR-0032).
 - 거절 전에 사례 단위로 빼기: 재작성 · 값 치환이 모두 통과하지 못하면, 통과하지 못한 사례를 가리키는 머리줄 묶음과 문장만 빼고 다시 확인합니다. 통과하면 그 답을 내고(공개 방식 `CASE_DROPPED`), 뺀 사례는 의료진 화면에 '(비공개)'로 보입니다. 낸 답은 늘 다시 확인을 거칩니다. 재작성기 지시에는 같은 값이 요약 문장 · 줄인 이름으로 다시 나와도 고치라는 규칙을 더하고, 두 번째 재작성에는 남은 표현을 알려 줍니다. 실제 LLM 대화와 레드팀에만 적용합니다(ADR-0023).
 
 ## 운영 가이드
@@ -208,7 +221,10 @@ webdemo/backend/clinic.py     의료진 대화(ClinicConversation) · 의료진 
 webdemo/backend/review.py     규칙(RuleDefender · RuledArmRun) · 가린 값 목록 · 재작성 지시 보강 · 사례 단위로 빼기 · 최소 공개 단위 (공개 승인 · 후보가 줄어든 과정은 engine.Session)
 webdemo/backend/assist.py     검토 보조 에이전트: 세부 정보 요청마다 가린 값별 후보 수 · 조회 목적 · 함께 열기를 확인해 초안을 만든다
 webdemo/backend/autocheck.py  자동 레드팀 점검: 설정 지문이 바뀌면(또는 매일 정해진 시각) 점검을 돌리고 직전 점검과 비교한다
-webdemo/backend/textguard.py  추출기 출력 바로잡기(근거 문장 · 사례 문서 대조 보탬) · 상대 기간을 범위로
+webdemo/backend/textguard.py  추출기 출력 바로잡기(근거 문장 · 사례 문서 대조 보탬) · 공개 직전 문장 처리(기간 · 간격 · 횟수 범위, 부재 · 배타 진술, 짐작)
+webdemo/backend/ledger.py     과거 환자 단위 공개 원장 (다른 대화에서 나간 값 · 기간 창 · DB)
+webdemo/backend/gate.py       대상 AI 입력 게이팅 (사례 문서를 값마다 판정해 가리거나 넓혀 넣기)
+webdemo/backend/sensitivity.py 민감도 등급 (민감 범주 · 엄격한 후보 수 · 미성년 물질 사용 검색 제외)
 webdemo/backend/visit.py      운영 모드 진료 기준: 진료 목적마다 가장 최근 진료 · 그날 이어지던 동반질환
 tests/medicloak/              운영 모드 테스트 (가짜 HTTP 세션으로 실제 LLM 경로)
 ```
@@ -230,5 +246,10 @@ tests/medicloak/              운영 모드 테스트 (가짜 HTTP 세션으로 
 - 의료진 대화의 진료 기준(가장 최근 진료)은 레드팀이 쓰는 연구 기준과 다릅니다. 방어 효과는 연구 기준 대화로 잰 값입니다.
 - 실제 LLM 대화의 보내기 전 확인은 대상 AI를 부르지 않고 '기록대로 답한다면'으로 미리 셉니다. 실제 답이 기록과 다르게 나오면 가리는 값도 다를 수 있습니다(ADR-0031).
 - 대상 AI와 재작성기에 '기록에 없는 원인 · 목적을 짐작하지 않는다'는 지시를 넣었습니다(판정 규칙 v6). 지시일 뿐이라, 짐작 문장이 실제로 줄었는지는 실제 LLM으로 확인해야 합니다.
+- 입력 게이팅을 켜면 세 갈래가 같이 쓰는 원 응답이 게이팅된 지시문으로 받은 답입니다. 그래서 관제 화면의 '방어 없음(C0)'은 '출력 단계 방어 없음'이고, 게이팅 전 기록보다 후보 수가 높게 나옵니다(ADR-0032).
+- 레드팀은 공개 원장 · 입력 게이팅 · 민감도 기준을 쓰지 않고 공개 직전 문장 처리만 받습니다. 리포트의 방어 효과는 출력 단계 방어의 값입니다.
+- 입력 게이팅은 값을 하나씩 판정합니다. 여러 값을 함께 말해 후보가 줄어드는 것은 출력 단계가 막습니다. 게이팅으로 대상 AI가 보는 정확한 날짜가 크게 줄어, 답이 '(비공개)'를 자주 말할 수 있습니다. 답 품질은 실제 LLM으로 확인해야 합니다.
+- 부재 · 배타 진술과 짐작 문장은 한국어 표현 규칙으로 찾습니다. 규칙에 없는 표현은 그대로 나갈 수 있고, '…만'을 조사로 바꿀 때 영문 이름의 받침은 어림합니다.
+- 공개 원장의 기간 창 밖 기록은 판정에 쓰지 않지만 DB에는 남습니다. 보존 기간과 삭제는 운영 정책으로 정해야 합니다.
 - 후보 수(k)는 '누구인지'가 드러나는 것을 막습니다. 후보 전원이 같은 값을 가지면 그 값은 알려질 수 있습니다(동질성). 이 부분은 연구 과제로 남아 있습니다(ADR-0025).
-- 결정은 [ADR-0021](../docs/adr/0021-medicloak-production-mode.md) · [ADR-0022](../docs/adr/0022-medicloak-real-llm-everywhere-and-review-feedback.md) · [ADR-0023](../docs/adr/0023-medicloak-drop-failing-case-before-refusal.md) · [ADR-0024](../docs/adr/0024-medicloak-release-units-and-clinician-screen.md) · [ADR-0025](../docs/adr/0025-medicloak-same-answer-style-for-clinic-and-redteam.md) · [ADR-0026](../docs/adr/0026-medicloak-clinical-workflow-and-purpose-rule.md) · [ADR-0027](../docs/adr/0027-medicloak-review-assistant-and-product-wording.md) · [ADR-0028](../docs/adr/0028-medicloak-auto-redteam-and-hidden-markers.md) · [ADR-0029](../docs/adr/0029-medicloak-clinician-trial-fixes.md) · [ADR-0030](../docs/adr/0030-medicloak-security-console-fixes.md) · [ADR-0031](../docs/adr/0031-medicloak-clinician-request-loop-and-wording.md)에 있습니다.
+- 결정은 [ADR-0021](../docs/adr/0021-medicloak-production-mode.md) · [ADR-0022](../docs/adr/0022-medicloak-real-llm-everywhere-and-review-feedback.md) · [ADR-0023](../docs/adr/0023-medicloak-drop-failing-case-before-refusal.md) · [ADR-0024](../docs/adr/0024-medicloak-release-units-and-clinician-screen.md) · [ADR-0025](../docs/adr/0025-medicloak-same-answer-style-for-clinic-and-redteam.md) · [ADR-0026](../docs/adr/0026-medicloak-clinical-workflow-and-purpose-rule.md) · [ADR-0027](../docs/adr/0027-medicloak-review-assistant-and-product-wording.md) · [ADR-0028](../docs/adr/0028-medicloak-auto-redteam-and-hidden-markers.md) · [ADR-0029](../docs/adr/0029-medicloak-clinician-trial-fixes.md) · [ADR-0030](../docs/adr/0030-medicloak-security-console-fixes.md) · [ADR-0031](../docs/adr/0031-medicloak-clinician-request-loop-and-wording.md) · [ADR-0032](../docs/adr/0032-medicloak-review-hardening-ledger-and-input-gate.md)에 있습니다.

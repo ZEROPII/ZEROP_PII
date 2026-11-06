@@ -36,14 +36,16 @@ from medical.bundle.seed_select import target
 from medical.config import ROOT, MedicalConfig, MedicalPaths
 from medical.data import MedicalData
 from medical.experiment import build_context
-from medical.prompts import REFUSAL_TEXT
-from medical.retrieval import PANEL_LABEL, query_binding
+from medical.prompts import PROMPTS, REFUSAL_TEXT
+from medical.retrieval import PANEL_LABEL, panel_text, query_binding
 from medical.session import ARMS, Context, extract, make_prefix
 from medical.simulate import SUPPRESSED, OracleRoleLLM, plan_all
 from medical.tracking import Case, known_cases_json, view_of
 from medical.validate import validate_case
 from webdemo.backend.live import ANSWER_STYLE_ID, ORACLE_LABEL, AnswerStyleLLM, CallWatchLLM, LiveLLM, Turn0Cache, Turn0LLM, background_calls, styled
-from webdemo.backend.review import RELEASE_VERSION, RuledArmRun, decision_of, hidden_items
+from webdemo.backend.gate import InputGate
+from webdemo.backend.review import PURPOSE_UNNEEDED, RELEASE_VERSION, RuledArmRun, decision_of, hidden_items
+from webdemo.backend.sensitivity import DEFAULT_STRICT_K, Sensitivity, labels as sensitivity_labels
 from webdemo.backend.visit import diagnosis_events, make_prefix_with, visit_binding
 
 PROFILES = ("staged", "full")
@@ -109,7 +111,9 @@ class Engine:
 
     def __init__(self, workdir: Path | None = None, log: Callable[[str], None] = print, *, paths: MedicalPaths | None = None,
                  live_llm: Any = None, live_label: str | None = None, first_id: int = 1, llm_concurrency: int = 1,
-                 live_rule_extract: bool = True, answer_style: bool = True, recent_visit: bool = False) -> None:
+                 live_rule_extract: bool = True, answer_style: bool = True, recent_visit: bool = False,
+                 ledger: Any = None, input_gate: bool = False, answer_budget: float | None = None,
+                 sensitivity: bool = False, strict_k: int = DEFAULT_STRICT_K) -> None:
         t0 = time.time()
         self.lock = threading.RLock()                                # kcalc 캐시·응답기 상태를 세션끼리 나눠 쓰므로 한 번에 한 요청
         self.workdir = Path(workdir or ROOT / "runs" / "webdemo")
@@ -146,7 +150,53 @@ class Engine:
         self._compare_q: queue.Queue = queue.Queue()
         self._compare_thread: threading.Thread | None = None
         self.on_compare_done: Callable[[Any], None] | None = None
+        # 연구자 4인 검토 보강 (ADR-0032). 의료진 대화(source='clinic')에만 쓴다. 레드팀 · 연구 실행 · 비교 갈래는 그대로.
+        #   ledger        : 과거 환자 단위 공개 원장 (ledger.DisclosureLedger). C1 판정 State 앞에 다른 대화가 내보낸 값을 붙인다
+        #   input_gate    : 대상 AI 입력 게이팅 (gate.InputGate, 실제 LLM 대화)
+        #   answer_budget : 한 턴 공개 처리의 시간 예산(초). 넘기면 거절 문장으로 막는다 (None이면 끔)
+        #   sensitivity   : 민감도 등급 (sensitivity.Sensitivity): 민감 값은 후보 strict_k명 이상일 때만, 미성년 물질 사용 과거 환자는 검색 제외
+        self.ledger = ledger
+        self.input_gate = bool(input_gate)
+        self.answer_budget = answer_budget if answer_budget and answer_budget > 0 else None
+        self.sensitivity: Sensitivity | None = (Sensitivity(self.data, strict_k=strict_k, store_patients=set(base.docs))
+                                                if sensitivity else None)
+        self.gate = InputGate(base.kc, self.data, base.defender.g, base.defender.s, floors=True,
+                              strict=self.sensitivity.strict if self.sensitivity else None,
+                              strict_k=self.sensitivity.strict_k if self.sensitivity else strict_k) if self.input_gate else None
         log(f"[webdemo] 엔진 준비 {time.time() - t0:.1f}초 · 기준 집단 {base.p_ref}명 · 질의 trial {len(self.plan)}개 · Seed {len(base.seeds)}행")
+
+    def protections(self) -> dict[str, Any]:
+        """의료진 대화에 건 보강 (보호 정책 화면 · 상태 점검용). ADR-0032."""
+        return dict(ledger=self.ledger.describe() if self.ledger is not None else dict(on=False),
+                    inputGate=dict(on=self.input_gate), answerBudgetSec=self.answer_budget,
+                    sensitivity=self.sensitivity.describe() if self.sensitivity is not None else dict(on=False))
+
+    def clinic_prefix(self, ctx0: Context, trial_id: str, pid: str, qt: str, visit_event: str | None, *, gated: bool,
+                      prior_of: Callable[[str, str], list[dict[str, Any]]] | None = None,
+                      report: list[dict[str, Any]] | None = None) -> Any:
+        """
+        의료진 대화의 첫 답 요청(Prefix). 게이팅 · 검색 제외가 없으면 지금까지와 같은 길(make_prefix · make_prefix_with)이다.
+        gated: 사례 문서를 지금 State(새 대화라 원장 값만, prior_of(patient_id, '사례N'))로 게이팅해 대상 AI에 넣는다 (ADR-0032).
+        검색 제외: 민감도 정책의 과거 환자(미성년 물질 사용)를 유사 사례 검색에서 뺀다. 첫 답 미리 준비도 이 함수를 써 요청이 같다.
+        """
+        chosen = self.binder_for(visit_event)
+        binder = chosen if chosen is not None else visit_binding if self.recent_visit else None
+        exclude = self.sensitivity.excluded if self.sensitivity is not None else frozenset()
+        if not (gated and self.gate is not None) and not exclude:
+            return (make_prefix_with(ctx0, trial_id, pid, qt, "DOCTOR", binder) if binder is not None
+                    else make_prefix(ctx0, trial_id, pid, qt, "DOCTOR"))
+        cases_text: Callable[[list[dict[str, Any]]], str] | None = None
+        if gated and self.gate is not None:
+            purpose = PURPOSE_UNNEEDED.get(qt, frozenset())
+
+            def gated_cases(docs: list[dict[str, Any]]) -> str:
+                text, rep = self.gate.cases_block(docs, lambda i, d: prior_of(d["patient_id"], f"사례{i}") if prior_of else [],
+                                                  lambda i: purpose)
+                if report is not None:
+                    report[:] = rep
+                return text
+            cases_text = gated_cases
+        return make_prefix_with(ctx0, trial_id, pid, qt, "DOCTOR", binder or query_binding, cases_text=cases_text, exclude=exclude)
 
     # ── 기본 정보 ──
     def meta(self) -> dict[str, Any]:
@@ -229,7 +279,7 @@ class Engine:
     # ── 세션 ──
     def new_session(self, trial_id: str, profile: str = "staged", fuzzer: str = "uniform", *, source: str = "manual",
                     budget: int | None = None, llm_mode: str = "oracle", on_call: Callable[[str, int], None] | None = None,
-                    visit_event: str | None = None) -> "Session":
+                    visit_event: str | None = None, owner: dict[str, Any] | None = None) -> "Session":
         if trial_id not in self.trial_of:
             raise DemoError(f"없는 trial입니다: {trial_id}")
         if profile not in PROFILES or fuzzer not in FUZZERS:
@@ -239,7 +289,7 @@ class Engine:
         with self.lock:
             sid = f"S{next(self._ids):04d}"
             s = Session(self, sid, trial_id, profile, fuzzer, source=source, budget=budget, llm_mode=llm_mode, on_call=on_call,
-                        visit_event=visit_event)
+                        visit_event=visit_event, owner=owner)
             self.sessions[sid] = s
             self._trim_usage()
             return s
@@ -329,18 +379,18 @@ class Engine:
                 live_ctx = replace(self.live_ctx, llm=AnswerStyleLLM(self.live_ctx.llm)) if self.answer_style else self.live_ctx
                 llm0 = Turn0LLM(live_ctx.llm, self.ctx["staged"].llm, cache=self.turn0_cache)
                 ctx0 = replace(live_ctx, llm=llm0)
-                chosen = self.binder_for(visit_event)
-                if chosen is not None:
-                    p = make_prefix_with(ctx0, trial_id, pid, qt, "DOCTOR", chosen)
-                elif self.recent_visit:
-                    p = make_prefix_with(ctx0, trial_id, pid, qt, "DOCTOR", visit_binding)
-                else:
-                    p = make_prefix(ctx0, trial_id, pid, qt, "DOCTOR")
+                # 열 때와 같은 첫 답 요청: 진료 기준 · 입력 게이팅(원장 값) · 검색 제외 (clinic_prefix). 원장은 읽기만 한다
+                prior_of = (lambda pid_, ref: self.ledger.prior(pid_, ref)) if self.ledger is not None else None
+                p = self.clinic_prefix(ctx0, trial_id, pid, qt, visit_event, gated=self.gate is not None, prior_of=prior_of)
                 # 화면 갈래(C1)의 첫 답 공개 처리를 대화와 똑같이 한 번 돌려 재작성 · 다시 확인 요청도 Turn0Cache에 남긴다.
                 # 새 대화는 아직 보안 담당자 규칙이 없으므로(rules=[]) 열 때의 C1과 요청이 같다. 거절이면 나눠 쓰지 않는다.
                 recs: list[dict[str, Any]] = []
                 llm0.next_arm()
-                RuledArmRun(ctx0, p, "C1", recs.append, list, live=True)._turn(
+                pre = None
+                if prior_of is not None:
+                    pids = {f"사례{i}": q for i, (q, _) in enumerate(p.retrieval, 1)}
+                    pre = (lambda ref: prior_of(pids[ref], ref) if ref in pids else [])
+                RuledArmRun(ctx0, p, "C1", recs.append, list, live=True, prior=pre, sensitivity=self.sensitivity)._turn(
                     0, p.q0, p.raw0, p.obs0, p.extract_ok0, p.extract_tries0,
                     dict(seed_id=None, case_query_id=p.case_query_id, operator=p.op0, realization_fallback=p.realization_fallback,
                          checks=p.tries0, regenerations=max(len(p.tries0) - 1, 0)))
@@ -403,8 +453,14 @@ class Engine:
 class Session:
     def __init__(self, eng: Engine, sid: str, trial_id: str, profile: str, fuzzer: str, *, source: str = "manual",
                  budget: int | None = None, llm_mode: str = "oracle", on_call: Callable[[str, int], None] | None = None,
-                 visit_event: str | None = None) -> None:
+                 visit_event: str | None = None, owner: dict[str, Any] | None = None) -> None:
         self.eng, self.id, self.trial_id, self.profile, self.fuzzer = eng, sid, trial_id, profile, fuzzer
+        self.owner: dict[str, Any] | None = owner          # 의료진 대화: 계정 (user_id, username, label). 원장 기록에 쓰므로 턴 0 전에 둔다
+        # 과거 환자 단위 공개 원장 (ADR-0032): 의료진 대화만 읽고 쓴다. 레드팀 · 시뮬레이션 대화는 원장과 상관없다
+        self.ledger = eng.ledger if source == "clinic" else None
+        self._ledger_done: dict[str, int] = {}              # 사례마다 원장에 적은 State 수
+        self._prior_cache: dict[str, tuple[int, list[dict[str, Any]]]] = {}
+        self._gate0: list[dict[str, Any]] = []              # 첫 답 요청의 입력 게이팅 집계
         self.ctx = eng.ctx[profile]
         self.cfg = self.ctx.cfg
         self.budget = budget or self.cfg.budget_B           # 의료진 화면 대화는 더 길게 쓸 수 있게 늘린다
@@ -424,15 +480,22 @@ class Session:
         ctx0 = (replace(live_ctx, llm=Turn0LLM(live_ctx.llm, self.ctx.llm, cache=eng.turn0_cache, on_call=on_call))
                 if live_ctx is not None else self.ctx)
         self.visit_event = visit_event                      # 의사가 고른 오늘 진단 (진단 사건 번호). 없으면 기본 기준 진료
+        clinic, live = source == "clinic", llm_mode == "live"
+        self.gated = bool(clinic and live and eng.gate is not None)          # 대상 AI 입력 게이팅 (ADR-0032)
         chosen = eng.binder_for(visit_event)
-        if chosen is not None:                               # 의사가 고른 진단의 진료 기준 (visit.py)
+        if clinic:                                           # 의료진 대화: 진료 기준(visit.py) · 게이팅 · 검색 제외 (Engine.clinic_prefix)
+            p = self.prefix = eng.clinic_prefix(ctx0, trial_id, pid, qt, visit_event, gated=self.gated,
+                                                prior_of=self._prior_of_patient if self.ledger is not None else None, report=self._gate0)
+        elif chosen is not None:                             # 의사가 고른 진단의 진료 기준 (visit.py)
             p = self.prefix = make_prefix_with(ctx0, trial_id, pid, qt, "DOCTOR", chosen)
-        elif eng.recent_visit and source == "clinic":         # 운영 모드 의료진 대화: 가장 최근 진료 기준 (visit.py)
-            p = self.prefix = make_prefix_with(ctx0, trial_id, pid, qt, "DOCTOR", visit_binding)
         else:
             p = self.prefix = make_prefix(ctx0, trial_id, pid, qt, "DOCTOR")
         self.logs: dict[str, list[dict[str, Any]]] = {a: [] for a in ARMS}
-        self.runs = {a: RuledArmRun(ctx0, p, a, self._logger(a), lambda a=a: self.rules_for(a), live=llm_mode == "live") for a in ARMS}
+        self.runs = {a: RuledArmRun(ctx0, p, a, self._logger(a), lambda a=a: self.rules_for(a), live=live,
+                                    prior=self.prior if self.ledger is not None else None,
+                                    gate=self._gate_system if self.gated else None,
+                                    budget=eng.answer_budget if clinic and live else None,
+                                    sensitivity=eng.sensitivity if clinic else None) for a in ARMS}
         self.steps: list[dict[str, Any]] = []           # 세션 턴마다: 질문 Seed와 조건별 처리 결과
         for a, r in self.runs.items():
             if isinstance(ctx0.llm, Turn0LLM):
@@ -443,7 +506,6 @@ class Session:
         self.steps.append(dict(turn=0, seed_id=None, picked_by="retrieval", arms={a: dict(status="ANSWERED") for a in ARMS}))
         # 세션의 self.ctx(결정적)는 보내기 전 추정 · 질문 후보에 계속 쓰고, 갈래(ArmRun)만 live 문맥으로 바꾼다.
         self.llm_mode = llm_mode
-        self.owner: dict[str, Any] | None = None             # 의료진 대화: 계정 (user_id, username, label)
         self.launch: dict[str, Any] | None = None            # EMR에서 연 대화: {fhirId, purpose}
         self.compare_pending = 0                             # 뒤에서 계산할 비교 갈래 턴 수 (실제 LLM 대화)
         self.watcher: CallWatchLLM | None = None             # 의료진 질문의 진행 표시 (화면 갈래 C1의 호출만)
@@ -462,13 +524,90 @@ class Session:
         self.selector = FeedbackSelector(threshold=self.cfg.k_req) if fuzzer == "feedback" else None
 
     def _logger(self, arm: str) -> Callable[[dict[str, Any]], None]:
-        """턴 기록을 남길 때 사례마다 그때까지 쌓인 공개 수를 같이 적는다 (후보가 줄어든 과정을 턴에 잇는 데 씀)."""
+        """
+        턴 기록을 남길 때 사례마다 그때까지 쌓인 공개 수를 같이 적는다 (후보가 줄어든 과정을 턴에 잇는 데 씀).
+        화면 갈래(C1)는 ADR-0032 기록도 붙인다: 대상 AI 입력 게이팅 집계(input_gate), 내보낼 글을 다듬은 것(post_edits),
+        원장을 합친 사례별 후보 수(cases_global). 그리고 새로 State에 들어간 값을 원장에 적는다.
+        """
         def log(rec: dict[str, Any]) -> None:
             r = getattr(self, "runs", {}).get(arm)
             if r is not None and rec.get("turn") is not None:
                 rec["committed_count"] = {ref: len(c.committed) for ref, c in r.cases.items()}
+                if arm == "C1":
+                    gate = r.last_gate if r.last_gate is not None else (self._gate0 if rec["turn"] == 0 and self._gate0 else None)
+                    if gate:
+                        rec["input_gate"] = copy.deepcopy(gate)
+                    if r.last_post:
+                        rec["post_edits"] = copy.deepcopy(r.last_post)
+                    if self.ledger is not None:
+                        rec["cases_global"] = {ref: self.k_global(ref) for ref in r.order if self.prior(ref)}
             self.logs[arm].append(rec)
+            if arm == "C1" and self.ledger is not None and rec.get("turn") is not None:
+                self._ledger_sync("turn", rec["turn"])
         return log
+
+    # ── 과거 환자 단위 공개 원장 (ledger.py, ADR-0032) ──
+    def patient_of(self, ref: str) -> str | None:
+        """'사례N' → 그 과거 환자(STORE patient_id). 없는 사례면 None."""
+        m = re.fullmatch(r"사례(\d+)", ref or "")
+        if not m or not 1 <= int(m.group(1)) <= len(self.prefix.retrieval):
+            return None
+        return self.prefix.retrieval[int(m.group(1)) - 1][0]
+
+    def _prior_of_patient(self, pid: str, ref: str) -> list[dict[str, Any]]:
+        return self.ledger.prior(pid, ref, exclude_conv=self.id) if self.ledger is not None else []
+
+    def prior(self, ref: str) -> list[dict[str, Any]]:
+        """다른 대화가 이 사례의 과거 환자에 대해 내보낸 값 (원장, 기간 창 안). 원장이 바뀌지 않았으면 앞서 읽은 것을 쓴다."""
+        if self.ledger is None:
+            return []
+        pid = self.patient_of(ref)
+        if pid is None:
+            return []
+        v = self.ledger.version
+        hit = self._prior_cache.get(ref)
+        if hit is None or hit[0] != v:
+            hit = self._prior_cache[ref] = (v, self._prior_of_patient(pid, ref))
+        return list(hit[1])
+
+    def k_global(self, ref: str, arm: str = "C1") -> int:
+        """원장(다른 대화)까지 합친 이 사례의 후보 수. 원장이 없으면 이 대화의 후보 수와 같다."""
+        c = self.runs[arm].cases.get(ref)
+        ds = (self.prior(ref) if arm == "C1" else []) + (list(c.committed) if c else [])
+        return self.ctx.kc.k(ds)["k"] if ds else self.ctx.p_ref
+
+    def _ledger_sync(self, kind: str, turn: int | None) -> None:
+        """화면 갈래(C1) State에 새로 들어간 값을 원장에 적는다 (사례마다 앞서 적은 뒤의 것만)."""
+        r = self.runs.get("C1")
+        if r is None or self.ledger is None:
+            return
+        uid = (self.owner or {}).get("user_id")
+        for ref, c in r.cases.items():
+            n0 = self._ledger_done.get(ref, 0)
+            new = c.committed[n0:]
+            pid = self.patient_of(ref)
+            if new and pid is not None:
+                self.ledger.record(pid, new, conv_id=self.id, user_id=uid, kind=kind, turn=turn)
+            self._ledger_done[ref] = len(c.committed)
+
+    def ledger_view(self) -> dict[str, Any]:
+        """관제 화면용: 사례마다 다른 대화에서 나간 값의 수 · 대화 · 계정과, 원장을 합친 후보 수 (값은 넣지 않는다)."""
+        if self.ledger is None:
+            return dict(on=False)
+        cases = {}
+        for i, (pid, _) in enumerate(self.prefix.retrieval, 1):
+            ref = f"사례{i}"
+            sm = self.ledger.summary(pid, exclude_conv=self.id)
+            cases[ref] = dict(sm, k=self.current_k("C1", ref), kGlobal=self.k_global(ref))
+        return dict(on=True, windowDays=self.ledger.describe()["windowDays"], cases=cases)
+
+    # ── 대상 AI 입력 게이팅 (gate.py, ADR-0032) ──
+    def _gate_system(self, run: "RuledArmRun") -> str:
+        """지금 C1 State(원장 포함)와 보안 담당자 규칙 · 조회 목적으로 사례 문서를 게이팅한 대상 AI 지시문."""
+        docs = self.prefix.docs
+        text, rep = self.eng.gate.cases_block(docs, lambda i, d: run._basis(f"사례{i}"), lambda i: run.blocked(f"사례{i}"))
+        run.last_gate = rep
+        return PROMPTS["target_system"].format(n=len(docs), panel=panel_text(self.prefix.binding), cases=text)
 
     # ── 보안 담당자 검토 반영 (review.py) ──
     def rules_for(self, arm: str) -> list[tuple[str, str]]:
@@ -515,10 +654,13 @@ class Session:
             out.append(dict(turn=x["turn"], case=x["case"], index=x["index"], attribute=d["attribute"], attribute_label=ATTR_KO.get(d["attribute"], d["attribute"]),
                             value=str(d.get("raw_value") or self.ctx.data.label(d["node_id"])), committed_index=len(c.committed) - 1,
                             after_turn=self.turn, action="dropped" if x.get("dropped") else x.get("action")))   # 어떻게 가렸던 값인지 (의료진 메시지)
-        k_after = {ref: kc.k(r.cases[ref].committed)["k"] for ref in dict.fromkeys(x["case"] for x in out)}
+        # 공개 뒤 후보 수는 원장(다른 대화에서 나간 값)까지 합쳐 센다 (원장이 없으면 이 대화의 State만, 지금까지와 같음)
+        k_after = {ref: kc.k(self.prior(ref) + list(r.cases[ref].committed))["k"] for ref in dict.fromkeys(x["case"] for x in out)}
         ap = dict(id=f"AP{len(self.approvals) + 1}", at=time.time(), by=by, reason=reason, items=out, k_after=k_after)
         self.approvals.append(ap)
         self.last_active = ap["at"]
+        if self.ledger is not None:
+            self._ledger_sync("approval", self.turn)       # 승인해 공개한 값도 원장에 남긴다 (다른 대화의 판정에 들어간다)
         return ap
 
     def what_if(self, item_ids: list[str]) -> dict[str, int]:
@@ -532,7 +674,9 @@ class Session:
         trial: dict[str, list[dict[str, Any]]] = {}
         for x in chosen:
             d = decision_of(self.logs["C1"], x["turn"], x["case"], x["index"])
-            base = trial.setdefault(x["case"], list(r.cases[x["case"]].committed) if x["case"] in r.cases else [])
+            if x["case"] not in trial:                   # 원장(다른 대화)까지 합쳐 센다 (ADR-0032)
+                trial[x["case"]] = self.prior(x["case"]) + (list(r.cases[x["case"]].committed) if x["case"] in r.cases else [])
+            base = trial[x["case"]]
             base.append(dict(attribute=d["attribute"], node_id=d["node_id"], event_group=self._event_group_for(base, x, d)))
         return {ref: kc.k(committed)["k"] for ref, committed in trial.items()}
 
@@ -563,13 +707,19 @@ class Session:
         counts = [(rec["turn"], (rec.get("committed_count") or {}).get(ref)) for rec in self._records(arm)]
         approved = {x["committed_index"]: ap for ap in self.approvals if arm == "C1" for x in ap["items"] if x["case"] == ref}
         steps, k_prev, seen = [], ctx.p_ref, set()
+        prior = self.prior(ref) if arm == "C1" else []
+        if prior:                                       # 다른 대화에서 이 과거 환자에 대해 나간 값 (원장, ADR-0032): 첫 단계 하나로
+            k_p = ctx.kc.k(prior)["k"]
+            steps.append(dict(attribute="PRIOR", attributeLabel="다른 대화에서 공개된 값", value=f"{len({(x['attribute'], x['node_id']) for x in prior})}개",
+                              turn=None, approved=False, afterTurn=None, kBefore=k_prev, kAfter=k_p, prior=True))
+            k_prev = k_p
         for i, d in enumerate(committed):
             ap = approved.get(i)
             key = (d["attribute"], d["node_id"])
             if key in seen and not ap:                  # 같은 단서가 다음 답에 다시 나온 것: 후보가 줄지 않으니 단계로 세지 않는다
                 continue
             seen.add(key)
-            k_i = ctx.kc.k(committed[: i + 1])["k"]
+            k_i = ctx.kc.k(prior + committed[: i + 1])["k"]
             turn = next((t for t, n in counts if n is not None and n >= i + 1), None)
             after = next((x.get("after_turn") for x in (ap or {}).get("items", []) if x["committed_index"] == i), None)
             steps.append(dict(attribute=d["attribute"], attributeLabel=ATTR_KO.get(d["attribute"], d["attribute"]), value=ctx.data.label(d["node_id"]),
@@ -908,7 +1058,10 @@ class Session:
                      variant=rec.get("variant"), scope=rec.get("scope"), objective=rec.get("objective"), relation=rec.get("relation"),
                      operator=rec.get("operator"), utility=rec.get("turn_utility"),
                      raw_lines=[{k: x[k] for k in ("case", "field", "attribute", "value", "text") if k in x} for x in parse_answer(rec["raw_response_text"])],
-                     cases={ref: dict(k=c.get("k"), k_if_raw=cand.get(ref)) for ref, c in (rec.get("cases") or {}).items() if "k" in c},
+                     cases={ref: dict(k=c.get("k"), k_if_raw=cand.get(ref), k_global=(rec.get("cases_global") or {}).get(ref))
+                            for ref, c in (rec.get("cases") or {}).items() if "k" in c},
+                     # ADR-0032: 내보낼 글을 다듬은 것(뺀 문장은 열람 전 지움) · 대상 AI 입력 게이팅 집계
+                     post_edits=copy.deepcopy(rec.get("post_edits") or []), input_gate=copy.deepcopy(rec.get("input_gate")),
                      decisions=[dict(case=p["ref"], k_before=p["k_before"], k_projected=p["k_projected"], risky=p["risky"], k_final=p["k_final"],
                                      items=[dict(attribute=ATTR_KO.get(d["attribute"], d["attribute"]), raw_value=d["raw_value"], action=d["action"],
                                                  to_label=self.ctx.data.label(d["to_node"]) if d.get("to_node") and d["action"] == "generalize" else None,
@@ -967,7 +1120,21 @@ class Session:
                            release_modes=dict(r.release_modes), decisions=dict(decisions), validation=val,
                            turns=[self._turn_view(rec, a, True) for rec in self._records(a)])
         return dict(self._summary(), arms=arms, steps=self.steps, rules=copy.deepcopy(self.rules), approvals=copy.deepcopy(self.approvals),
-                    retrieval=[dict(ref=f"사례{i}", patient=p[:8], score=round(s, 4)) for i, (p, s) in enumerate(self.prefix.retrieval, 1)])
+                    retrieval=[dict(ref=f"사례{i}", patient=p[:8], score=round(s, 4), sensitive=self._sensitive_labels(p))
+                               for i, (p, s) in enumerate(self.prefix.retrieval, 1)],
+                    ledger=self.ledger_view(), gated=self.gated)
+
+    def _sensitive_labels(self, pid: str) -> list[str]:
+        """이 과거 환자 기록에 든 민감 범주 이름 (민감도 정책을 켠 서버의 의료진 대화만, 관제 화면 표시용)."""
+        if self.eng.sensitivity is None or self.source != "clinic":
+            return []
+        data = self.ctx.data
+        out: list[str] = []
+        for e in data.by_pat.get(pid, []):
+            for lab in sensitivity_labels(data, e.get("code_node")):
+                if lab not in out:
+                    out.append(lab)
+        return out
 
 
 # ── 레드팀 배치 ─────────────────────────────────────────────

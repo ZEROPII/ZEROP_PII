@@ -33,6 +33,33 @@ const TERMS: [string, string][] = [
   ['레드팀 점검', '공격 질문을 자동으로 보내 방어 규칙을 시험하는 일.'],
 ];
 
+/** 의료진 대화 보강 (ADR-0032) 한 줄씩 */
+function protectionRows(x: NonNullable<MonitorPolicy['protections']>): [string, string][] {
+  const out: [string, string][] = [];
+  const l = x.ledger;
+  out.push([
+    '공개 원장',
+    l.on
+      ? `켬: 같은 과거 환자에 대해 다른 대화 · 다른 의료진에게 공개된 값${l.windowDays ? `(최근 ${l.windowDays}일)` : ''}까지 합쳐 후보 수를 셈${l.persistent ? ', DB에 남김' : ', 메모리에만'}`
+      : '끔 (--ledger off): 후보 수는 대화마다 따로 셈',
+  ]);
+  out.push([
+    '입력 단계 게이팅',
+    x.inputGate.on
+      ? '켬: 대상 AI에 사례 기록을 넣기 전에 값마다 판정해, 가릴 값은 (비공개), 넓힐 값은 상위 범주, 횟수는 범위로 넣음 (실제 LLM 의료진 대화)'
+      : '끔 (--input-gate off): 대상 AI에는 사례 기록 원문이 들어가고, 답을 공개하기 전에만 고침',
+  ]);
+  out.push(['답 시간 한도', x.answerBudgetSec ? `${x.answerBudgetSec}초: 넘기면 확인하지 못한 답 대신 안내 문장 (실제 LLM 의료진 대화)` : '없음 (--answer-budget 0)']);
+  const s = x.sensitivity;
+  out.push([
+    '민감 정보',
+    s.on
+      ? `켬: ${(s.categories ?? []).filter((c) => c.grade >= 2).map((c) => c.name).join(', ')} 값은 후보가 ${s.strictK}명 이상일 때만 공개${s.excludedPatients ? `, 미성년 물질 사용 기록 환자 ${s.excludedPatients}명은 사례 검색에서 뺌` : ''}`
+      : '끔 (--sensitivity off)',
+  ]);
+  return out;
+}
+
 /**
  * 보호 정책: 백엔드가 알려 준 현재 정책 값과 화면에서 쓰는 말 (이 화면에서 바꾸지 않음).
  * 기준값은 의료진 화면 API에서 지워지므로 보안 담당자 API(/api/monitor/policy)에서 받는다.
@@ -73,6 +100,7 @@ export function PolicyPage() {
                     ['조회 목적', '거주 지역은 어느 조회 목적(처방 · 시술·치료 · 경과·관리)에도 쓰지 않아 후보 수와 관계없이 가림, 공개 승인 대상도 아님 (의료진 대화 · 레드팀)'],
                   ] as [string, string][])
                 : []),
+              ...(p.protections ? protectionRows(p.protections) : []),
               ['검토 반영', '규칙(이 대화에서 사례 · 단서는 늘 가림), 세부 정보 요청 승인 공개 (사유 · 감사 기록)'],
               ['검토 보조', '세부 정보 요청마다 검토 초안: 추천은 규칙(후보 수 · 조회 목적), 요약 · 답장 문장은 실제 LLM. 보내는 것은 담당자'],
               ...(p.autoRedteam

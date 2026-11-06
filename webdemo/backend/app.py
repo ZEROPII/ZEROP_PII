@@ -26,6 +26,7 @@
 
 from __future__ import annotations
 
+import collections
 import json
 import os
 import threading
@@ -47,7 +48,7 @@ from webdemo.backend import redact
 from webdemo.backend.assist import ReviewAssistant
 from webdemo.backend.autocheck import ACTOR as AUTO_ACTOR, AUTO_FUZZER, AUTO_PER_TYPE, AutoRedteam
 from webdemo.backend.auth import COOKIE, ROLE_KO, SESSION_TTL, Auth, LoginBlocked, roles_for, route_path, user_view
-from webdemo.backend.clinic import ArchivedConversation, ClinicConversation, ClinicDesk, Conflict, DeskRegistry, NotFound
+from webdemo.backend.clinic import PREFLIGHT_LIMIT, ArchivedConversation, ClinicConversation, ClinicDesk, Conflict, DeskRegistry, NotFound
 from webdemo.backend.engine import ARMS, DemoError, Engine, summarize
 from webdemo.backend.fhir import FEATURED, OutpatientEmr, fhir_router, find_trial, worklist
 from webdemo.backend.monitor import REVIEW_KO, Monitor
@@ -62,6 +63,8 @@ PRODUCT_LOCATION = "MediCloak 외래 진료 지원"
 # 운영 모드: 의료진 대화는 EMR에서 환자를 열 때 시작한다 (기본 환자를 저절로 열지 않음). 열린 대화가 없으면 409와 이 머리글.
 NO_CONVERSATION = "열린 진료 지원 AI 대화가 없습니다. 외래 진료 목록에서 환자를 열어 주세요."
 NO_CONVERSATION_HEADERS = {"X-MediCloak-State": "no-conversation"}
+OFFICER_PREFLIGHT_LIMIT = 30           # 보안 담당자 '질문 미리 세기': 계정마다 OFFICER_PREFLIGHT_WINDOW초 안에 (ADR-0032)
+OFFICER_PREFLIGHT_WINDOW = 600.0
 
 
 @dataclass
@@ -423,6 +426,8 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
     # 질문을 보내고 답을 기다리는 동안의 진행 (의료진마다). 화면 갈래(C1)의 실제 LLM 호출만 센다 (live.CallWatchLLM).
     asking: dict[str, dict[str, Any]] = {}
     asking_lock = threading.Lock()
+    officer_preflights: dict[Any, Any] = {}           # 보안 담당자 '질문 미리 세기' 시각 (계정마다, ADR-0032)
+    officer_preflight_lock = threading.Lock()
     ask_step_ko = dict(target="답을 쓰는 중", extractor="답에 환자를 알아볼 수 있는 값이 있는지 확인하는 중",
                        recheck="고친 답을 한 번 더 확인하는 중", rewriter="알아볼 수 있는 값을 고쳐 쓰는 중")
 
@@ -472,7 +477,12 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
     @r.post("/cases/{case_id}/preflight")
     def preflight(case_id: str, body: PreflightIn, request: Request) -> dict[str, Any]:
         c = cur(request)
-        return redact.preflight(guard(lambda: c.preflight(case_id, body.sessionId, body.question)), live=c.live)
+        out = guard(lambda: c.preflight(case_id, body.sessionId, body.question))
+        if out.get("limited") and getattr(c, "preflight_limited", 0) % PREFLIGHT_LIMIT == 1:
+            # 보내기 전 확인 한도를 넘김: 처음 한 번과 그 뒤 한도만큼마다 감사 기록 (질문을 바꿔 가며 미리 세는 시도를 사람이 보게)
+            ref = c.ref_of(case_id) if case_id in getattr(c, "slots", {}) else None
+            mon().log("preflight_limited", c.session, user=user_of(request), case=ref, **mon().subjects(c.session, [ref]))
+        return redact.preflight(out, live=c.live)
 
     @r.get("/cases/{case_id}/suggestions")
     def suggestions(case_id: str, request: Request) -> list[dict[str, Any]]:
@@ -721,9 +731,28 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
         return guard(lambda: c.suggestions(case_id))
 
     @w.post("/{sid}/cases/{case_id}/preflight")
-    def w_preflight(sid: str, case_id: str, body: PreflightIn) -> dict[str, Any]:
+    def w_preflight(sid: str, case_id: str, body: PreflightIn, request: Request) -> dict[str, Any]:
+        """
+        보안 담당자의 '질문 미리 세기' (숫자 그대로). 후보 수를 몇 번이든 물어볼 수 있는 도구라, 부를 때마다 감사 기록에 남기고
+        계정마다 OFFICER_PREFLIGHT_WINDOW초 안에 OFFICER_PREFLIGHT_LIMIT번까지만 받는다 (ADR-0032).
+        """
         c = conv_of(sid)
-        return guard(lambda: c.preflight(case_id, body.sessionId, body.question))
+        user = user_of(request)
+        key = (user or {}).get("user_id", "demo")
+        now = time.time()
+        with officer_preflight_lock:
+            dq = officer_preflights.setdefault(key, collections.deque())
+            while dq and now - dq[0] > OFFICER_PREFLIGHT_WINDOW:
+                dq.popleft()
+            if len(dq) >= OFFICER_PREFLIGHT_LIMIT:
+                raise HTTPException(429, f"질문 미리 세기는 {int(OFFICER_PREFLIGHT_WINDOW // 60)}분에 {OFFICER_PREFLIGHT_LIMIT}번까지입니다. 잠시 뒤 다시 하세요.")
+            dq.append(now)
+        out = guard(lambda: c.preflight(case_id, body.sessionId, body.question, limit=False))
+        s = getattr(c, "session", None)
+        ref = c.ref_of(case_id) if case_id in getattr(c, "slots", {}) else None
+        mon().log("watch_preflight", s, user=user, case=ref, question_chars=len(body.question or ""),
+                  **(mon().subjects(s, [ref]) if s is not None else {}))
+        return out
 
     # ── 관제 ─────────────────────────────────────────────
     @r.get("/monitor/overview")
@@ -735,12 +764,13 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
         e = eng()
         d = e.ctx["staged"].defender
         return dict(modeLabel=e.live_label if e.live_ctx is not None else "결정적 응답기 (LLM 없음)", arm="C1",
-                    stateModeLabel="누적 판정 (대화 전체 기억)", minK=d.g, suppressK=d.s, populationSize=e.ctx["staged"].p_ref, source="backend",
+                    stateModeLabel=("누적 판정 (같은 과거 환자의 다른 대화까지)" if e.ledger is not None else "누적 판정 (대화 전체 기억)"), minK=d.g, suppressK=d.s, populationSize=e.ctx["staged"].p_ref, source="backend",
                     kReq=e.cfg.k_req, llmLive=e.live_ctx is not None, ruleExtract=bool(e.live_ctx is not None and e.live_ctx.cfg.rule_extract), compare=product.compare if product else True,
                     answerStyle=bool(e.live_ctx is not None and e.answer_style),
                     auth=state["auth"] is not None, persist=state["store"] is not None, llmUsage=e.live_usage(),
                     autoRedteam=dict(onChange=state["auto"].on_change and state["auto"].enabled, daily=state["auto"].daily if state["auto"].enabled else None,
-                                     decisionText=state["auto"].decision_text))
+                                     decisionText=state["auto"].decision_text),
+                    protections=e.protections())
 
     @r.get("/monitor/sessions/{sid}")
     def monitor_session(sid: str) -> dict[str, Any]:

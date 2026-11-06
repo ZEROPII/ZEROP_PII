@@ -11,6 +11,7 @@ const MODE_KO: Record<string, string> = {
   CASE_DROPPED: '통과하지 못한 사례를 뺀 답',
   REFUSAL: '거절 문장',
   REFUSAL_EXTRACTION_FAILED: '거절 문장 (단서 추출 실패)',
+  REFUSAL_TIMEOUT: '거절 문장 (시간 초과)',
 };
 
 function caseText(ref: string | null | undefined): string {

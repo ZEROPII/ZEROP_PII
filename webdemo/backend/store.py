@@ -4,6 +4,7 @@
 #   계정       app_user · auth_session (비밀번호는 PBKDF2 해시, 세션은 토큰의 SHA-256만 저장)
 #   기록       conversation(의료진 대화 스냅숏) · turn_record(턴 기록, 원 응답 포함 · 서버 안에서만)
 #              thread_message(의료진 ↔ 보안 담당자) · audit(감사 기록)
+#   공개 원장  disclosure_ledger: 과거 환자마다 의료진 대화가 내보낸 단서(노드)와 대화 · 계정 · 시각 (ledger.py, ADR-0032)
 #
 # 쓰기는 연결 하나를 잠금으로 줄 세운다. 데모 · 시범 운영 규모(동시 사용자 수십 명)에서 충분하다.
 # 원 응답과 가린 원래 값은 turn_record · conversation.security_json에만 있고, 이 값은 보안 담당자 API에서도
@@ -68,6 +69,11 @@ CREATE TABLE IF NOT EXISTS audit (
 CREATE TABLE IF NOT EXISTS redteam_run (
   job_id TEXT PRIMARY KEY, started_at REAL, finished_at REAL, status TEXT, job_json TEXT
 );
+CREATE TABLE IF NOT EXISTS disclosure_ledger (
+  entry_id INTEGER PRIMARY KEY AUTOINCREMENT, patient_id TEXT NOT NULL, conv_id TEXT, user_id INTEGER, at REAL,
+  kind TEXT, turn INTEGER, attribute TEXT, node_id TEXT, event_label TEXT
+);
+CREATE INDEX IF NOT EXISTS disclosure_ledger_patient ON disclosure_ledger (patient_id, at);
 """
 
 
@@ -211,6 +217,22 @@ class Store:
 
     def runs(self) -> list[dict[str, Any]]:
         return [json.loads(r["job_json"]) for r in self.q("SELECT job_json FROM redteam_run ORDER BY started_at")]
+
+    # ── 공개 원장 (ledger.py) ──
+    _LEDGER_COLS = ("patient_id", "conv_id", "user_id", "at", "kind", "turn", "attribute", "node_id", "event_label")
+
+    def add_ledger(self, rows: list[dict[str, Any]]) -> None:
+        self.many(f"INSERT INTO disclosure_ledger ({', '.join(self._LEDGER_COLS)}) VALUES ({', '.join('?' for _ in self._LEDGER_COLS)})",
+                  [tuple(r.get(c) for c in self._LEDGER_COLS) for r in rows])
+
+    def ledger_entries(self, since: float | None = None) -> list[dict[str, Any]]:
+        """오래된 것부터. since를 주면 그 시각 뒤의 기록만."""
+        rows = self.q("SELECT * FROM disclosure_ledger" + (" WHERE at >= ?" if since is not None else "") + " ORDER BY entry_id",
+                      (since,) if since is not None else ())
+        return [{c: r[c] for c in self._LEDGER_COLS} for r in rows]
+
+    def set_ledger_user(self, conv_id: str, user_id: int) -> None:
+        self.x("UPDATE disclosure_ledger SET user_id = ? WHERE conv_id = ? AND user_id IS NULL", (user_id, conv_id))
 
     # ── 대화 ──
     def save_conversation(self, conv_id: str, **cols: Any) -> None:

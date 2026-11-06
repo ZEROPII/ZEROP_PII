@@ -65,6 +65,7 @@ export function preflightStatusLine(status: PreflightStatus, a: PreflightRiskAss
   if (status === 'error') return '미리 확인하지 못했습니다. 보내면 서버가 확인합니다';
   if (a?.supported === false) return '보내면 서버가 개인정보 보호 기준으로 확인합니다';
   if (a?.understood === false) return '묻는 항목을 찾지 못했습니다. 처방, 시술, 진단, 시기처럼 물어보세요';
+  if (a?.limited) return '보내기 전 확인을 잠시 멈췄습니다. 보내면 서버가 확인합니다';
   if (a && !a.requiresWarning)
     return a.estimate === 'oracle' ? '미리 세어 보면 그대로 답할 수 있는 질문입니다' : '확인했습니다. 그대로 답할 수 있는 질문입니다';
   return '보내면 서버가 개인정보 보호 기준으로 다시 확인합니다';
@@ -74,6 +75,7 @@ export function preflightStatusLine(status: PreflightStatus, a: PreflightRiskAss
 export function protectionNote(p: ProtectionResult): Notice | null {
   const mode = p.releaseMode ?? '';
   if (mode === 'REFUSAL_EXTRACTION_FAILED') return { tone: 'info', text: '답을 확인하지 못해 보내지 않았습니다. 질문을 조금 바꿔 다시 물어보세요.' };
+  if (mode === 'REFUSAL_TIMEOUT') return { tone: 'info', text: '정해진 시간 안에 답을 확인하지 못해 보내지 않았습니다. 잠시 뒤 다시 물어보세요.' };
   if (mode.startsWith('REFUSAL')) return { tone: 'lock', text: '이 질문에는 개인정보 보호를 위해 답하지 않았습니다.' };
   if (mode === 'CASE_DROPPED') return { tone: 'lock', text: '환자를 알아볼 위험이 있는 사례는 이 답에서 뺐습니다.' };
   const sup = p.transformations.some((t) => t.action === 'suppress' && !t.purpose);
@@ -97,7 +99,9 @@ export function whyText(p: ProtectionResult, caseLabel: string): string[] {
   const unit = joinNames(kept.filter((t) => t.action === 'generalize' && t.floor).map(attrName));
   const dropped = joinNames(p.transformations.filter((t) => t.dropped && t.caseRef).map((t) => refLabel(t.caseRef!)));
   const out: string[] = [];
-  if ((p.releaseMode ?? '').startsWith('REFUSAL'))
+  if (p.releaseMode === 'REFUSAL_TIMEOUT')
+    out.push('답을 만들고 확인하는 데 정해진 시간을 넘겨, 확인하지 못한 답 대신 안내 문장을 보냈습니다.');
+  else if ((p.releaseMode ?? '').startsWith('REFUSAL'))
     out.push('답을 고쳐도 개인을 알아볼 수 있는 내용이 남아, 답 대신 안내 문장을 보냈습니다.');
   if (dropped)
     out.push(`${josa(dropped, '은', '는')} 답을 고쳐도 다른 내용과 합치면 환자가 누구인지 알 수 있어, 그 사례 내용을 이 답에서 뺐습니다.`);

@@ -103,18 +103,25 @@ def visit_binding(data: Any, pid: str, qtype: str, rng: random.Random, index_eve
                 active=sorted({data.label(e["code_node"]) for e, _ in active}))
 
 
-def make_prefix_with(ctx: Context, tid: str, qpid: str, qtype: str, role: str, binder: Binder) -> Prefix:
-    """medical.session.make_prefix와 같은 순서 · 같은 난수 (query_binding 자리에 binder)."""
+def make_prefix_with(ctx: Context, tid: str, qpid: str, qtype: str, role: str, binder: Binder, *,
+                     cases_text: Callable[[list[dict[str, Any]]], str] | None = None,
+                     exclude: "set[str] | frozenset[str]" = frozenset()) -> Prefix:
+    """
+    medical.session.make_prefix와 같은 순서 · 같은 난수 (query_binding 자리에 binder).
+    cases_text(docs): 대상 AI 지시문의 [검색된 사례] 자리 글 (입력 게이팅, gate.py). 없으면 문서 원문을 그대로 (지금까지와 같음).
+    exclude: 유사 사례 검색에서 뺄 과거 환자 (민감도 정책, sensitivity.py). 후보 수의 기준 집단에서는 빼지 않는다.
+    """
     rng = random.Random(f"{ctx.cfg.seed}-{tid}")
     b = binder(ctx.data, qpid, qtype, rng)
     if b is None:
         raise ValueError(f"{qpid}는 {qtype} 유형의 질의 환자가 될 수 없습니다 (관련 항목 또는 진단 범주 없음).")
     cq = rng.choice(ctx.case_queries[qtype])
     base = fill_case_query(cq["template_text"], b)
-    ret = retrieve(code_sets(ctx.data.by_pat[qpid], b["index_date"]), ctx.store_sets, ctx.cfg.top_k_retrieval)
+    store_sets = {p: s for p, s in ctx.store_sets.items() if p not in exclude} if exclude else ctx.store_sets
+    ret = retrieve(code_sets(ctx.data.by_pat[qpid], b["index_date"]), store_sets, ctx.cfg.top_k_retrieval)
     docs = [ctx.docs[p] for p, _ in ret]
-    system = PROMPTS["target_system"].format(n=len(docs), panel=panel_text(b),
-                                             cases="\n\n".join(f"[사례{i}]\n{d['text']}" for i, d in enumerate(docs, 1)))
+    cases = cases_text(docs) if cases_text is not None else "\n\n".join(f"[사례{i}]\n{d['text']}" for i, d in enumerate(docs, 1))
+    system = PROMPTS["target_system"].format(n=len(docs), panel=panel_text(b), cases=cases)
     op0 = rng.choice(["M1", "M3"])
     q0, tries0 = realize(ctx.llm, ctx.cfg, base, "(사례 검색: 단서를 묻지 않음)", "CASE_RETRIEVAL", "-", "-", op0, role, [])
     fallback = q0 is None

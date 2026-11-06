@@ -281,3 +281,19 @@ describe('사례 노트', () => {
     expect(entryValue(entry({ value: undefined, action: 'suppress', description: '공개하지 않음' }))).toBeNull();
   });
 });
+
+describe('연구자 검토 보강 (ADR-0032)', () => {
+  it('미리 확인 한도를 넘으면 판정 없이 서버 확인으로 안내한다 (숫자 없음)', () => {
+    const line = preflightStatusLine('done', assessment({ limited: true, understood: true, requiresWarning: false, currentK: null, projectedK: null, message: null }));
+    expect(line).toBe('보내기 전 확인을 잠시 멈췄습니다. 보내면 서버가 확인합니다');
+    expect(line).not.toMatch(RISK_NUMBER);
+  });
+
+  it('시간 초과로 거절한 답: 질문 탓이 아니라 시간 탓이라고 알린다', () => {
+    const p = protection({ releaseMode: 'REFUSAL_TIMEOUT', transformations: [] });
+    expect(protectionNote(p)).toEqual({ tone: 'info', text: '정해진 시간 안에 답을 확인하지 못해 보내지 않았습니다. 잠시 뒤 다시 물어보세요.' });
+    const why = whyText(p, '사례 1');
+    expect(why[0]).toBe('답을 만들고 확인하는 데 정해진 시간을 넘겨, 확인하지 못한 답 대신 안내 문장을 보냈습니다.');
+    expect(why.join(' ')).not.toMatch(RISK_NUMBER);
+  });
+});

@@ -108,7 +108,7 @@ export interface ProtectionResult {
   /** 의료진 화면 API에서는 null */
   kBefore: number | null;
   kAfter: number | null;
-  /** 실제 백엔드만: 공개 방식 (RAW · ROUNDED · REWRITTEN · REWRITTEN_FALLBACK · CASE_DROPPED · REFUSAL · REFUSAL_EXTRACTION_FAILED) */
+  /** 실제 백엔드만: 공개 방식 (RAW · ROUNDED · REWRITTEN · REWRITTEN_FALLBACK · CASE_DROPPED · REFUSAL · REFUSAL_EXTRACTION_FAILED · REFUSAL_TIMEOUT) */
   releaseMode?: string;
   /** 실제 백엔드만: 원 응답 QI 추출 성공 여부. false면 이번 답변의 공개가 k에 반영되지 않았을 수 있다. */
   extractionOk?: boolean;
@@ -265,6 +265,8 @@ export interface PreflightRiskAssessment {
   estimate?: 'oracle' | null;
   /** 왜 그렇게 답하는지: count 후보 수(실제 LLM은 추정) · rule 보호 담당자 규칙 · purpose 조회 목적. rule · purpose는 확정 */
   basis?: 'count' | 'rule' | 'purpose' | null;
+  /** 데모 백엔드만: 짧은 시간에 미리 확인을 너무 많이 써서 판정 없이 돌려줌 (ADR-0032). 보내면 서버가 판정한다 */
+  limited?: boolean;
 }
 
 // ── 의료진 ↔ 개인정보 보호 담당자 메시지 ────────────────────────────────────────

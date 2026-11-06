@@ -37,6 +37,9 @@ export interface MonitorRow {
   violated: string[];
   /** 보안 담당자가 승인해 공개해서 기준 아래가 된 사례 (경보와 따로 센다) */
   approved_low?: string[];
+  /** 공개 원장(ADR-0032): 같은 과거 환자가 다른 대화에서 공개된 값까지 합치면 후보가 기준 아래인 사례 · 지금 사례의 합친 후보 수 */
+  global_low?: string[];
+  k_global?: number | null;
   /** 질문의 답에 나온 사례와 그 과거 환자 기호 */
   asked_subjects?: SubjectTag[];
   /** 같은 과거 환자를 최근 다른 대화에서도 물었다: 다른 대화 수 · 물은 의료진 수 (이 대화 포함) */
@@ -101,6 +104,13 @@ export interface MonitorPolicy extends ProtectionPolicy {
   llmUsage?: { label: string; calls: number; by_role: Record<string, { calls: number; input_tokens: number; output_tokens: number }> } | null;
   /** 자동 레드팀 점검 설정 (ADR-0028) */
   autoRedteam?: { onChange: boolean; daily: string | null; decisionText: string };
+  /** 의료진 대화 보강 (ADR-0032): 공개 원장 · 입력 단계 게이팅 · 답 시간 한도(초) · 민감도 등급 */
+  protections?: {
+    ledger: { on: boolean; windowDays?: number | null; entries?: number; patients?: number; persistent?: boolean };
+    inputGate: { on: boolean };
+    answerBudgetSec: number | null;
+    sensitivity: { on: boolean; strictK?: number; excludedPatients?: number; categories?: { name: string; grade: number }[] };
+  };
 }
 
 export interface ThreadMessage {
@@ -135,6 +145,8 @@ export interface MonitorOverview {
     /** 승인 공개로 기준 아래가 된 사례 수 · 같은 과거 환자를 다른 대화에서도 물은 대화 수 */
     approved_low?: number;
     repeat_subjects?: number;
+    /** 다른 대화와 합치면 기준 아래인 사례 수 (공개 원장) */
+    global_low?: number;
   };
   sessions: MonitorRow[];
   simulations: string;
@@ -266,6 +278,8 @@ export interface NarrowingStep {
   afterTurn?: number | null;
   kBefore: number;
   kAfter: number;
+  /** 공개 원장(ADR-0032): 다른 대화에서 이 과거 환자에 대해 공개된 값을 한 단계로 (맨 앞) */
+  prior?: boolean;
 }
 
 export interface NarrowingHidden {
@@ -432,6 +446,8 @@ export interface AuditEntry {
   /** 레드팀 시작: live · oracle, 유형마다 질의 환자 수 */
   llm?: string;
   per_type?: number | null;
+  /** 보안 담당자 질문 미리 세기(watch_preflight): 질문 글자 수 (본문은 남기지 않음) */
+  question_chars?: number;
 }
 
 export interface Proportion {

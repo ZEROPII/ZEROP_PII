@@ -27,6 +27,8 @@ export const ACTION_KO: Record<string, string> = {
   clinic_question: '의료진 질문',
   assist_draft: '검토 보조 초안',
   redteam_compare: '레드팀 직전 점검과 비교',
+  watch_preflight: '보안 담당자 질문 미리 세기',
+  preflight_limited: '보내기 전 확인 한도 넘음',
 };
 
 const PURPOSE_KO: Record<string, string> = { PRESCRIPTION: '처방', TREATMENT_PROCEDURE: '시술·치료', COURSE_CARE: '경과·관리' };
@@ -40,6 +42,7 @@ const RELEASE_KO: Record<string, string> = {
   CASE_DROPPED: '사례를 뺀 답',
   REFUSAL: '거절 문장',
   REFUSAL_EXTRACTION_FAILED: '거절 문장 (추출 실패)',
+  REFUSAL_TIMEOUT: '거절 문장 (시간 초과)',
 };
 const ATTR_KO: Record<string, string> = { AGE: '나이', SEX: '성별', REGION: '거주 지역', PERIOD: '시기', DX: '진단', PROC: '시술', MED: '처방 약', PLAN: '관리 계획' };
 
@@ -65,6 +68,8 @@ export function detailOf(a: AuditEntry): string | null {
   }
   if (a.action === 'redteam_start')
     return join([a.job, a.trigger === 'change' ? '설정이 바뀌어 자동' : a.trigger === 'daily' ? '정기 자동' : null, a.llm === 'live' ? '실제 LLM' : '결정적 응답기', a.per_type ? `유형마다 ${a.per_type}명` : '전체']);
+  if (a.action === 'watch_preflight') return join([a.case ? caseLabel(a.case) : null, a.question_chars != null ? `질문 ${a.question_chars}자` : null]);
+  if (a.action === 'preflight_limited') return join([a.case ? caseLabel(a.case) : null, '짧은 시간에 미리 확인을 많이 써서 판정 없이 돌려줌']);
   if (a.action === 'redteam_compare') return join([a.job, a.baseline ? `직전 ${a.baseline}` : null, LEVEL_KO[a.level ?? ''] ?? null, a.note]);
   if (a.action === 'emr_launch' || a.action === 'emr_prefetch')
     return join([

@@ -90,7 +90,7 @@ tests/test_webdemo.py
 | `GET /api/workspace` · `/protection-policy` · `/patient-context` · `/cases?patientContextId=` · `/risk-states` | 의료진 화면 (api_server와 같은 경로). 후보 수 · 기준값 필드는 null (`backend/redact.py`) |
 | `GET /api/cases/{id}/session` · `/disclosures` | 〃 (숫자가 든 설명 문장도 지움). `/policy-decision`은 403 |
 | `POST /api/cases/{id}/messages` · `/preflight` | 질문 보내기, 보내기 전 확인 (`plannedAction`만, 후보 수 없음) |
-| `GET /api/watch` · `GET /api/watch/{대화}/…` | 보안 담당자: 의료진 대화 목록, 그 대화의 의료진 화면 계약을 숫자 그대로 (읽기 전용, `/preflight`는 질문 미리 세기) |
+| `GET /api/watch` · `GET /api/watch/{대화}/…` | 보안 담당자: 의료진 대화 목록, 그 대화의 의료진 화면 계약을 숫자 그대로 (읽기 전용, `/preflight`는 질문 미리 세기: 계정마다 10분에 30번, 부를 때마다 감사 기록) |
 | `GET /api/clinic/history` · `GET /api/monitor/policy` | 의료진 대화 목록(이 화면 · 계정) · 판정 기준과 서버 설정 |
 | `GET /api/cases/{id}/suggestions` · `GET /api/clinic/patients` · `POST /api/session/reset {trialId}` | 예시 질문, 질의 환자 목록, 새 대화 |
 | `GET /api/clinic/messages` · `POST /api/clinic/messages {kind, text, caseId}` | 의료진 ↔ 보호 담당자 메시지 (kind: access_request 세부 정보 요청 · reply 답장). 공개 승인 메시지는 요청한 사례로 오고, 일부만 공개했으면 `partial` (ADR-0031) |

@@ -41,3 +41,14 @@ describe('감사 기록 글', () => {
     expect(subjectsOf(entry({ action: 'emr_prefetch', subjects: [{ case: '사례1', tag: null }] }))).toBeNull();
   });
 });
+
+describe('질문 미리 세기 기록 (ADR-0032)', () => {
+  it('보안 담당자 미리 세기는 질문 본문 없이 사례와 글자 수만', () => {
+    expect(ACTION_KO.watch_preflight).toBe('보안 담당자 질문 미리 세기');
+    expect(detailOf(entry({ action: 'watch_preflight', case: '사례2', question_chars: 14 }))).toBe('사례 2 · 질문 14자');
+  });
+
+  it('의료진 미리 확인 한도 넘음', () => {
+    expect(detailOf(entry({ action: 'preflight_limited', case: '사례1' }))).toBe('사례 1 · 짧은 시간에 미리 확인을 많이 써서 판정 없이 돌려줌');
+  });
+});

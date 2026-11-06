@@ -111,9 +111,16 @@ def serve(a: argparse.Namespace) -> None:
     paths = emr.export_csv(store, db.parent / "emr_snapshot", log=print)
     first = Persist(store, None).next_id()          # type: ignore[arg-type]
     print(f"[medicloak] 위험 계산 엔진을 준비합니다 (10초 안팎) · 대상 AI: {label}")
+    from webdemo.backend.ledger import DisclosureLedger
+    ledger = DisclosureLedger(store, window_days=a.ledger_window_days) if a.ledger == "on" else None
     eng = Engine(db.parent / "engine", log=lambda s: print(s.replace("[webdemo]", "[medicloak]", 1)), paths=paths, live_llm=live_llm, live_label=label, first_id=first,
                  llm_concurrency=a.llm_concurrency, live_rule_extract=not a.no_rule_extract, answer_style=a.answer_style == "on",
-                 recent_visit=a.visit == "recent")
+                 recent_visit=a.visit == "recent", ledger=ledger, input_gate=a.input_gate == "on",
+                 answer_budget=a.answer_budget if a.answer_budget > 0 else None, sensitivity=a.sensitivity == "on", strict_k=a.strict_k)
+    pr = eng.protections()
+    print("[medicloak] 보강 (ADR-0032): 공개 원장 " + (f"켬 · {a.ledger_window_days:g}일" if ledger is not None else "끔")
+          + f" · 입력 게이팅 {'켬' if eng.input_gate else '끔'} · 답 시간 예산 " + (f"{eng.answer_budget:g}초" if eng.answer_budget else "끔")
+          + " · 민감도 등급 " + (f"켬 (후보 {a.strict_k}명 · 검색 제외 {pr['sensitivity']['excludedPatients']}명)" if eng.sensitivity else "끔"))
     auto = a.auto_redteam if a.llm == "real" else "off"                 # 결정적 응답기 · 연결 점검 모드는 점검할 실제 LLM이 없다
     product = Product(store=store, compare=not a.no_compare, keep=a.keep, cookie_secure=a.cookie_secure,
                       auto_redteam=auto, auto_daily=daily if a.llm == "real" else None, prefetch=a.prefetch == "on")
@@ -231,13 +238,28 @@ def _serve_args(p: argparse.ArgumentParser, top: bool = False) -> None:
     p.add_argument("--visit", choices=("recent", "research"), **(kw or dict(default="recent")),
                    help="의료진 대화의 진료 기준: recent(진료 목적마다 가장 최근 진료, 기본, ADR-0029) · "
                         "research(연구 계획 기준: 가장 많이 나온 진단 범주의 첫 진료)")
+    # 연구자 4인 검토 보강 (ADR-0032). 모두 의료진 대화에만 걸고, 레드팀 · 연구 실행은 그대로 둔다
+    p.add_argument("--ledger", choices=("on", "off"), **(kw or dict(default="on")),
+                   help="on: 같은 과거 환자에 대해 다른 대화 · 다른 의료진이 이미 공개한 값까지 합쳐 판정한다 (과거 환자 단위 공개 원장, 기본). "
+                        "off: 대화마다 따로 (예전 동작)")
+    p.add_argument("--ledger-window-days", type=float, **(kw or dict(default=90.0)),
+                   help="공개 원장에서 합쳐 볼 기간(일, 기본 90). 0이면 기간 없이 모두")
+    p.add_argument("--input-gate", choices=("on", "off"), **(kw or dict(default="on")),
+                   help="on: 대상 AI에 지금 공개할 수 있는 값만 넣는다 (나머지는 넓히거나 '(비공개)', 기본). off: 사례 문서 원문 그대로 (예전 동작)")
+    p.add_argument("--answer-budget", type=float, **(kw or dict(default=45.0)),
+                   help="한 답의 공개 처리 시간 예산(초, 기본 45). 넘기면 재작성 · 다시 확인을 멈추고 답 대신 안내 문장을 보낸다. 0이면 끔")
+    p.add_argument("--sensitivity", choices=("on", "off"), **(kw or dict(default="on")),
+                   help="on: 정신 건강 · 물질 사용 · 생식 · HIV 값은 후보가 --strict-k명 이상일 때만 내고, 미성년 시기 물질 사용 장애 "
+                        "과거 환자는 유사 사례 검색에서 뺀다 (기본). off: 예전 동작")
+    p.add_argument("--strict-k", type=int, **(kw or dict(default=10)), help="민감 값을 내보낼 수 있는 최소 후보 수 (기본 10)")
 
 
 def _defaults(a: argparse.Namespace) -> argparse.Namespace:
     for k, v in dict(host="127.0.0.1", port=8000, llm="real", env_file=None, llm_concurrency=1, build=False,
                      no_compare=False, keep=12, cookie_secure=False, no_rule_extract=False, answer_style="on",
                      extractor_model=None, rewriter_model=None, auto_redteam="change", auto_redteam_daily=None,
-                     prefetch="on", visit="recent").items():
+                     prefetch="on", visit="recent", ledger="on", ledger_window_days=90.0, input_gate="on", answer_budget=45.0,
+                     sensitivity="on", strict_k=10).items():
         if not hasattr(a, k):
             setattr(a, k, v)
     return a

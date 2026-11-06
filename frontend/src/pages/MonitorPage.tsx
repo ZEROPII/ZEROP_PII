@@ -39,6 +39,8 @@ function Brief({ o }: { o: MonitorOverview }) {
   const open = o.sessions.filter((r) => r.needs_review && !r.pending_request);
   const narrowing = open.filter((r) => r.repeated.length > 0).length;
   const repeats = open.filter((r) => (r.repeat_subjects ?? []).length > 0).length;
+  // 공개 원장(ADR-0032): 다른 대화에서 공개된 값까지 합치면 기준 아래
+  const globals = open.filter((r) => (r.global_low ?? []).length > 0).length;
   // 승인 공개로 기준 아래가 된 사례는 경보가 아니다: 감사 기록에 남은 승인이라 따로 알린다
   const approvedNote = approvedLow > 0 ? ` 승인 공개로 기준 아래가 된 사례 ${approvedLow}건은 승인 기록에 남아 있습니다.` : '';
   let text;
@@ -52,6 +54,12 @@ function Brief({ o }: { o: MonitorOverview }) {
     text = (
       <>
         의료진이 보낸 요청 <em className="not-italic text-iris-text">{k.requests}건</em>이 답을 기다립니다. 목록 맨 위 대화에서 답장해 주세요.
+      </>
+    );
+  else if (globals > 0 && narrowing === 0 && repeats === 0)
+    text = (
+      <>
+        다른 대화에서 공개된 값까지 합치면 후보가 기준 아래인 사례가 있는 대화가 <em className="not-italic text-danger-text">{globals}건</em> 있습니다. 어느 대화에서 무엇이 공개됐는지 확인해 보세요.
       </>
     );
   else if (repeats > 0 && narrowing === 0)
@@ -89,6 +97,9 @@ function Brief({ o }: { o: MonitorOverview }) {
             [`기준 ${o.k_req}명 아래 사례`, `${k.identified.toLocaleString()}건`, `방어 규칙을 거치고도 후보가 ${o.k_req}명 아래인 사례 수 (승인 공개로 내려간 사례는 따로 셉니다)`, k.identified > 0],
             ['승인 공개로 기준 아래', `${approvedLow.toLocaleString()}건`, '보안 담당자가 승인해 공개해서 후보가 기준 아래가 된 사례 수 (경보로 세지 않음)', false],
             ['다른 대화와 겹친 조회', `${(k.repeat_subjects ?? 0).toLocaleString()}건`, '최근 30일 안에 같은 과거 환자를 다른 대화에서도 물은 대화 수', false],
+            ...(k.global_low != null
+              ? ([['다른 대화와 합치면 기준 아래', `${k.global_low.toLocaleString()}건`, '같은 과거 환자가 다른 대화에서 공개된 값까지 합치면 후보가 기준 아래인 사례 수 (공개 원장)', k.global_low > 0]] as const)
+              : []),
           ] as const
         ).map(([l, v, help, alarm]) => (
           <div key={l} className="contents" title={help}>
