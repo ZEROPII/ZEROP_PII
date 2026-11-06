@@ -310,8 +310,8 @@ def main(argv: list[str] | None = None) -> int:
                            conversations_llm_error=sum(1 for t in tinfo.values() if t.get("outcome") == "LLM_ERROR"),
                            skipped=sum(1 for f in fails if f["source"] == "skipped"))
     f = res["failures"]
-    lines += ["", "## 실패", "", f"- LLM 호출 성공 {f['llm_calls_ok']} · 실패 {f['llm_calls_failed']} (실패율 "
-                                 f"{'-' if f['llm_fail_rate'] is None else f'{100 * f['llm_fail_rate']:.2f}%'})",
+    fail_rate = "-" if f["llm_fail_rate"] is None else f"{100 * f['llm_fail_rate']:.2f}%"
+    lines += ["", "## 실패", "", f"- LLM 호출 성공 {f['llm_calls_ok']} · 실패 {f['llm_calls_failed']} (실패율 {fail_rate})",
               f"- 종류별: {json.dumps(f['by_kind'], ensure_ascii=False)} · LLM 오류로 끝난 대화 {f['conversations_llm_error']}개 · 건너뛴 대상 {f['skipped']}개",
               "- 자세한 목록: failures.csv (실패 턴은 시간 통계에서 빼지 않았다)"]
     write_csv(out / "pairs.csv", pair_rows)

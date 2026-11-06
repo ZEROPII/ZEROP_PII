@@ -1516,8 +1516,9 @@ def test_case_missing_from_first_answer_is_not_called_hidden_and_all_scope_value
         hide = with_med[-1]
         picked["n"] = hide
         if len(messages) == 1 and not re.search(r"사례\s*\d", user):            # 첫 답: 이 사례만 말하지 않는다
-            return "\n".join(f"사례{n} 환자의 진단은 {re.search(r'] 진단: (.+?)\.', b).group(1)}이고, {_med_of(b)}를 처방받았습니다."
-                             for n, b in sorted(blocks.items()) if n != hide and _med_of(b) and re.search(r"] 진단: (.+?)\.", b))
+            dx_of = re.compile(r"] 진단: (.+?)\.")                    # f-string 안에 역슬래시를 두지 않는다 (Python 3.11)
+            return "\n".join(f"사례{n} 환자의 진단은 {dx_of.search(b).group(1)}이고, {_med_of(b)}를 처방받았습니다."
+                             for n, b in sorted(blocks.items()) if n != hide and _med_of(b) and dx_of.search(b))
         if user.startswith("검색된 사례 전체에 대한 질문"):                    # 추출기(가짜)는 '사례N은 …만' 꼴을 뽑지 못한다
             return f"검색된 사례의 약을 정리했습니다. 사례{hide}은 {_med_of(blocks[hide])}만 처방받았고 다른 약은 없습니다."
         return None

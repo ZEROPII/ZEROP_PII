@@ -562,7 +562,8 @@ def _fix_absence(s: str) -> tuple[str | None, list[dict[str, Any]]]:
         ed.append(dict(kind="absence", before=m.group(0)))
         tail = m.group(0)
         verb = "있습니다" if re.search(r"(?:습니다|음|어요|다)$", tail) else "있고" if tail.endswith("고") else "있으며" if tail.endswith("며") else "있습니다"
-        return f"{m.group('x')} {re.sub(r'\s+', ' ', m.group('k'))} 기록이 {verb}"
+        kind = re.sub(r"\s+", " ", m.group("k"))           # f-string 안에 역슬래시를 두지 않는다 (Python 3.11)
+        return f"{m.group('x')} {kind} 기록이 {verb}"
 
     new = _EXCEPT.sub(except_rep, new)
     m = _OTHER_NONE.search(new)
