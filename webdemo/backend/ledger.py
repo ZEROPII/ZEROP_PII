@@ -5,8 +5,9 @@
 # 새 단서로 다시 추가됨). 각각은 통과하는 단서를 대화를 나눠 모으면 막을 수 없다.
 #
 # 원장은 의료진 대화(source='clinic')의 화면 갈래(C1)가 실제로 내보낸 단서를 과거 환자(STORE patient_id)마다 적는다.
-#   - 적는 것   : 턴마다 그 사례의 누적 State에 새로 들어간 값(내보낸 답을 다시 추출한 값)과 보안 담당자가 승인해 공개한 값.
-#                 대화 · 계정 · 시각 · 종류(turn · approval)를 같이 둔다. 값의 글자(원문)는 두지 않고 온톨로지 노드만 둔다.
+#   - 적는 것   : 턴마다 그 사례의 누적 State에 새로 들어간 값(내보낸 답을 다시 추출한 값)과 보안 담당자가 승인해 공개한 값,
+#                 의료진이 만든 유사 사례 보고서에 담긴 값(ADR-0042).
+#                 대화 · 계정 · 시각 · 종류(turn · approval · report)를 같이 둔다. 값의 글자(원문)는 두지 않고 온톨로지 노드만 둔다.
 #   - 읽는 것   : 대화가 사례를 판정할 때, 같은 과거 환자에 대해 기간 창(기본 90일) 안에 다른 대화들에서 나간 값.
 #                 이 값을 그 사례의 누적 State 앞에 붙여 판정한다 (review.RuledArmRun._basis). 그래서 대화를 나누거나 계정을 바꿔도
 #                 같은 과거 환자의 후보 수는 앞서 나간 단서까지 합쳐 센다 (의사끼리 맞춰 보는 결합도 같은 셈).
@@ -23,7 +24,7 @@ from typing import Any, Callable, Iterable
 
 DAY = 86400.0
 DEFAULT_WINDOW_DAYS = 90.0
-KINDS = ("turn", "approval")
+KINDS = ("turn", "approval", "report")
 
 
 def event_label(group: str | None) -> str | None:

@@ -51,17 +51,19 @@ src/
     caseNote.ts            사례 노트: 속성 · 연결된 질문(백링크) · 같은 값이 나온 사례
     answerLines.ts         '사례N · [기록M] 항목: 값' 답을 표로 나누기
     clueGraph.ts           단서 그래프 만들기와 힘 배치 (난수 없음)
+    visits.ts              내원 달력: 해마다 묶기 · 달 칸 색 · 내원 없던 해 줄 · 그해 눈여겨볼 일
+    kindStyle.ts           기록 종류 색 · 환자 위험 등급 색 (클래스 이름을 글자 그대로, ADR-0040 · ADR-0041)
   components/
     layout/   AppLayout(역할별 틀), ClinicianShell(EMR 머리줄), TopBar · CommandPalette(관제), ProtectionBadge
     clinic/   PatientBanner('지금 보는 환자' 띠), EmrCaseList, ClinicalChat, ClinicalMessage, ClinicValue(범위 · 비공개), CaseNotePanel
-    emr/      ChartSummary(차트 요약), VisitHistory(내원 이력: 해마다 · 펼치면 날짜마다), SimilarCaseBox(유사 사례 찾기 · 진료 지원 AI 열기 · 멈추기), ConsultDialog(협진 의뢰 보내기), BreakGlassDialog(담당 외 환자 열기, 등록번호)
+    emr/      ChartSummary(차트 요약), VisitHistory(내원 이력: 해 × 달 달력, 고르면 그때 내원), SimilarCaseBox(유사 사례 찾기 · 진료 지원 AI 열기 · 멈추기), ConsultDialog(협진 의뢰 보내기), BreakGlassDialog(담당 외 환자 열기, 등록번호)
     chat/     ChatMessage, PrivacyHighlight, PrivacyExplanation (관제 쪽 숫자 있는 대화), ChatInput
     graph/    ClueGraph
     monitor/  QueueTable, SessionDetail(메시지 · 단서 그래프 · 질문 흐름), RevealDialog
     risk/     RiskPanel, RiskBar(로그 눈금), KValueBadge
     disclosure/ DisclosureHistoryPanel, DisclosureHistoryItem, PolicyDecisionModal
-    common/   Card, StatusViews(로딩/오류/빈 상태), MockBadge, ActionBadge
-  pages/      의료진: ClinicalAssistPage(3단 · 좁은 화면은 탭), HistoryPage, GuidePage
+    common/   Card, StatusViews(로딩/오류/빈 상태), MockBadge, ActionBadge, StageTrack(답 · 열기 진행: 배너 + 단계 막대)
+  pages/      의료진: EmrPage(내 담당 환자 · 위험 등급 · 차트), ClinicalAssistPage(3단 · 좁은 화면은 탭), CaseReportPage(유사 사례 보고서 · PDF), HistoryPage, GuidePage
               관제: MonitorPage, WatchPage(의료진 대화), ReportPage, AuditPage, TerminologyPage, PolicyPage
 ```
 

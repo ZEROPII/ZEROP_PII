@@ -1125,7 +1125,8 @@ class Session:
         return dict(self._summary(), arms=arms, steps=self.steps, rules=copy.deepcopy(self.rules), approvals=copy.deepcopy(self.approvals),
                     retrieval=[dict(ref=f"사례{i}", patient=p[:8], score=round(s, 4), sensitive=self._sensitive_labels(p))
                                for i, (p, s) in enumerate(self.prefix.retrieval, 1)],
-                    ledger=self.ledger_view(), gated=self.gated)
+                    ledger=self.ledger_view(), gated=self.gated,
+                    reports=copy.deepcopy(getattr(self, "reports", [])))      # 유사 사례 보고서: 언제 · 누가 · 사례마다 가린 · 넓힌 수 (ADR-0042)
 
     def _sensitive_labels(self, pid: str) -> list[str]:
         """이 과거 환자 기록에 든 민감 범주 이름 (민감도 정책을 켠 서버의 의료진 대화만, 관제 화면 표시용)."""

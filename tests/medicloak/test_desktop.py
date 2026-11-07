@@ -202,6 +202,7 @@ def test_first_launch_asks_for_llm_settings_then_opens_the_app(tmp_path, monkeyp
     w = wv.window
     assert _until(lambda: w.shown("setup"))
     assert w.kw["text_select"] is True and wv.start_kw["private_mode"] is False                  # 글을 고르고 복사할 수 있고, 화면 설정이 남는다
+    assert wv.settings["ALLOW_DOWNLOADS"] is True                                                   # 유사 사례 보고서 PDF를 창에서 받는다 (ADR-0042)
     assert w.api.choose_local(dict(base="llm.example.org", model="m", key="k"))["ok"] is False    # http(s)로 시작해야 한다
     assert "API 키" in w.api.choose_local(dict(base="https://llm.example.org", model="m", key=""))["message"]
     r = w.api.choose_local(dict(base="https://llm.example.org", model="m", key="sk-1", test=True))

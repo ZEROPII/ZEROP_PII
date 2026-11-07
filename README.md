@@ -8,8 +8,8 @@
   <img src="https://img.shields.io/badge/FastAPI-서버-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI">
   <img src="https://img.shields.io/badge/React-18-0b7a75?style=flat-square&logo=react&logoColor=white" alt="React 18">
   <img src="https://img.shields.io/badge/HL7_FHIR-R4-0b7a75?style=flat-square" alt="FHIR R4">
-  <img src="https://img.shields.io/badge/tests-pytest_1012_·_vitest_98-16a374?style=flat-square" alt="pytest 1012 passed, vitest 98 passed">
-  <a href="docs/adr/README.md"><img src="https://img.shields.io/badge/ADR-39건-5b5bf0?style=flat-square" alt="ADR 39건"></a>
+  <img src="https://img.shields.io/badge/tests-pytest_1018_·_vitest_100-16a374?style=flat-square" alt="pytest 1018 passed, vitest 100 passed">
+  <a href="docs/adr/README.md"><img src="https://img.shields.io/badge/ADR-42건-5b5bf0?style=flat-square" alt="ADR 42건"></a>
 </p>
 
 <p align="center">
@@ -105,9 +105,10 @@ MediCloak은 답에 나온 표현을 글자 그대로 비교하지 않고, 팀�
 
 **의료진** · 진료 지원 AI
 
-- **[내 담당 환자 · 차트 요약](docs/images/screen-emr.png)**: 로그인하면 자기 담당 외래 환자만 등록번호(`26-4821`)와 함께 보입니다. 환자를 고르면 내원 이력(해마다 한 줄에 내원 수 · 달력 띠 · 그해 새 진단과 첫 시술, 누르면 그해 내원이 날짜마다 펼쳐짐), 진단 이력, 처방, 시술, 관리 계획을 정리한 차트가 나오고, 같은 화면에서 진료 목적(처방, 시술·치료, 경과·관리)을 골라 유사 사례를 찾습니다. 차트와 유사 사례 찾기는 따로 스크롤됩니다. 목록에는 생년과 거주 지역을 표시하지 않습니다.
+- **[내 담당 환자 · 차트 요약](docs/images/screen-emr.png)**: 로그인하면 자기 담당 외래 환자만 등록번호(`26-4821`)와 함께 보입니다. 줄마다 응급실 분류판처럼 색으로 나눈 환자 위험 등급(1 위급 ~ 5 안정, 기록으로 센 참고 등급)이 있고, 등급으로 거르거나 위험 높은 순으로 늘어놓을 수 있습니다. 환자를 고르면 내원 이력(해 × 달 달력: 칸 색은 그달 기록 종류, 숫자는 내원 수, 점은 새 진단 · 첫 시술. 해나 달을 누르면 그때 내원이 아래에 보임), 진단 이력, 처방, 시술, 관리 계획을 기록 종류마다 같은 색으로 정리한 차트가 나오고, 같은 화면에서 진료 목적(처방, 시술·치료, 경과·관리)을 골라 유사 사례를 찾습니다. 차트 머리에는 위험 등급과 그 까닭이 보입니다. 목록에는 생년과 거주 지역을 표시하지 않습니다.
 - **[협진 의뢰 · 담당 외 환자 열기](docs/images/screen-consult.png)**: 담당 의료진이 차트에서 협진 의뢰를 보내면, 받은 의료진은 목록 맨 위에서 번호를 적지 않고 12시간 동안 엽니다. 의뢰 없이 당직 · 응급으로 꼭 봐야 하면 등록번호와 사유를 적고 엽니다. 둘 다 감사 기록에 남고 보안 담당자가 검토합니다.
-- **[유사 사례 조회](docs/images/screen-clinic.png)**: 사례별 대화, 검색된 사례 전체에 대한 질문, 답에 실제로 나온 값만 모은 사례 노트, 보내기 전 확인, 세부 정보 요청. 답의 '비공개' · '범위' 표시를 누르면 어느 사례의 무엇을 왜 바꿨는지 그 자리에 설명이 뜨고, 답 아래에는 사례마다 바뀐 항목이 한 줄씩 보입니다. 답을 기다리는 동안 지금 단계(답 쓰기 → 보호 기준 확인 → 필요하면 고쳐 쓰기)가 보이고, 멈추기로 질문을 거둘 수 있습니다.
+- **[유사 사례 조회](docs/images/screen-clinic.png)**: 사례별 대화, 검색된 사례 전체에 대한 질문, 답에 실제로 나온 값만 모은 사례 노트, 보내기 전 확인, 세부 정보 요청. 답의 '비공개' · '범위' 표시를 누르면 어느 사례의 무엇을 왜 바꿨는지 그 자리에 설명이 뜨고, 답 아래에는 사례마다 바뀐 항목이 한 줄씩 보입니다. 답을 기다리는 동안 지금 하는 일을 적은 띠와 단계 막대(답 쓰기 → 보호 확인 → 필요하면 고쳐 쓰기 · 다시 확인)가 보이고, 멈추기로 질문을 거둘 수 있습니다.
+- **[유사 사례 보고서](docs/images/screen-case-report.png)**: 찾은 사례마다 주진단, 그 무렵 시작한 처방 · 시술 · 관리 계획, 기록상 경과(기간 · 횟수를 범위로)를 한 문서로 모으고 PDF로 받습니다. 보고서 값도 답과 같은 기준으로 판정해 비공개 · 범위가 그대로 보이며, 담은 값은 그 대화에서 공개한 것으로 셉니다. 웹 화면과 데스크톱 앱 모두에서 쓸 수 있습니다.
 
 **보안 담당자** · MediCloak 관제
 
@@ -220,8 +221,8 @@ python scripts/build_desktop.py --zip # 묶은 앱: dist/desktop/MediCloak.app (
 **테스트**
 
 ```bash
-python -m pytest -q                   # 1012 passed, 3 skipped (LLM 호출은 가짜 HTTP 세션으로 대체)
-cd frontend && npm test               # vitest 98 passed
+python -m pytest -q                   # 1018 passed, 3 skipped (LLM 호출은 가짜 HTTP 세션으로 대체)
+cd frontend && npm test               # vitest 100 passed
 ```
 
 ---
@@ -246,7 +247,7 @@ ZEROP_PII/
 ├─ core/                   # .env 설정 · LLM 호출 (모든 모듈 공통)
 ├─ scripts/                # 측정 · RAG 재측정 · 결과 다시 세기 · ADR 도구
 ├─ tests/                  # pytest 1,015개 (LLM 경로는 가짜 HTTP 세션으로 시험)
-└─ docs/                   # ADR 39건 · 의료 시나리오 · 평가 통합 문서 · README 그림
+└─ docs/                   # ADR 42건 · 의료 시나리오 · 평가 통합 문서 · README 그림
 ```
 
 SynthPAI(일반 게시글) 단계의 모듈(`target_llm/` · `qi_extractor/` · `normalizer/` · `attack/` · `ontology/` · `adapters/` · `orchestrator/` · `validation/` · `api_server/` · `analysis/` · `evaluation_v1/` · `risk_defender_synthpai/`)은 그대로 두었습니다. 의료 데이터로 전환하기 전의 실험을 재현할 때 사용하며, 설명은 [docs/research_harness.md](docs/research_harness.md)에 있습니다. 평가 프로토타입(`eval/`과 루트의 `eval_baseline.py` · `log_schema.py` · `run_demo.py`)은 [docs/evaluation.md](docs/evaluation.md)에 설명되어 있습니다.

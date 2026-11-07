@@ -1,4 +1,4 @@
-import { CornerDownLeft, Info, Layers, Loader2, Lock, MessageSquareReply, Ruler, Sparkles, Square } from 'lucide-react';
+import { CornerDownLeft, Info, Layers, Lock, MessageSquareReply, Ruler, Sparkles } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { emrApi } from '../../api/emrApi';
 import { overviewOf, splitItem } from '../../lib/caseOverview';
@@ -300,16 +300,13 @@ export function ClinicalChat({ jump, onJumpDone, onOpenMessages }: { jump: JumpT
         {sending && (
           <div className="flex items-start gap-2.5" role="status" aria-live="polite">
             <LogoMark size={18} className="mt-2.5 shrink-0 text-iris-text" />
-            <div className="w-full max-w-[440px] rounded-control border border-line bg-surface px-3.5 py-3">
-              <StageTrack step={progress?.active ? progress.step : undefined} first="답 쓰기" stopping={stopping || progress?.stopping} />
-              {live && (
-                <div className="mt-2.5 flex justify-end">
-                  <button type="button" className="btn-ghost btn-sm h-7 gap-1.5 text-ink-2" onClick={() => void stop()} disabled={stopping}>
-                    {stopping ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden /> : <Square className="h-3 w-3 fill-current" aria-hidden />}
-                    {stopping ? '멈추는 중' : '멈추기'}
-                  </button>
-                </div>
-              )}
+            <div className="w-full max-w-[560px] rounded-control border border-line bg-surface px-3.5 py-3">
+              <StageTrack
+                step={progress?.active ? progress.step : undefined}
+                mode="answer"
+                stopping={stopping || progress?.stopping}
+                onStop={live ? () => void stop() : undefined}
+              />
             </div>
           </div>
         )}

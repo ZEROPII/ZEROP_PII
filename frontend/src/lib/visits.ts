@@ -1,5 +1,6 @@
-// 차트 '내원 이력' 계산 (ADR-0038): 해마다 묶기 · 달마다 내원 수 · 그해 눈여겨볼 일.
+// 차트 '내원 이력' 계산 (ADR-0038 · ADR-0040): 해마다 묶기 · 달마다 내원 수와 칸 색 · 내원 없던 해 접기 · 그해 눈여겨볼 일.
 import type { EmrChart } from '../types/domain';
+import type { CellCat } from './kindStyle';
 
 type Visit = EmrChart['visits'][number];
 type Item = Visit['items'][number];
@@ -74,4 +75,42 @@ export function highlightsOf(visits: Visit[]): Highlight[] {
   if (!all.length) return [];
   if (all[0].n >= 2) return [{ type: 'main', kind: all[0].kind, label: all[0].label }];
   return all.map((c) => ({ type: 'item', kind: c.kind, label: c.label }));
+}
+
+export interface MonthCell {
+  /** 0이 1월 */
+  month: number;
+  /** 그달 내원한 날 수 */
+  n: number;
+  /** 칸 색: 그달 기록 가운데 가장 중요한 종류 (진단 > 시술 > 처방 > 관리), 자세한 기록이 없으면 내원만, 내원이 없으면 null */
+  cat: CellCat | null;
+  /** 그달 새 진단 · 첫 시술 */
+  fresh: boolean;
+  /** 그달 내원 (최근 것부터) */
+  visits: Visit[];
+}
+
+const CAT_ORDER: Item['kind'][] = ['problems', 'procedures', 'medications', 'carePlans'];
+
+/** 해 한 줄의 열두 칸 */
+export function monthCells(row: YearRow): MonthCell[] {
+  return row.months.map((n, m) => {
+    const visits = row.visits.filter((v) => Number(v.date.slice(5, 7)) - 1 === m);
+    const kinds = new Set(visits.flatMap((v) => v.items.map((x) => x.kind)));
+    const cat = n === 0 ? null : (CAT_ORDER.find((k) => kinds.has(k)) ?? 'visit');
+    return { month: m, n, cat, fresh: row.fresh[m], visits };
+  });
+}
+
+export type CalendarLine = { type: 'year'; row: YearRow } | { type: 'gap'; from: number; to: number };
+
+/** 달력 줄: 내원한 해마다 한 줄 (최근 해부터), 사이에 내원이 없던 해는 '2019~2022 내원 없음' 한 줄로 접는다 */
+export function calendarLines(rows: YearRow[]): CalendarLine[] {
+  const out: CalendarLine[] = [];
+  rows.forEach((r, i) => {
+    out.push({ type: 'year', row: r });
+    const next = rows[i + 1];
+    if (next && next.year < r.year - 1) out.push({ type: 'gap', from: next.year + 1, to: r.year - 1 });
+  });
+  return out;
 }

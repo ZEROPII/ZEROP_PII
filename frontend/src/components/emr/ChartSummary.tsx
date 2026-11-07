@@ -1,3 +1,4 @@
+import { KIND_DOT, KIND_TEXT, type ChartKind } from '../../lib/kindStyle';
 import type { ChartGroup, ChartItem, EmrChart } from '../../types/domain';
 import { VisitHistory } from './VisitHistory';
 
@@ -14,13 +15,15 @@ function itemNote(x: ChartItem, ongoing: boolean, what: string): string {
 
 const NO_END_HINT = '종료일이 기록되지 않았지만, 마지막 기록이 마지막 내원보다 1년 넘게 앞서 진행 중으로 세지 않았습니다.';
 
-function Section({ title, group, empty, ongoing = true, what = '기록' }: { title: string; group: ChartGroup; empty: string; ongoing?: boolean; what?: string }) {
+/** 기록 종류 하나 (진단 · 처방 · 시술 · 관리). 제목 앞 띠 · 진행 중 점 · 진행 중 글자는 내원 달력과 같은 기록 종류 색 */
+function Section({ kind, title, group, empty, ongoing = true, what = '기록' }: { kind: ChartKind; title: string; group: ChartGroup; empty: string; ongoing?: boolean; what?: string }) {
   const more = group.total - group.items.length;
   return (
     <section className="rounded-control border border-line bg-surface" aria-label={title}>
-      <h3 className="flex items-baseline gap-2 border-b border-line px-3.5 py-2.5 text-[13px] font-bold text-ink">
+      <h3 className="flex items-center gap-2 border-b border-line px-3.5 py-2.5 text-[13px] font-bold text-ink">
+        <span aria-hidden className={`h-3.5 w-[3px] rounded-full ${KIND_DOT[kind]}`} />
         {title}
-        {ongoing && group.active > 0 && <span className="text-xs font-semibold text-iris-text">진행 중 {group.active}</span>}
+        {ongoing && group.active > 0 && <span className={`text-xs font-semibold ${KIND_TEXT[kind]}`}>진행 중 {group.active}</span>}
         <span className="num ml-auto text-xs font-normal text-ink-3">{group.total}건</span>
       </h3>
       {group.items.length === 0 ? (
@@ -33,7 +36,7 @@ function Section({ title, group, empty, ongoing = true, what = '기록' }: { tit
               <li key={x.label} className="flex gap-2.5 px-3.5 py-2">
                 <span
                   aria-hidden
-                  className={`mt-[7px] h-[7px] w-[7px] shrink-0 rounded-full ${ongoing && x.active ? 'bg-iris' : 'border border-ink-3'}`}
+                  className={`mt-[7px] h-[7px] w-[7px] shrink-0 rounded-full ${ongoing && x.active ? KIND_DOT[kind] : 'border border-ink-3'}`}
                 />
                 <span className="min-w-0 flex-1">
                   <span className="flex items-baseline gap-3">
@@ -45,7 +48,7 @@ function Section({ title, group, empty, ongoing = true, what = '기록' }: { tit
                     </span>
                   </span>
                   {note && (
-                    <span className={`block text-[11.5px] ${ongoing && x.active ? 'text-iris-text' : 'text-ink-3'}`} title={x.noEnd ? NO_END_HINT : undefined}>
+                    <span className={`block text-[11.5px] ${ongoing && x.active ? KIND_TEXT[kind] : 'text-ink-3'}`} title={x.noEnd ? NO_END_HINT : undefined}>
                       {note}
                     </span>
                   )}
@@ -61,7 +64,7 @@ function Section({ title, group, empty, ongoing = true, what = '기록' }: { tit
 }
 
 /**
- * EMR 차트 요약: 내원 이력(해마다 · 펼치면 날짜마다) · 진단 이력 · 처방 · 시술 · 관리 계획.
+ * EMR 차트 요약: 내원 이력(해마다 달력 · 고르면 그때 내원) · 진단 이력 · 처방 · 시술 · 관리 계획. 기록 종류마다 색이 같다.
  * 같은 이름은 한 줄로 묶었고 진행 중인 것이 먼저 온다. 생년 · 거주 지역은 서버가 보내지 않는다.
  * 의료진 환자 화면과 보안 담당자의 사유를 적은 차트 열람이 같이 쓴다.
  */
@@ -71,10 +74,10 @@ export function ChartSummary({ chart, wide = true }: { chart: EmrChart; wide?: b
     <div className={`grid grid-cols-1 gap-3 ${wide ? '2xl:grid-cols-2' : ''}`}>
       {/* 환자가 바뀌면 펼친 해를 처음으로 되돌린다 */}
       <VisitHistory key={chart.patient.fhirId} chart={chart} className={wide ? '2xl:col-span-2' : ''} />
-      <Section title="진단 이력" group={chart.problems} empty="진단 기록이 없습니다." />
-      <Section title="처방" group={chart.medications} empty="처방 기록이 없습니다." what="처방" />
-      <Section title="시술" group={chart.procedures} empty="시술 기록이 없습니다." ongoing={false} what="시행" />
-      <Section title="관리 계획" group={chart.carePlans} empty="관리 계획이 없습니다." />
+      <Section kind="problems" title="진단 이력" group={chart.problems} empty="진단 기록이 없습니다." />
+      <Section kind="medications" title="처방" group={chart.medications} empty="처방 기록이 없습니다." what="처방" />
+      <Section kind="procedures" title="시술" group={chart.procedures} empty="시술 기록이 없습니다." ongoing={false} what="시행" />
+      <Section kind="carePlans" title="관리 계획" group={chart.carePlans} empty="관리 계획이 없습니다." />
     </div>
   );
 }

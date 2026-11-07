@@ -2,6 +2,7 @@ import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
 import { AppLayout } from './components/layout/AppLayout';
 import { ToastProvider } from './components/layout/Toast';
 import { AuditPage } from './pages/AuditPage';
+import { CaseReportPage } from './pages/CaseReportPage';
 import { ClinicalAssistPage } from './pages/ClinicalAssistPage';
 import { EmrAccessPage } from './pages/EmrAccessPage';
 import { EmrPage } from './pages/EmrPage';
@@ -26,6 +27,7 @@ export default function App() {
               <Route index element={<ClinicalAssistPage />} />
               <Route path="emr" element={<EmrPage />} />
               <Route path="emr/:fhirId" element={<EmrPage />} />
+              <Route path="case-report" element={<CaseReportPage />} />
               <Route path="history" element={<HistoryPage />} />
               <Route path="guide" element={<GuidePage />} />
               {/* 보안 담당자 (MediCloak 관제) */}

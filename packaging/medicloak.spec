@@ -5,14 +5,14 @@
 #   Windows  dist/desktop/MediCloak/MediCloak.exe
 #   Linux    dist/desktop/MediCloak/MediCloak   (창 없이 점검용: MediCloak app --no-window --llm oracle)
 #
-# 앱 안에는 코드 · 화면(frontend/dist) · 가상 EMR 원본 표 · Seed 표만 넣는다.
+# 앱 안에는 코드 · 화면(frontend/dist) · 가상 EMR 원본 표 · Seed 표 · 보고서 PDF 글꼴만 넣는다.
 # DB · .env · 기록은 켤 때 사용자 앱 데이터 폴더에 만든다 (medicloak/paths.py). .env · runs/ · 키는 넣지 않는다.
 
 import re
 import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 ROOT = Path(SPECPATH).resolve().parent          # noqa: F821 (PyInstaller가 넣어 준다)
 sys.path.insert(0, str(ROOT))
@@ -32,13 +32,16 @@ datas = [(str(ROOT / "frontend" / "dist"), "frontend/dist"),
          (str(ROOT / "medicloak" / "desktop_start.html"), "medicloak"),
          (str(ROOT / "scripts" / "build_terminology_db.py"), "scripts")]          # 용어 DB가 없을 때 medical/term_service.py가 읽는다
 datas += [(str(p), rel(p)) for p in tables]
+datas += [(str(ROOT / "webdemo" / "backend" / "fonts"), "webdemo/backend/fonts")]   # 유사 사례 보고서 PDF 글꼴 (ADR-0042, OFL)
+datas += collect_data_files("fpdf")
 for extra in (ROOT / "data" / "medical" / "terminology.db", ROOT / "webdemo" / "data" / "poc_summary.json"):
     if extra.exists():                                                            # 있으면 넣는다 (설명이 채워진 용어 DB 등)
         datas.append((str(extra), rel(extra)))
 
 hidden = (collect_submodules("webdemo.backend") + collect_submodules("core")
           + collect_submodules("medical", filter=lambda n: not n.startswith(("medical.scoring", "medical.__main__")))
-          + collect_submodules("uvicorn") + ["medicloak.cli", "medicloak.desktop", "medicloak.paths"])
+          + collect_submodules("uvicorn") + ["medicloak.cli", "medicloak.desktop", "medicloak.paths"]
+          + collect_submodules("fpdf") + collect_submodules("fontTools.ttLib.tables"))       # PDF: 글꼴 표는 이름으로 불러온다
 
 # 서버와 창에 쓰지 않는 큰 꾸러미 (분석 · 시험 · 다른 GUI 백엔드 · 엑셀 그림 · pywebview의 https 인증서 만들기)
 excludes = ["matplotlib", "tkinter", "pytest", "IPython", "notebook", "PIL", "lxml", "cryptography", "PySide2", "PySide6", "PyQt5", "PyQt6", "qtpy", "gi", "cefpython3"]

@@ -2,7 +2,7 @@
 @tailwind components;
 @tailwind utilities;
 
-/* Zero PII 디자인 토큰 v1.0 (대비·색각 검사 통과값). 색은 위험도에만 켠다. */
+/* Zero PII 디자인 토큰 v1.0 (대비·색각 검사 통과값). 색은 뜻이 있을 때만 켠다: 위험도 · 기록 종류(진단 · 처방 · 시술 · 관리) · 환자 위험 등급. */
 :root {
   color-scheme: light;
   --zp-page: #f4f5f9;
@@ -105,6 +105,138 @@
   }
 }
 
+
+/*
+ * 기록 종류 색 (진단 · 처방 · 시술 · 관리 · 내원만)과 환자 위험 등급 색 (1 위급 ~ 5 안정, 응급실 분류처럼 빨강 → 파랑).
+ * 진한 색(칸 · 막대 · 점), 진한 색 위 글자(-on), 글자 색(-text, 흰 바탕 대비 4.5:1 이상), 옅은 바탕(-tint)을 짝으로 쓴다. 의료진 · 관제 화면이 같이 쓴다.
+ */
+:root {
+  --zp-kind-dx: #d4475a;
+  --zp-kind-dx-text: #a32a3c;
+  --zp-kind-dx-tint: #fbe9ec;
+  --zp-kind-rx: #2c6fd6;
+  --zp-kind-rx-text: #1d54a8;
+  --zp-kind-rx-tint: #e7f0fc;
+  --zp-kind-px: #7b52d9;
+  --zp-kind-px-text: #5b35b0;
+  --zp-kind-px-tint: #f0eafc;
+  --zp-kind-care: #c98012;
+  --zp-kind-care-text: #8a5706;
+  --zp-kind-care-tint: #fbf1dd;
+  --zp-kind-visit: #a3adbd;
+  --zp-kind-visit-text: #4e586b;
+  --zp-kind-visit-tint: #eef0f4;
+  --zp-tri-1: #d92d20;
+  --zp-tri-1-text: #a5180f;
+  --zp-tri-1-tint: #fdecea;
+  --zp-tri-2: #e8680c;
+  --zp-tri-2-text: #a54705;
+  --zp-tri-2-tint: #fdefe3;
+  --zp-tri-3: #e0a800;
+  --zp-tri-3-text: #765600;
+  --zp-tri-3-tint: #fcf5dc;
+  --zp-tri-3-on: #3d2f00;
+  --zp-tri-4: #16834a;
+  --zp-tri-4-text: #136b39;
+  --zp-tri-4-tint: #e4f5eb;
+  --zp-tri-5: #2f6fd6;
+  --zp-tri-5-text: #1d54a8;
+  --zp-tri-5-tint: #e7f0fc;
+  --zp-kind-dx-on: #ffffff;
+  --zp-kind-rx-on: #ffffff;
+  --zp-kind-px-on: #ffffff;
+  --zp-kind-care-on: #2a1a00;
+  --zp-tri-1-on: #ffffff;
+  --zp-tri-2-on: #2b1400;
+  --zp-tri-4-on: #ffffff;
+  --zp-tri-5-on: #ffffff;
+}
+
+:root[data-theme='dark'] {
+  --zp-kind-dx: #f0707f;
+  --zp-kind-dx-text: #ffa3ae;
+  --zp-kind-dx-tint: #3b1d25;
+  --zp-kind-rx: #5f9bff;
+  --zp-kind-rx-text: #9cc1ff;
+  --zp-kind-rx-tint: #182a47;
+  --zp-kind-px: #a587ff;
+  --zp-kind-px-text: #c7b5ff;
+  --zp-kind-px-tint: #281f47;
+  --zp-kind-care: #f0ad42;
+  --zp-kind-care-text: #f7cb7e;
+  --zp-kind-care-tint: #362812;
+  --zp-kind-visit: #5c677a;
+  --zp-kind-visit-text: #b4bccb;
+  --zp-kind-visit-tint: #222836;
+  --zp-tri-1: #f05a4e;
+  --zp-tri-1-text: #ff9a90;
+  --zp-tri-1-tint: #3d1f1d;
+  --zp-tri-2: #f2873a;
+  --zp-tri-2-text: #ffb27c;
+  --zp-tri-2-tint: #3a2618;
+  --zp-tri-3: #e6b52e;
+  --zp-tri-3-text: #f5d36b;
+  --zp-tri-3-tint: #352d14;
+  --zp-tri-3-on: #2a2000;
+  --zp-tri-4: #3cbd77;
+  --zp-tri-4-text: #7fe0a8;
+  --zp-tri-4-tint: #173326;
+  --zp-tri-5: #5f9bff;
+  --zp-tri-5-text: #9cc1ff;
+  --zp-tri-5-tint: #182a47;
+  --zp-kind-dx-on: #12151c;
+  --zp-kind-rx-on: #12151c;
+  --zp-kind-px-on: #12151c;
+  --zp-kind-care-on: #12151c;
+  --zp-tri-1-on: #12151c;
+  --zp-tri-2-on: #12151c;
+  --zp-tri-4-on: #12151c;
+  --zp-tri-5-on: #12151c;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --zp-kind-dx: #f0707f;
+    --zp-kind-dx-text: #ffa3ae;
+    --zp-kind-dx-tint: #3b1d25;
+    --zp-kind-rx: #5f9bff;
+    --zp-kind-rx-text: #9cc1ff;
+    --zp-kind-rx-tint: #182a47;
+    --zp-kind-px: #a587ff;
+    --zp-kind-px-text: #c7b5ff;
+    --zp-kind-px-tint: #281f47;
+    --zp-kind-care: #f0ad42;
+    --zp-kind-care-text: #f7cb7e;
+    --zp-kind-care-tint: #362812;
+    --zp-kind-visit: #5c677a;
+    --zp-kind-visit-text: #b4bccb;
+    --zp-kind-visit-tint: #222836;
+    --zp-tri-1: #f05a4e;
+    --zp-tri-1-text: #ff9a90;
+    --zp-tri-1-tint: #3d1f1d;
+    --zp-tri-2: #f2873a;
+    --zp-tri-2-text: #ffb27c;
+    --zp-tri-2-tint: #3a2618;
+    --zp-tri-3: #e6b52e;
+    --zp-tri-3-text: #f5d36b;
+    --zp-tri-3-tint: #352d14;
+    --zp-tri-3-on: #2a2000;
+    --zp-tri-4: #3cbd77;
+    --zp-tri-4-text: #7fe0a8;
+    --zp-tri-4-tint: #173326;
+    --zp-tri-5: #5f9bff;
+    --zp-tri-5-text: #9cc1ff;
+    --zp-tri-5-tint: #182a47;
+    --zp-kind-dx-on: #12151c;
+    --zp-kind-rx-on: #12151c;
+    --zp-kind-px-on: #12151c;
+    --zp-kind-care-on: #12151c;
+    --zp-tri-1-on: #12151c;
+    --zp-tri-2-on: #12151c;
+    --zp-tri-4-on: #12151c;
+    --zp-tri-5-on: #12151c;
+  }
+}
 
 /*
  * 의료진 화면: 병원 EMR에 들어간 진료 지원 AI. 보안 관제 화면(위 남색 토큰)과 다른 제품처럼 보이도록
@@ -361,24 +493,75 @@
     outline: none;
   }
   /*
-   * 진료 지원 AI 진행 단계 (StageTrack): 걸린 시간 대신 지금 단계를 막대 셋으로 보인다.
-   * 끝난 단계는 채운 막대, 지금 단계는 빛이 지나가는 막대, 남은 단계는 빈 막대. 움직임을 줄인 설정이면 반쯤 채운 막대로 멈춘다.
+   * 진료 지원 AI 진행 단계 (StageTrack): 지금 하는 일을 적은 배너 + 단계 막대 넷. 걸린 시간은 보이지 않는다.
+   * 배너는 진한 쪽(왼쪽)에 흰 글자를 두어 대비를 지키고, 빛 무늬가 천천히 지나간다. 끝난 막대는 채우고 확인 표시,
+   * 지금 막대는 빛이 지나가고 이름표를 진하게, 남은 막대는 비운다 (필요할 때만 거치는 단계는 점선).
    */
-  .stage-bar {
+  .progress-banner {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 42px;
+    padding: 9px 14px;
+    overflow: hidden;
+    border-radius: 11px;
+    color: #ffffff;
+    font-size: 13px;
+    font-weight: 650;
+    line-height: 1.45;
+    background: linear-gradient(100deg, color-mix(in srgb, var(--zp-iris) 78%, #000000) 0%, var(--zp-iris) 52%,
+        color-mix(in srgb, var(--zp-iris) 62%, #ffffff) 100%);
+  }
+  .progress-banner::before {
+    content: '';
+    position: absolute;
+    inset: -60% -20%;
+    background: radial-gradient(60% 45% at 30% 50%, rgba(255, 255, 255, 0.16), transparent 70%),
+      radial-gradient(40% 35% at 75% 55%, rgba(255, 255, 255, 0.12), transparent 70%);
+    animation: banner-drift 5.5s ease-in-out infinite alternate;
+  }
+  .progress-banner::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: -40%;
+    width: 40%;
+    background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.22), transparent);
+    animation: banner-sweep 2.6s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  }
+  .progress-banner .chev-run svg {
+    opacity: 0.45;
+  }
+  .progress-panel[data-state='stopping'] .progress-banner {
+    background: linear-gradient(100deg, var(--zp-text-2), var(--zp-text-3));
+  }
+  .progress-panel[data-state='stopping'] .progress-banner::after,
+  .progress-panel[data-state='done'] .progress-banner::after {
+    animation: none;
+    opacity: 0;
+  }
+  .pseg {
     position: relative;
     display: block;
-    height: 4px;
-    overflow: hidden;
+    height: 8px;
     border-radius: 999px;
     background: var(--zp-surface-2);
   }
-  .stage-track li[data-state='done'] .stage-bar {
+  li[data-optional][data-state='next'] .pseg {
+    background: transparent;
+    box-shadow: inset 0 0 0 1px var(--zp-line-input);
+    background-image: repeating-linear-gradient(90deg, var(--zp-surface-2) 0 6px, transparent 6px 10px);
+  }
+  li[data-state='done'] .pseg {
     background: var(--zp-iris);
   }
-  .stage-track li[data-state='now'] .stage-bar {
+  li[data-state='now'] .pseg {
+    overflow: hidden;
     background: color-mix(in srgb, var(--zp-iris) 20%, var(--zp-surface-2));
   }
-  .stage-track li[data-state='now'] .stage-bar::after {
+  li[data-state='now'] .pseg::after {
     content: '';
     position: absolute;
     inset: 0 auto 0 0;
@@ -387,26 +570,49 @@
     background: linear-gradient(90deg, transparent, var(--zp-iris), transparent);
     animation: stage-sweep 1.35s cubic-bezier(0.4, 0, 0.2, 1) infinite;
   }
-  .stage-label {
-    display: block;
-    margin-top: 6px;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    font-size: 11px;
-    line-height: 1.3;
-    color: var(--zp-text-3);
-  }
-  .stage-track li[data-state='done'] .stage-label {
-    color: var(--zp-text-2);
-  }
-  .stage-track li[data-state='now'] .stage-label {
-    font-weight: 600;
-    color: var(--zp-text);
-  }
-  .stage-track.is-stopping .stage-bar::after {
+  .progress-panel[data-state='stopping'] li[data-state='now'] .pseg::after {
     animation-play-state: paused;
     opacity: 0.35;
+  }
+  .pseg-check {
+    position: absolute;
+    top: 50%;
+    right: -4px;
+    display: grid;
+    width: 16px;
+    height: 16px;
+    place-items: center;
+    border-radius: 999px;
+    background: var(--zp-surface);
+    color: var(--zp-iris);
+    box-shadow: 0 0 0 1.5px var(--zp-iris);
+    transform: translateY(-50%);
+  }
+  .pseg-check svg {
+    width: 10px;
+    height: 10px;
+  }
+  .plabel {
+    display: block;
+    max-width: 100%;
+    margin-top: 7px;
+    padding: 2px 6px;
+    overflow: hidden;
+    border-radius: 6px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11.5px;
+    line-height: 1.35;
+    color: var(--zp-text-3);
+    text-align: center;
+  }
+  li[data-state='done'] .plabel {
+    color: var(--zp-text-2);
+  }
+  li[data-state='now'] .plabel {
+    background: var(--zp-iris-tint);
+    color: var(--zp-iris-text);
+    font-weight: 700;
   }
   @keyframes stage-sweep {
     from {
@@ -415,6 +621,115 @@
     to {
       transform: translateX(230%);
     }
+  }
+  @keyframes banner-sweep {
+    from {
+      transform: translateX(0);
+    }
+    to {
+      transform: translateX(350%);
+    }
+  }
+  @keyframes banner-drift {
+    from {
+      transform: translateX(-6%) scale(1);
+    }
+    to {
+      transform: translateX(6%) scale(1.06);
+    }
+  }
+  /* 기록 종류 이름표 (진단 · 처방 · 시술 · 관리): 옅은 바탕 + 진한 글자 */
+  .kind-chip {
+    display: inline-flex;
+    flex-shrink: 0;
+    align-items: center;
+    height: 18px;
+    padding: 0 6px;
+    border-radius: 5px;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1;
+    white-space: nowrap;
+  }
+  /*
+   * 내원 달력 (ADR-0040): 해마다 한 줄 = 연도 · 내원 수 · 열두 달 칸(석 달씩 묶음) · 그해 눈여겨볼 일.
+   * 칸 넓이는 상자 넓이를 따른다(컨테이너 쿼리). 상자가 넓으면 눈여겨볼 일이 같은 줄 오른쪽에, 좁으면 칸 아래 줄에 온다.
+   */
+  .vcal {
+    container-type: inline-size;
+  }
+  .vcal-row {
+    display: grid;
+    grid-template-columns: 46px 30px minmax(0, 312px);
+    column-gap: 10px;
+    row-gap: 2px;
+    align-items: center;
+  }
+  .vcal-note {
+    grid-column: 3 / -1;
+    min-width: 0;
+  }
+  .vcal-wide {
+    grid-column: 1 / -1;
+  }
+  @container (min-width: 620px) {
+    .vcal-row {
+      grid-template-columns: 46px 30px minmax(0, 312px) minmax(0, 1fr);
+      column-gap: 14px;
+    }
+    .vcal-note {
+      grid-column: auto;
+    }
+  }
+  .vcal-months {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
+  }
+  .vcal-q {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 3px;
+  }
+  .vcal-cell {
+    position: relative;
+    display: grid;
+    place-items: center;
+    height: 22px;
+    border-radius: 5px;
+    font-size: 10.5px;
+    font-weight: 700;
+    font-variant-numeric: tabular-nums;
+    line-height: 1;
+  }
+  .vcal-cell[data-empty] {
+    background: color-mix(in srgb, var(--zp-line) 60%, transparent);
+  }
+  /* 새 진단 · 첫 시술이 있던 달: 칸 오른쪽 위 작은 점 (칸 글자 색) */
+  .vcal-cell[data-fresh] {
+    padding-top: 2px;
+  }
+  .vcal-cell[data-fresh]::after {
+    content: '';
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    width: 4px;
+    height: 4px;
+    border-radius: 999px;
+    background: currentColor;
+  }
+  button.vcal-cell:hover {
+    filter: saturate(1.15) brightness(0.95);
+  }
+  .vcal-cell[aria-pressed='true'],
+  .vcal-year[aria-pressed='true'] {
+    outline: 2px solid var(--zp-text);
+    outline-offset: 1px;
+  }
+  .vcal-gap {
+    height: 1px;
+    border-top: 1px dashed var(--zp-line-input);
   }
   /* 여는 중 단추: 오른쪽으로 흐르는 꺾쇠 셋 (돌아가는 표시 대신) */
   .chev-run {
@@ -478,11 +793,15 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .stage-track li[data-state='now'] .stage-bar::after {
+  li[data-state='now'] .pseg::after {
     animation: none;
     width: 50%;
     background: var(--zp-iris);
     opacity: 0.55;
+  }
+  .progress-banner::before,
+  .progress-banner::after {
+    animation: none;
   }
   .chev-run svg {
     animation: none;

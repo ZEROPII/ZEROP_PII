@@ -40,6 +40,8 @@ export const ACTION_KO: Record<string, string> = {
   emr_consult_cancel: '협진 의뢰 취소',
   clinic_stop: '의료진이 질문을 멈춤',
   emr_launch_stop: '진료 지원 AI 열기를 멈춤',
+  clinic_report: '유사 사례 보고서 만듦',
+  clinic_report_download: '유사 사례 보고서 PDF 받음',
 };
 
 /** EMR 접근 기록 (ADR-0034): 다룬 환자는 '지금 환자'가 아니라 그냥 환자 기호로 */
@@ -116,6 +118,7 @@ export function detailOf(a: AuditEntry): string | null {
   if (a.action === 'emr_consult_open') return join([a.sender ? `${a.sender} 선생님의 의뢰` : null, a.hours ? `${a.hours}시간` : null]);
   if (a.action === 'emr_consult_decline' || a.action === 'emr_consult_cancel') return a.note ?? null;
   if (a.action === 'clinic_stop' || a.action === 'emr_launch_stop') return a.calls != null ? `대상 AI · 확인 호출 ${a.calls}번 뒤 멈춤` : null;
+  if (a.action === 'clinic_report') return join([a.shown != null ? `그대로 ${a.shown}` : null, a.ranged ? `범위 ${a.ranged}` : null, a.protected ? `비공개 ${a.protected}` : null]);
   if (a.action === 'emr_launch' && a.access === 'break_glass') return '예외 열람 중인 환자';
   return null;
 }

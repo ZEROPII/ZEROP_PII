@@ -23,6 +23,7 @@ from typing import Any
 from medical.config import MedicalConfig, MedicalPaths
 from medical.data import QUERY_POOL, split_cohort
 from webdemo.backend.store import Store
+from webdemo.backend import triage
 
 NODE_COLS = ["node_id", "attribute", "canonical_label", "parent_id", "depth", "review_status", "standard_code", "time_role",
              "calendar_basis", "level", "k_patients"]
@@ -317,6 +318,7 @@ class Emr:
         진료 상태는 care_status: 진료 중 · 완치 · 장기 미내원. openItems는 차트의 '진행 중'(진단 · 처방 · 관리 계획) 수와 같다.
         lastRecord는 마지막 내원일이다 (진료 encounter의 첫날): 차트 내원 이력의 마지막 날과 같은 날을 보인다.
         ageYear: 나이(연령대)를 센 해 = 마지막 내원 해 (장기 미내원이면 화면이 '1998년 기준'처럼 같이 보인다).
+        risk: 환자 위험 등급 (triage.assess: 1 위급 ~ 5 안정, 까닭). 마지막 내원 때 진행 중인 진단 · 처방 · 나이로 센 참고 등급.
         """
         r = self.patient_row(fhir_id)
         pid = r["patient_id"]
@@ -326,10 +328,14 @@ class Emr:
         open_n = sum(g["active"] for k in ("problems", "medications", "carePlans") for g in rec["groups"].get(k, {}).values())
         last = rec["lastVisit"]
         status = care_status(open_n, last, self.latest_record())
+        a = self.store.one("SELECT age_years_at_start AS a FROM emr_event WHERE patient_id = ? AND age_years_at_start <> '' "
+                           "ORDER BY start DESC, seq DESC LIMIT 1", (pid,))
+        age = int(a["a"]) if a is not None and str(a["a"]).isdigit() else None
         return dict(fhirId=r["fhir_id"], identifier=pid[:8], sex=SEX_FHIR.get(r["sex_node"], "unknown"),
                     conditions=[self.label(d["code_node"]) for d in dx], events=r["n_events"],
                     status=status, statusLabel=STATUS_KO[status], openItems=open_n, lastRecord=last,
-                    ageYear=int(last[:4]) if last else None)
+                    ageYear=int(last[:4]) if last else None,
+                    risk=triage.assess(rec["groups"], age=age, dormant=status == "DORMANT"))      # 환자 위험 등급 (ADR-0041)
 
     def age_band(self, fhir_id: str) -> str | None:
         """

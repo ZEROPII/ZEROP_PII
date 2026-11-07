@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { highlightsOf, yearRows } from './visits';
+import { calendarLines, highlightsOf, monthCells, yearRows } from './visits';
 
 const v = (date: string, items: { kind: 'problems' | 'medications' | 'procedures' | 'carePlans'; label: string; first?: boolean }[]) => ({ date, items });
 
@@ -47,4 +47,20 @@ describe('내원 이력 (ADR-0038)', () => {
     ]);
     expect(highlightsOf([])).toEqual([]);
   });
+
+  it('달력 칸: 그달 가장 중요한 기록 종류의 색, 자세한 기록이 없으면 내원만, 내원 없던 해는 한 줄로 접는다', () => {
+    const rows = yearRows(['2018-02-01', '2024-03-05', '2024-03-20', '2024-07-01', '2026-01-10'], [
+      v('2026-01-10', []),
+      v('2024-07-01', [{ kind: 'medications', label: 'lisinopril' }, { kind: 'carePlans', label: 'Diet' }]),
+      v('2024-03-20', [{ kind: 'procedures', label: 'Colonoscopy', first: true }]),
+      v('2024-03-05', [{ kind: 'problems', label: 'Hypertension' }]),
+    ]);
+    const c24 = monthCells(rows[1]);
+    expect([c24[2].cat, c24[2].n, c24[2].fresh, c24[2].visits.length]).toEqual(['problems', 2, true, 2]);
+    expect([c24[6].cat, c24[0].cat]).toEqual(['medications', null]);
+    expect(monthCells(rows[0])[0].cat).toBe('visit');
+    expect(monthCells(rows[2])[1].cat).toBe('visit');                          // 자세한 기록이 없는 오래된 해
+    expect(calendarLines(rows).map((l) => (l.type === 'gap' ? `gap ${l.from}-${l.to}` : `${l.row.year}`))).toEqual(['2026', 'gap 2025-2025', '2024', 'gap 2019-2023', '2018']);
+  });
 });
+

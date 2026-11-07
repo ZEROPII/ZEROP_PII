@@ -266,6 +266,7 @@ class ClinicConversation:
         self.saved_turns: set[tuple[str, int]] = set()          # DB에 이미 넣은 턴 기록 (persist.py)
         self._preflights: collections.deque = collections.deque()    # 보내기 전 확인 시각 (사용 한도, ADR-0032)
         self.preflight_limited = 0                              # 한도를 넘겨 판정 없이 돌려준 수
+        self.report: dict[str, Any] | None = None               # 마지막 유사 사례 보고서 (case_report.build)
         self.save_lock = threading.Lock()                       # 저장 한 번(스냅숏 만들기 + DB 쓰기)을 대화마다 줄 세운다
         self.slots = {f"case-{i}": Slot(i) for i in range(1, len(session.prefix.docs) + 1)}
         rec0 = self._records()[0]
@@ -807,7 +808,8 @@ class ClinicConversation:
                              decision=self.policy_decision(cid), risk=self.risk_state(cid), narrowing=self.narrowing(cid)) for cid in self.slots}
             return dict(workspace_id=self.workspace_id, version=self.version, updated_at=self.updated_at, labels={cid: s.label for cid, s in self.slots.items()},
                         environment=self.environment(), policy=self.policy(), patient=self.patient_context(),
-                        cases=self.similar_cases(f"{self.workspace_id}:patient"), per_case=per)
+                        cases=self.similar_cases(f"{self.workspace_id}:patient"), per_case=per,
+                        report=copy.deepcopy(getattr(self, "report", None)))       # 마지막 유사 사례 보고서 (보호를 거친 값만, ADR-0042)
 
 
 class ArchivedConversation:

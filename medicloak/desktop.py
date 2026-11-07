@@ -382,6 +382,8 @@ class DesktopApp:
         self.window.events.closed += lambda *_: self.mark_closed()
         with contextlib.suppress(Exception):                 # 아래 설정 키가 없는 판의 pywebview
             wv.settings["OPEN_EXTERNAL_LINKS_IN_BROWSER"] = True
+            # 유사 사례 보고서 PDF 받기 (ADR-0042): 창 안의 내려받기 링크가 저장 창을 연다 (기본은 막혀 있다)
+            wv.settings["ALLOW_DOWNLOADS"] = True
         try:
             wv.start(self.flow, private_mode=False, storage_path=str(self.home / "webview"), menu=self.menu())
         finally:

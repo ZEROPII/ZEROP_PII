@@ -1,5 +1,7 @@
-import { Lock, MessageSquareText, ShieldCheck, Table2 } from 'lucide-react';
+import { FileText, Lock, MessageSquareText, ShieldCheck, Table2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
+import { Link } from 'react-router-dom';
+import { apiMode } from '../../api';
 import { UNKNOWN, overviewOf, splitItem } from '../../lib/caseOverview';
 import { useClinicMessages } from '../../state/ClinicMessages';
 import { useWorkspace } from '../../state/WorkspaceContext';
@@ -28,16 +30,24 @@ export function EmrCaseList({ onSelected }: { onSelected?: () => void }) {
       <header className="border-b border-line px-4 py-3">
         <div className="flex items-center justify-between gap-2">
           <h2 id="emr-cases-title" className="text-[15px] font-bold text-ink">
-            비슷한 사례 {cases.data && <span className="num ml-1 text-xs font-normal text-ink-3">유사도 순 {cases.data.length}건</span>}
+            비슷한 사례 {cases.data && <span className="num ml-0.5 text-xs font-normal text-ink-3">{cases.data.length}건</span>}
           </h2>
-          {cases.data && cases.data.length > 1 && (
-            <button type="button" className="btn-ghost btn-sm h-7 gap-1 text-ink-2" onClick={() => setComparing(true)} title="사례마다 지금까지 답에 나온 값을 표로 보기">
-              <Table2 className="h-3.5 w-3.5" aria-hidden />
-              비교
-            </button>
-          )}
+          <span className="flex items-center">
+            {cases.data && cases.data.length > 1 && (
+              <button type="button" className="btn-ghost btn-sm h-7 gap-1 px-2 text-ink-2" onClick={() => setComparing(true)} title="사례마다 지금까지 답에 나온 값을 표로 보기">
+                <Table2 className="h-3.5 w-3.5" aria-hidden />
+                비교
+              </button>
+            )}
+            {apiMode === 'http' && cases.data && cases.data.length > 0 && (
+              <Link to="/case-report" className="btn-ghost btn-sm h-7 gap-1 px-2 text-ink-2" title="사례마다 주진단 · 그 무렵 치료 · 기록상 경과를 모은 보고서 (PDF로 받기)">
+                <FileText className="h-3.5 w-3.5" aria-hidden />
+                보고서
+              </Link>
+            )}
+          </span>
         </div>
-        <p className="mt-0.5 text-[11px] leading-4 text-ink-3">사례 하나는 병원 과거 기록의 환자 한 명입니다.</p>
+        <p className="mt-0.5 text-[11px] leading-4 text-ink-3">유사도 순 · 사례 하나는 병원 과거 기록의 환자 한 명입니다.</p>
         {common.length > 0 && (
           <p className="mt-1.5 rounded-[6px] bg-surface-2 px-2 py-1 text-[11px] leading-4 text-ink-2" title="사례 목록에 보이는 진단 · 대표 항목 중 여러 사례에 같이 나온 값">
             <span className="font-semibold text-ink">공통</span> {common.join(' · ')}
