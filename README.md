@@ -8,8 +8,8 @@
   <img src="https://img.shields.io/badge/FastAPI-서버-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI">
   <img src="https://img.shields.io/badge/React-18-0b7a75?style=flat-square&logo=react&logoColor=white" alt="React 18">
   <img src="https://img.shields.io/badge/HL7_FHIR-R4-0b7a75?style=flat-square" alt="FHIR R4">
-  <img src="https://img.shields.io/badge/tests-pytest_994_·_vitest_98-16a374?style=flat-square" alt="pytest 994 passed, vitest 98 passed">
-  <a href="docs/adr/README.md"><img src="https://img.shields.io/badge/ADR-38건-5b5bf0?style=flat-square" alt="ADR 38건"></a>
+  <img src="https://img.shields.io/badge/tests-pytest_1011_·_vitest_98-16a374?style=flat-square" alt="pytest 1011 passed, vitest 98 passed">
+  <a href="docs/adr/README.md"><img src="https://img.shields.io/badge/ADR-39건-5b5bf0?style=flat-square" alt="ADR 39건"></a>
 </p>
 
 <p align="center">
@@ -117,6 +117,10 @@ MediCloak은 답에 나온 표현을 글자 그대로 비교하지 않고, 팀�
 - **[EMR 접근 관리](docs/images/screen-emr-access.png)**: 외래 환자마다 담당 의료진, 마지막 접근, 담당 외 접근 거부, 협진 의뢰 · 예외 열람을 환자 기호로만 보여 줍니다. 차트는 사유를 적어야 열리고(그때 등록번호가 보임), 협진 의뢰로 연 열람과 예외 열람은 여기서 사후 검토합니다.
 - **[감사 기록](docs/images/screen-audit.png) · [보호 정책](docs/images/screen-policy.png)**: 로그인, EMR 열기, 질문, 열람, 승인, 규칙, 예외 열람, 레드팀 기록과 현재 적용 중인 판정 기준 · 보호 설정
 
+**설치와 실행**
+
+- **[데스크톱 앱](docs/images/screen-desktop.png)**: `python -m medicloak app` 또는 묶은 앱(macOS `MediCloak.app` · Windows `MediCloak.exe`)을 켜면 창 하나에 화면이 열리고, 서버는 같은 프로세스에서 돌다가 창을 닫으면 멈춥니다. 처음 켤 때 연결 방식(이 컴퓨터에서 켜기 · 키 없이 둘러보기 · 병원 서버에 연결)을 고르고, 처음 쓸 계정은 창에 한 번 보입니다. 글꼴과 아이콘을 앱 안에 넣어 인터넷이 막힌 내부망에서도 같은 화면이 열립니다.
+
 ---
 
 ## 시스템 구성
@@ -203,10 +207,20 @@ python -m medicloak serve --build     # 화면 빌드 후 서버 실행, http://
 
 계정은 의료진 `doctor1` · `doctor2`, 보안 담당자 `privacy1`이며 비밀번호는 `runs/medicloak/initial_accounts.txt`에 저장됩니다. API 키 없이 같은 화면을 보려면 `python -m medicloak serve --llm oracle --build`(결정적 응답기)를, 로그인 없는 데모는 `python -m webdemo --build`를 실행합니다.
 
+**데스크톱 앱** (창 하나로 켜기, ADR-0039)
+
+```bash
+pip install -r medicloak/requirements-desktop.txt   # pywebview · PyInstaller
+python -m medicloak app --build       # 화면 빌드 후 창으로 실행 (창을 닫으면 서버도 멈춤)
+python scripts/build_desktop.py --zip # 묶은 앱: dist/desktop/MediCloak.app (macOS) · MediCloak/MediCloak.exe (Windows)
+```
+
+`.env`가 없으면 시작 화면에서 LLM 연결 정보를 받거나 키 없이 둘러보기 · 병원 서버 연결을 고릅니다. 묶은 앱은 DB · `.env` · 기록을 사용자 앱 데이터 폴더(macOS `~/Library/Application Support/MediCloak`)에 둡니다. 자세한 내용은 [medicloak/README.md](medicloak/README.md#데스크톱-앱)에 있습니다.
+
 **테스트**
 
 ```bash
-python -m pytest -q                   # 994 passed, 3 skipped (LLM 호출은 가짜 HTTP 세션으로 대체)
+python -m pytest -q                   # 1011 passed, 3 skipped (LLM 호출은 가짜 HTTP 세션으로 대체)
 cd frontend && npm test               # vitest 98 passed
 ```
 
@@ -216,7 +230,8 @@ cd frontend && npm test               # vitest 98 passed
 
 ```text
 ZEROP_PII/
-├─ medicloak/              # 운영 모드 실행: init · serve · users · assign · check-llm
+├─ medicloak/              # 운영 모드 실행: init · serve · app(데스크톱 앱) · users · assign · check-llm
+├─ packaging/              # 데스크톱 앱 묶음 설정(PyInstaller) · 앱 아이콘
 ├─ webdemo/backend/        # FastAPI 서버: 로그인 · 진료 대화 · 공개 전 검사 · 관제 · 레드팀
 ├─ frontend/               # React 화면: 진료 지원 AI(의료진) · MediCloak 관제(보안 담당자)
 ├─ medical/                # 의료 시나리오 실험 코드: 문서 · 검색 · 대상 AI · 추출 · kcalc · Defender · 퍼저
@@ -230,8 +245,8 @@ ZEROP_PII/
 ├─ data/medical/           # 의료 온톨로지 노드 · 사건연결표 · 표현-노드 매핑표 · Seed Registry
 ├─ core/                   # .env 설정 · LLM 호출 (모든 모듈 공통)
 ├─ scripts/                # 측정 · RAG 재측정 · 결과 다시 세기 · ADR 도구
-├─ tests/                  # pytest 979개 (LLM 경로는 가짜 HTTP 세션으로 시험)
-└─ docs/                   # ADR 38건 · 의료 시나리오 · 평가 통합 문서 · README 그림
+├─ tests/                  # pytest 1,014개 (LLM 경로는 가짜 HTTP 세션으로 시험)
+└─ docs/                   # ADR 39건 · 의료 시나리오 · 평가 통합 문서 · README 그림
 ```
 
 SynthPAI(일반 게시글) 단계의 모듈(`target_llm/` · `qi_extractor/` · `normalizer/` · `attack/` · `ontology/` · `adapters/` · `orchestrator/` · `validation/` · `api_server/` · `analysis/` · `evaluation_v1/` · `risk_defender_synthpai/`)은 그대로 두었습니다. 의료 데이터로 전환하기 전의 실험을 재현할 때 사용하며, 설명은 [docs/research_harness.md](docs/research_harness.md)에 있습니다. 평가 프로토타입(`eval/`과 루트의 `eval_baseline.py` · `log_schema.py` · `run_demo.py`)은 [docs/evaluation.md](docs/evaluation.md)에 설명되어 있습니다.
@@ -240,7 +255,7 @@ SynthPAI(일반 게시글) 단계의 모듈(`target_llm/` · `qi_extractor/` · 
 
 - [medicloak/README.md](medicloak/README.md): 운영 모드의 옵션, 화면 흐름, API, 보안 동작, 운영 가이드
 - [docs/medical.md](docs/medical.md): 의료 시나리오 실험 코드와 기준 집단 사전 점검
-- [docs/adr/](docs/adr/README.md): 설계 결정 기록 38건
+- [docs/adr/](docs/adr/README.md): 설계 결정 기록 39건
 - [docs/evaluation.md](docs/evaluation.md): 평가 통합 문서(evaluation_proto · eval-metrics)
 - [docs/rag_remeasure/](docs/rag_remeasure/README.md): RAG 기준 재측정 도구와 원본 대조 검증기
 - [docs/README.md](docs/README.md): 나머지 문서 안내

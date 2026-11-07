@@ -50,6 +50,51 @@ LLM_MODEL=...
 
 `check-llm`이 `[설정 오류]`를 내면 빈 변수 이름을 알려 줍니다. `[호출 실패] LLMHTTPError: HTTP 401`이면 키, `404`면 주소나 모델 이름을 확인합니다.
 
+## 데스크톱 앱
+
+창 하나로 켜는 방법입니다 (ADR-0039). 서버는 같은 프로세스에서 돌고, 창을 닫으면 멈춥니다.
+
+```bash
+pip install -r medicloak/requirements-desktop.txt   # pywebview(창) · PyInstaller(묶기)
+python -m medicloak app                  # .env에 연결 정보가 있으면 바로 켜고, 없으면 시작 화면에서 연결 방식을 고름
+python -m medicloak app --llm oracle     # 키 없이 (결정적 응답기)
+python -m medicloak app --server https://medicloak.example.org   # 병원 서버를 창으로 (이 컴퓨터에서 서버를 켜지 않음)
+```
+
+`serve`의 옵션(`--llm` · `--extractor-model` · `--break-glass` 등)을 그대로 받고, 아래를 더 받습니다.
+
+| 옵션 | 뜻 |
+| --- | --- |
+| `--server URL` | 병원 MediCloak 서버를 창으로 연다. 주소의 `/api/health`로 MediCloak인지 먼저 확인한다 |
+| `--setup` | 시작 화면(연결 방식 고르기)부터 다시 연다 |
+| `--browser` | 창 대신 기본 브라우저로 연다. pywebview가 없으면 저절로 이렇게 한다 |
+| `--no-window` | 창 없이 서버만 켠다 (점검용) |
+
+- **시작 화면**: 연결 방식 셋(이 컴퓨터에서 켜기 · 키 없이 둘러보기 · 병원 서버에 연결) 가운데 고릅니다. 고른 방식은 데이터 폴더의 `desktop.json`에 남고, 메뉴 MediCloak → 처음 설정 다시 하기로 지웁니다. 이 컴퓨터에서 켜기는 API 주소 · 모델 · 키를 `.env`(권한 600)에 쓰고 짧은 요청 한 번으로 확인합니다. 명령줄의 `--server` · `--llm`은 저장한 방식보다 앞섭니다.
+- **준비 중**: 데이터 폴더 확인 → 가상 EMR 넣기(처음 한 번) → 진료 지원 AI 연결 준비 → 위험 계산 엔진 준비 → 화면 열기 순서로 보입니다.
+- **처음 쓸 계정**: DB를 처음 만들 때 창에 한 번 보입니다. 같은 내용은 `initial_accounts.txt`(권한 600)에 있고, 기록 파일에는 비밀번호를 적지 않습니다.
+- **두 번 켜기**: 같은 데이터 폴더로 두 번 켜면 두 번째 창은 서버를 새로 켜지 않고 켜 둔 서버를 엽니다.
+- **메뉴 MediCloak**: 브라우저로 열기 · 데이터 폴더 열기 · 기록 폴더 열기 · 처음 설정 다시 하기.
+
+### 묶은 앱 만들기
+
+```bash
+python scripts/build_desktop.py          # 화면 빌드(npm run build:demo) → PyInstaller
+python scripts/build_desktop.py --zip    # 다른 컴퓨터에 보낼 압축 파일도 만듦
+```
+
+| | macOS | Windows |
+| --- | --- | --- |
+| 앱 | `dist/desktop/MediCloak.app` | `dist/desktop/MediCloak/MediCloak.exe` |
+| 압축 파일 (`--zip`) | `dist/desktop/MediCloak-macOS.zip` | `dist/desktop/MediCloak-Windows.zip` |
+| 데이터 폴더 | `~/Library/Application Support/MediCloak` | `%APPDATA%\MediCloak` |
+
+- 그 운영체제용 앱은 그 운영체제에서 만듭니다. Windows 창은 WebView2(Windows 10 · 11에 기본 설치)를 씁니다.
+- 앱 안에는 코드 · 화면 · 가상 EMR 원본 표 · Seed 표만 들어갑니다. DB · `.env` · `initial_accounts.txt` · `logs/medicloak-app.log`는 켤 때 데이터 폴더에 생깁니다. `MEDICLOAK_HOME` 환경변수로 다른 폴더를 줄 수 있습니다.
+- 서명하지 않은 앱입니다. 만든 Mac에서는 바로 열리고, 다른 Mac에 보내면 처음 한 번 Finder에서 오른쪽 클릭 → 열기를 누릅니다.
+- 묶은 앱에 명령을 주면 `python -m medicloak`과 같습니다. 예: `MediCloak.app/Contents/MacOS/MediCloak users list`.
+- 화면 글꼴과 아이콘은 앱 안에 있어 인터넷이 막힌 내부망에서도 같은 화면이 열립니다. 브라우저로 쓸 때는 https 주소(또는 `127.0.0.1`)에서 Chrome · Edge의 '앱 설치'로 창 하나짜리 앱처럼 쓸 수 있습니다.
+
 ## 서버 옵션
 
 ```bash
@@ -240,7 +285,10 @@ python -m medicloak assign auto --reset                    # 모두 지우고 �
 ## 구조
 
 ```
-medicloak/cli.py              init · serve · users · assign · check-llm
+medicloak/cli.py              init · serve · app · users · assign · check-llm (serve와 app은 prepare()로 같은 서버를 만든다)
+medicloak/desktop.py          데스크톱 앱: 창(pywebview) · 같은 프로세스 서버 · 시작 화면 흐름 · 잠금 · 기록 (ADR-0039)
+medicloak/paths.py            데이터 폴더 (저장소: runs/medicloak, 묶은 앱: 사용자 앱 데이터 폴더)
+packaging/                    묶은 앱: PyInstaller 설정(medicloak.spec) · 시작점 · 앱 아이콘 (scripts/build_desktop.py가 부름)
 webdemo/backend/store.py      SQLite (가상 EMR · 계정 · 세션 · 대화 · 턴 기록 · 메시지 · 감사 기록)
 webdemo/backend/emr.py        CSV → DB 적재, DB → 위험 계산용 CSV 스냅숏, FHIR 자원 만들기
 webdemo/backend/fhir.py       /fhir 경로 (외래 환자 중 담당 · 예외 열람만), 외래 목록
@@ -264,6 +312,7 @@ tests/medicloak/              운영 모드 테스트 (가짜 HTTP 세션으로 
 
 ## 범위와 한계
 
+- 데스크톱 앱의 macOS · Windows 묶음은 작업 환경(Linux)에서 만들어 보지 못했습니다. 창 흐름은 Linux의 실제 pywebview(Qt)로, 묶음은 Linux 묶음(창 없이)으로 확인했습니다.
 - 실제 모델 호출은 이 저장소 작업 환경에서 확인하지 못했습니다(키 없음). 가짜 HTTP 세션으로 같은 코드 경로(첫 답 · 질문 · 레드팀)를 테스트했고, 처음 켤 때 `check-llm`으로 확인합니다.
 - 레드팀 전체(296명)는 호출이 수만 번입니다. 유형마다 1명부터 돌려 보고 늘리세요. 서버를 끄면 돌던 실행은 '끊김'으로 남고 집계하지 못합니다.
 - 승인 공개는 그 대화에서 계속 유효하고, 지금은 취소할 수 없습니다.

@@ -5,8 +5,10 @@
 #   python -m medicloak check-llm             .env를 읽어 실제 LLM에 짧은 요청을 한 번 보낸다 (키 값은 출력하지 않음)
 #   python -m medicloak users …               계정 목록 · 추가 · 비밀번호 바꾸기
 #   python -m medicloak assign …              외래 환자 담당 의료진 보기 · 더하기 · 빼기 · 규칙으로 다시 나누기 (ADR-0034)
+#   python -m medicloak app [--llm real]      데스크톱 앱: 창 하나로 켠다. 서버는 이 컴퓨터에서 같이 돈다 (--server로 병원 서버에 연결, ADR-0039)
 #
 # 기본 위치: runs/medicloak/ (medicloak.db · initial_accounts.txt · emr_snapshot/ · engine/). runs/는 커밋하지 않는다.
+# 묶은 앱(PyInstaller)은 사용자 앱 데이터 폴더를 쓴다 (medicloak/paths.py).
 
 from __future__ import annotations
 
@@ -17,8 +19,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-HOME = ROOT / "runs" / "medicloak"
+from medicloak.paths import ROOT, app_home, default_env_file
+
+HOME = app_home()
 DEFAULT_DB = HOME / "medicloak.db"
 ACCOUNTS_FILE = "initial_accounts.txt"            # init이 처음 쓸 계정을 적는 파일 (DB 폴더)
 LEGACY_ACCOUNTS_FILE = "demo_accounts.txt"       # 예전 init이 쓴 이름
@@ -29,11 +32,14 @@ def _store(db: Path):
     return Store(db)
 
 
-def _print_accounts(made, out_file: Path) -> None:
-    print("[medicloak] 처음 쓸 계정 셋을 만들었습니다 (이 비밀번호는 지금 한 번만 보여 줍니다)")
+def _print_accounts(made, out_file: Path, log=print, show_passwords: bool = True) -> None:
+    if not show_passwords:                 # 데스크톱 앱: 비밀번호는 창에만 보이고 기록 파일에는 남기지 않는다
+        log(f"[medicloak] 처음 쓸 계정 셋을 만들었습니다. 아이디와 비밀번호는 {out_file} 에 있습니다 (권한 600)")
+        return
+    log("[medicloak] 처음 쓸 계정 셋을 만들었습니다 (이 비밀번호는 지금 한 번만 보여 줍니다)")
     for username, pw, role in made:
-        print(f"    {username:<10} {'의료진' if role == 'clinician' else '보안 담당자':<7} {pw}")
-    print(f"[medicloak] 같은 내용을 {out_file} 에 적었습니다 (권한 600). 바꾸려면 python -m medicloak users passwd <아이디>")
+        log(f"    {username:<10} {'의료진' if role == 'clinician' else '보안 담당자':<7} {pw}")
+    log(f"[medicloak] 같은 내용을 {out_file} 에 적었습니다 (권한 600). 바꾸려면 python -m medicloak users passwd <아이디>")
 
 
 def accounts_file(folder: Path) -> Path | None:
@@ -41,43 +47,52 @@ def accounts_file(folder: Path) -> Path | None:
     return next((p for p in (folder / ACCOUNTS_FILE, folder / LEGACY_ACCOUNTS_FILE) if p.exists()), None)
 
 
-def init(db: Path, *, reset: bool = False, initial_password: str | None = None, quiet: bool = False) -> None:
+def init(db: Path, *, reset: bool = False, initial_password: str | None = None, quiet: bool = False,
+         log=print, show_passwords: bool = True) -> list[tuple[str, str, str]]:
+    """DB · EMR 데이터 · 처음 쓸 계정 · 담당 배정을 준비한다. 이번에 만든 계정 (아이디, 비밀번호, 역할)을 돌려준다 (이미 있으면 빈 목록)."""
     from webdemo.backend import emr
     from webdemo.backend.auth import ensure_initial_accounts
     if reset and db.exists():
         for p in (db, db.with_name(db.name + "-wal"), db.with_name(db.name + "-shm")):
             if p.exists():
                 p.unlink()
-        print(f"[medicloak] 기존 DB를 지웠습니다: {db}")
+        log(f"[medicloak] 기존 DB를 지웠습니다: {db}")
+    db.parent.mkdir(parents=True, exist_ok=True)
     store = _store(db)
     try:
         if not emr.is_loaded(store):
-            emr.load_csv(store, log=print)
+            emr.load_csv(store, log=log)
         elif not quiet:
-            print(f"[medicloak] EMR 데이터가 이미 들어 있습니다 (환자 {store.count('emr_patient'):,}명 · 사건 {store.count('emr_event'):,}건)")
+            log(f"[medicloak] EMR 데이터가 이미 들어 있습니다 (환자 {store.count('emr_patient'):,}명 · 사건 {store.count('emr_event'):,}건)")
         out_file = db.parent / ACCOUNTS_FILE
         pw = initial_password or os.environ.get("MEDICLOAK_INITIAL_PASSWORD") or os.environ.get("MEDICLOAK_DEMO_PASSWORD") or None
         made = ensure_initial_accounts(store, pw, out_file)
         if made:
-            _print_accounts(made, out_file)
+            _print_accounts(made, out_file, log, show_passwords)
         elif not quiet:
-            print(f"[medicloak] 계정이 이미 있습니다 ({store.count('app_user')}개). 목록: python -m medicloak users")
-        _fill_assignments(store)
+            log(f"[medicloak] 계정이 이미 있습니다 ({store.count('app_user')}개). 목록: python -m medicloak users")
+        _fill_assignments(store, log)
     finally:
         store.close()
+    return list(made or [])
 
 
-def _fill_assignments(store) -> None:
+def _fill_assignments(store, log=print) -> None:
     """담당이 없는 외래 환자를 규칙으로 나눈다 (서버를 켤 때도 같은 일을 한다). 나눈 것이 있으면 감사 기록에 남긴다."""
     from webdemo.backend.access import AUTO_ACTOR, EmrAccess, write_audit
     got = EmrAccess(store).fill()
     if got["assigned"]:
         write_audit(store, "emr_assign", AUTO_ACTOR, assigned=got["assigned"], counts=got["counts"])
-        print(f"[medicloak] 담당 배정: 외래 환자 {got['assigned']}명을 나눴습니다 ("
-              + " · ".join(f"{k} {v}명" for k, v in got["counts"].items()) + "). 바꾸려면 python -m medicloak assign")
+        log(f"[medicloak] 담당 배정: 외래 환자 {got['assigned']}명을 나눴습니다 ("
+            + " · ".join(f"{k} {v}명" for k, v in got["counts"].items()) + "). 바꾸려면 python -m medicloak assign")
 
 
-def serve(a: argparse.Namespace) -> None:
+def prepare(a: argparse.Namespace, *, log=print, step=lambda key: None, show_passwords: bool = True):
+    """
+    서버 앱을 만든다: DB · EMR 데이터 확인 → 대상 AI → 위험 계산 엔진 → FastAPI 앱.
+    serve와 데스크톱 앱(medicloak/desktop.py)이 같이 쓴다. step은 단계가 바뀔 때마다 부른다 (db · emr · llm · engine).
+    돌려주는 것: (앱, 정보 dict: label · accounts(처음 쓸 계정 파일) · made(이번에 만든 계정))
+    """
     from webdemo.backend.autocheck import valid_daily
     try:                                                # 무거운 준비 전에 옵션부터 확인한다
         daily = valid_daily(a.auto_redteam_daily)
@@ -85,16 +100,21 @@ def serve(a: argparse.Namespace) -> None:
         raise SystemExit(f"[medicloak] {exc}") from None
     db = Path(a.db)
     from webdemo.backend import emr
+    step("db")
+    made: list[tuple[str, str, str]] = []
     if not db.exists():
-        print("[medicloak] DB가 없어 처음 준비를 합니다 (python -m medicloak init)")
-        init(db, quiet=True)
+        log("[medicloak] DB가 없어 처음 준비를 합니다 (python -m medicloak init)")
+        step("emr")
+        made = init(db, quiet=True, log=log, show_passwords=show_passwords)
     else:
         s0 = _store(db)
         loaded = emr.is_loaded(s0)
         s0.close()
         if not loaded:
-            init(db, quiet=True)
+            step("emr")
+            made = init(db, quiet=True, log=log, show_passwords=show_passwords)
 
+    step("llm")
     from medical.config import MedicalConfig
     from webdemo.backend.live import make_live_llm
     cfg = MedicalConfig(mode="exploration")
@@ -110,39 +130,45 @@ def serve(a: argparse.Namespace) -> None:
             build_frontend(prefix="[medicloak]")
         except subprocess.CalledProcessError as exc:
             raise SystemExit(f"프런트엔드 빌드에 실패했습니다 (종료 코드 {exc.returncode}). 위 오류를 확인하세요.")
-    try:
-        import uvicorn
-    except ImportError:
-        raise SystemExit("uvicorn이 없습니다: pip install -r webdemo/requirements.txt")
 
+    step("engine")
     from webdemo.backend.app import DIST, Product, create_app
     from webdemo.backend.engine import Engine
     from webdemo.backend.persist import Persist
 
     store = _store(db)
-    paths = emr.export_csv(store, db.parent / "emr_snapshot", log=print)
+    paths = emr.export_csv(store, db.parent / "emr_snapshot", log=log)
     first = Persist(store, None).next_id()          # type: ignore[arg-type]
-    print(f"[medicloak] 위험 계산 엔진을 준비합니다 (10초 안팎) · 대상 AI: {label}")
+    log(f"[medicloak] 위험 계산 엔진을 준비합니다 (10초 안팎) · 대상 AI: {label}")
     from webdemo.backend.ledger import DisclosureLedger
     ledger = DisclosureLedger(store, window_days=a.ledger_window_days) if a.ledger == "on" else None
-    eng = Engine(db.parent / "engine", log=lambda s: print(s.replace("[webdemo]", "[medicloak]", 1)), paths=paths, live_llm=live_llm, live_label=label, first_id=first,
+    eng = Engine(db.parent / "engine", log=lambda s: log(s.replace("[webdemo]", "[medicloak]", 1)), paths=paths, live_llm=live_llm, live_label=label, first_id=first,
                  llm_concurrency=a.llm_concurrency, extract_parallel=a.extract_parallel, live_rule_extract=not a.no_rule_extract, answer_style=a.answer_style == "on",
                  recent_visit=a.visit == "recent", ledger=ledger, input_gate=a.input_gate == "on",
                  answer_budget=a.answer_budget if a.answer_budget > 0 else None, sensitivity=a.sensitivity == "on", strict_k=a.strict_k)
     pr = eng.protections()
-    print("[medicloak] 보강 (ADR-0032): 공개 원장 " + (f"켬 · {a.ledger_window_days:g}일" if ledger is not None else "끔")
-          + f" · 입력 게이팅 {'켬' if eng.input_gate else '끔'} · 답 시간 예산 " + (f"{eng.answer_budget:g}초" if eng.answer_budget else "끔")
-          + " · 민감도 등급 " + (f"켬 (후보 {a.strict_k}명 · 검색 제외 {pr['sensitivity']['excludedPatients']}명)" if eng.sensitivity else "끔"))
+    log("[medicloak] 보강 (ADR-0032): 공개 원장 " + (f"켬 · {a.ledger_window_days:g}일" if ledger is not None else "끔")
+        + f" · 입력 게이팅 {'켬' if eng.input_gate else '끔'} · 답 시간 예산 " + (f"{eng.answer_budget:g}초" if eng.answer_budget else "끔")
+        + " · 민감도 등급 " + (f"켬 (후보 {a.strict_k}명 · 검색 제외 {pr['sensitivity']['excludedPatients']}명)" if eng.sensitivity else "끔"))
     auto = a.auto_redteam if a.llm == "real" else "off"                 # 결정적 응답기 · 연결 점검 모드는 점검할 실제 LLM이 없다
     product = Product(store=store, compare=not a.no_compare, keep=a.keep, cookie_secure=a.cookie_secure,
                       auto_redteam=auto, auto_daily=daily if a.llm == "real" else None, prefetch=a.prefetch == "on",
                       break_glass=a.break_glass == "on")
-    print("[medicloak] EMR 접근 (ADR-0034 · ADR-0036): 담당 환자만 · 협진 의뢰 켬 · 담당 외 예외 열람 "
-          + ("켬 (등록번호와 사유를 적고 12시간)" if product.break_glass else "끔"))
+    log("[medicloak] EMR 접근 (ADR-0034 · ADR-0036): 담당 환자만 · 협진 의뢰 켬 · 담당 외 예외 열람 "
+        + ("켬 (등록번호와 사유를 적고 12시간)" if product.break_glass else "끔"))
     app = create_app(eng, simulations=False, product=product)          # 운영 모드: 환자는 EMR에서 열 때 정해진다
     if not (DIST / "index.html").exists():
-        print("[medicloak] 화면 파일(frontend/dist)이 없습니다. --build 를 붙여 한 번 빌드하세요. 지금은 API만 켭니다.", file=sys.stderr)
-    acc = accounts_file(db.parent)
+        log("[medicloak] 화면 파일(frontend/dist)이 없습니다. --build 를 붙여 한 번 빌드하세요. 지금은 API만 켭니다.")
+    return app, dict(label=label, accounts=accounts_file(db.parent), made=made, dist=(DIST / "index.html").exists())
+
+
+def serve(a: argparse.Namespace) -> None:
+    try:
+        import uvicorn
+    except ImportError:
+        raise SystemExit("uvicorn이 없습니다: pip install -r webdemo/requirements.txt")
+    app, info = prepare(a)
+    acc = info["accounts"]
     print(f"[medicloak] 준비되었습니다: http://{a.host}:{a.port}" + (f"  (처음 쓸 계정: {acc})" if acc else ""))
     uvicorn.run(app, host=a.host, port=a.port, log_level="warning")
 
@@ -236,7 +262,8 @@ def _read_password(a: argparse.Namespace) -> str:
 
 def main(argv: list[str] | None = None) -> None:
     ap = argparse.ArgumentParser(prog="python -m medicloak", description="MediCloak: 진료 지원 AI 개인정보 보호 (로그인 · EMR 연동 · 실제 LLM)")
-    ap.add_argument("--db", default=str(DEFAULT_DB), help=f"DB 파일 (기본 {DEFAULT_DB.relative_to(ROOT)})")
+    shown = DEFAULT_DB.relative_to(ROOT) if DEFAULT_DB.is_relative_to(ROOT) else DEFAULT_DB
+    ap.add_argument("--db", default=str(DEFAULT_DB), help=f"DB 파일 (기본 {shown})")
     sub = ap.add_subparsers(dest="cmd")
 
     p = sub.add_parser("init", help="DB · EMR 데이터 · 처음 쓸 계정 준비")
@@ -246,6 +273,16 @@ def main(argv: list[str] | None = None) -> None:
 
     p = sub.add_parser("serve", help="서버 켜기 (기본)")
     _serve_args(p)
+
+    p = sub.add_parser("app", help="데스크톱 앱으로 켜기: 창 하나, 서버는 이 컴퓨터에서 같이 돈다 (ADR-0039)")
+    _serve_args(p)
+    p.add_argument("--server", metavar="URL", default=None,
+                   help="이 컴퓨터에서 서버를 켜지 않고 이 주소의 MediCloak 서버(병원 서버)를 창으로 연다 (예: https://medicloak.example.org)")
+    p.add_argument("--no-window", action="store_true",
+                   help="창을 띄우지 않는다: 서버만 켜고 주소를 알린다 (점검 · 묶은 앱 시험용)")
+    p.add_argument("--browser", action="store_true", help="창 대신 기본 브라우저로 연다 (pywebview가 없으면 저절로 이렇게 한다)")
+    p.add_argument("--setup", action="store_true", help="처음 설정 화면부터 다시 연다 (저장한 연결 방식 · LLM 설정을 다시 고를 때)")
+    p.set_defaults(llm=None)                          # 주지 않으면 저장한 방식(desktop.json) · .env를 보고 정한다
 
     p = sub.add_parser("check-llm", help=".env 설정을 확인하고 실제 LLM에 짧은 요청을 보낸다")
     p.add_argument("--env-file", default=None, help="읽을 .env (기본: 저장소 루트의 .env)")
@@ -279,6 +316,8 @@ def main(argv: list[str] | None = None) -> None:
 
     _serve_args(ap, top=True)
     a = ap.parse_args(argv)
+    if getattr(a, "env_file", None) is None and default_env_file() is not None:
+        a.env_file = str(default_env_file())          # 묶은 앱: 앱 데이터 폴더의 .env
     if a.cmd == "init":
         init(Path(a.db), reset=a.reset, initial_password=a.initial_password)
     elif a.cmd == "check-llm":
@@ -290,6 +329,9 @@ def main(argv: list[str] | None = None) -> None:
         if a.assign_cmd is None:
             a.patient = None
         assign(a)
+    elif a.cmd == "app":
+        from medicloak.desktop import run_app
+        run_app(a)
     else:
         serve(_defaults(a))
 

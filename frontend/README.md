@@ -75,6 +75,8 @@ src/
 - **사례별 격리.** 대화·공개 이력·위험 상태·입력 초안 모두 caseId 키로 보관. 응답은 요청한 사례에만 반영하고, 위험 상태는 더 큰 `version`일 때만 덮어쓴다.
 - **사전 경고는 보조.** 전송 시 백엔드가 다시 검증한다는 전제다. 경고가 떠도 전송은 막지 않는다.
 - 인증은 쿠키 세션(`credentials: 'include'`) 전제. 토큰·응답 본문을 콘솔에 남기지 않는다.
+- **인터넷 없이 열린다.** 글꼴(Wanted Sans · Geist Mono)은 npm 꾸러미로 `src/main.tsx`에서 불러 빌드에 넣는다. 외부 CDN 링크를 두지 않는다 (병원 내부망 · 데스크톱 앱, ADR-0039).
+- **설치형 웹 앱.** `public/manifest.webmanifest`와 `public/icons/`(192 · 512 · 마스크용 · Apple 터치)가 빌드 루트에 복사된다. 아이콘 원본은 `packaging/icons/`의 SVG다.
 
 ## Mock 데이터
 
