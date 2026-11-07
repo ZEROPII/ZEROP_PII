@@ -1,4 +1,6 @@
-# ZEROP_PII
+# 연구 하네스 상세
+
+> 저장소 소개는 [첫 화면 README](../README.md)에 있습니다. 이 문서는 SynthPAI(일반 게시글) 단계부터 쓰던 연구 하네스의 실행 · 검증 · 집계 · 재실행 방법을 자세히 적은 것입니다. 의료 시나리오는 [medical.md](medical.md), 운영 모드는 [medicloak/README.md](../medicloak/README.md)를 보세요.
 
 멀티턴 대화에서 준식별정보(QI)가 쌓여 대상이 몇 명까지 좁혀지는지(k)를 턴마다 계산하고, 기준 아래로 내려가려는 응답을 공개 전에 일반화·억제하는 Privacy Framework의 POC 구현입니다.
 
