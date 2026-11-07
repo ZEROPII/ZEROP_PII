@@ -1,104 +1,286 @@
-import { AlertCircle, ArrowLeft, ChevronRight, Info, Loader2, RotateCw, Search, Stethoscope } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { emrApi, fhirDate, fhirLabel, type FhirResource } from '../api/emrApi';
+import { ArrowLeft, Info, LockKeyhole, Search, Send, Stethoscope, Users } from 'lucide-react';
+import { useEffect, useMemo, useState } from 'react';
+import { Link, useNavigate, useParams } from 'react-router-dom';
+import { emrApi } from '../api/emrApi';
 import { ApiError } from '../api/types';
-import { openFailure, type OpenFailure } from '../lib/openFailure';
 import { ErrorState, LoadingState } from '../components/common/StatusViews';
+import { BreakGlassDialog } from '../components/emr/BreakGlassDialog';
+import { ChartSummary } from '../components/emr/ChartSummary';
+import { ConsultDialog } from '../components/emr/ConsultDialog';
+import { SimilarCaseBox } from '../components/emr/SimilarCaseBox';
 import { useToast } from '../components/layout/Toast';
-import { useWorkspace } from '../state/WorkspaceContext';
 import { koreanNames } from '../lib/koTerms';
-import type { LaunchProgress, VisitChoice, WorklistPatient } from '../types/domain';
+import { dateTime, sinceDay, timeLeft } from '../lib/time';
+import { useWorkspace } from '../state/WorkspaceContext';
+import type { EmrChart, EmrConsult, EmrMe, WorklistPatient } from '../types/domain';
 
 const SEX_KO = { male: '남', female: '여', unknown: '성별 미상' } as const;
-type StatusTab = WorklistPatient['status'] | 'ALL';
+type Status = WorklistPatient['status'];
+type StatusTab = Status | 'ALL';
 const TABS: { id: StatusTab; label: string }[] = [
   { id: 'ACTIVE', label: '진료 중' },
   { id: 'RESOLVED', label: '완치' },
   { id: 'DORMANT', label: '장기 미내원' },
   { id: 'ALL', label: '전체' },
 ];
-const STATUS_TITLE: Record<WorklistPatient['status'], (p: WorklistPatient) => string> = {
-  ACTIVE: (p) => `끝나지 않은 진단 · 관리 계획 ${p.openItems}건, 최근 3년 안에 기록이 있습니다`,
-  RESOLVED: () => '기록된 진단과 관리 계획이 모두 끝났습니다',
-  DORMANT: (p) => `끝나지 않은 진단 · 관리 계획 ${p.openItems}건이 있지만 마지막 기록이 3년보다 오래되었습니다`,
+const STATUS_TITLE: Record<Status, (open: number) => string> = {
+  ACTIVE: (n) => `진행 중인 진단 · 처방 · 관리 계획 ${n}건, 최근 3년 안에 내원했습니다`,
+  RESOLVED: () => '진행 중인 진단 · 처방 · 관리 계획이 없습니다',
+  DORMANT: (n) => `진행 중인 진단 · 처방 · 관리 계획 ${n}건이 있지만 마지막 내원이 3년보다 오래되었습니다`,
 };
 
-/** 성별 · 연령대 (생년 · 거주 지역은 보이지 않는다) */
-function who(p: WorklistPatient): string {
-  return [SEX_KO[p.sex], p.ageBand].filter(Boolean).join(' · ');
+/**
+ * 성별 · 연령대 (생년 · 거주 지역은 보이지 않는다). 연령대는 마지막 내원 때 나이라, 장기 미내원 환자는 그 해를 같이 적는다
+ * ('40대(1970년 기준)'). 오래전 기록의 나이를 지금 나이로 읽지 않게.
+ */
+function who(p: { sex: WorklistPatient['sex']; ageBand: string | null; ageYear?: number | null; status?: Status }): string {
+  const age = p.ageBand && p.status === 'DORMANT' && p.ageYear ? `${p.ageBand}(${p.ageYear}년 기준)` : p.ageBand;
+  return [SEX_KO[p.sex], age].filter(Boolean).join(' · ');
 }
 
-function StatusTag({ p }: { p: WorklistPatient }) {
+/** 목록 · 차트에 보이는 환자 번호: 등록번호 (없으면 예전처럼 환자 번호 앞 8자리) */
+function numberOf(p: { regno?: string | null; identifier: string }): string {
+  return p.regno ?? p.identifier;
+}
+
+function StatusTag({ status, label, openItems }: { status: Status; label: string; openItems: number }) {
   // 점 하나로 상태를 구분한다: 진료 중(채운 초록) · 완치(채운 회색) · 장기 미내원(빈 원)
-  const dot = p.status === 'ACTIVE' ? 'bg-safe' : p.status === 'RESOLVED' ? 'bg-ink-3' : 'border border-ink-3';
+  const dot = status === 'ACTIVE' ? 'bg-safe' : status === 'RESOLVED' ? 'bg-ink-3' : 'border border-ink-3';
   return (
-    <span title={STATUS_TITLE[p.status](p)} className={`inline-flex items-center gap-1.5 whitespace-nowrap text-xs font-medium ${p.status === 'ACTIVE' ? 'text-ink' : 'text-ink-3'}`}>
+    <span title={STATUS_TITLE[status](openItems)} className={`inline-flex items-center gap-1.5 whitespace-nowrap text-xs font-medium ${status === 'ACTIVE' ? 'text-ink' : 'text-ink-3'}`}>
       <span aria-hidden className={`h-[7px] w-[7px] rounded-full ${dot}`} />
-      {p.statusLabel}
+      {label}
     </span>
   );
 }
 
-/** 진단 · 처방 기록 몇 줄 (FHIR 검색 결과, 최근 것부터) */
-function ChartList({ title, source, items, empty }: { title: string; source: string; items: FhirResource[] | null; empty: string }) {
+function GlassTag({ expiresAt }: { expiresAt: number }) {
   return (
-    <section className="border-t border-line px-4 py-3.5">
-      <h3 className="flex items-baseline justify-between gap-2 text-xs font-semibold text-ink-2">
-        {title}
-        <span className="font-mono text-[10.5px] font-normal text-ink-3">{source}</span>
+    <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-[5px] bg-caution-tint px-1.5 py-px text-[10.5px] font-bold text-caution-text" title="담당이 아닌 환자를 사유를 적고 연 예외 열람입니다. 보안 담당자가 검토합니다.">
+      <LockKeyhole className="h-3 w-3" aria-hidden />
+      예외 열람 · {timeLeft(expiresAt)}
+    </span>
+  );
+}
+
+function ConsultTag({ expiresAt }: { expiresAt: number }) {
+  return (
+    <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-[5px] bg-iris-tint px-1.5 py-px text-[10.5px] font-bold text-iris-text" title="담당 의료진이 보낸 협진 의뢰로 연 환자입니다. 감사 기록에 남고 보안 담당자가 검토합니다.">
+      <Users className="h-3 w-3" aria-hidden />
+      협진 · {timeLeft(expiresAt)}
+    </span>
+  );
+}
+
+function AccessTag({ p }: { p: Pick<WorklistPatient, 'access' | 'grant'> }) {
+  if (p.access === 'consult' && p.grant) return <ConsultTag expiresAt={p.grant.expiresAt} />;
+  if (p.access === 'break_glass' && p.grant) return <GlassTag expiresAt={p.grant.expiresAt} />;
+  return null;
+}
+
+/** 받은 협진 의뢰: 목록 맨 위. '열기'를 누르면 번호를 적지 않고 연다 (사유는 의뢰 내용). */
+function ConsultInbox({ items, onOpen, onDecline }: { items: EmrConsult[]; onOpen(c: EmrConsult): void; onDecline(c: EmrConsult): void }) {
+  const [asking, setAsking] = useState<number | null>(null);
+  return (
+    <section aria-label="받은 협진 의뢰" className="border-b border-line">
+      <h3 className="flex items-center gap-1.5 bg-iris-tint px-4 py-1.5 text-[11.5px] font-bold text-iris-text">
+        <Send className="h-3 w-3" aria-hidden />
+        받은 협진 의뢰 {items.length}건
       </h3>
-      {!items ? (
-        <p className="mt-2 text-[13px] text-ink-3">불러오는 중</p>
-      ) : items.length === 0 ? (
-        <p className="mt-2 text-[13px] text-ink-3">{empty}</p>
-      ) : (
-        <ul className="mt-1.5 space-y-1">
-          {items.map((r) => (
-            <li key={r.id} className="flex items-baseline justify-between gap-3 text-[13px]">
-              <span className="min-w-0 truncate text-ink" title={fhirLabel(r)}>
-                {fhirLabel(r)}
+      <ul className="divide-y divide-line">
+        {items.map((c) => (
+          <li key={c.id} className="px-4 py-2.5">
+            <p className="flex items-baseline gap-2">
+              <span className="num text-[13px] font-semibold text-ink">{c.regno ?? '등록번호 없음'}</span>
+              <span className="text-xs text-ink-3">{who({ sex: c.sex ?? 'unknown', ageBand: c.ageBand ?? null })}</span>
+              <span className="num ml-auto text-[11px] text-ink-3" title="보낸 시각">
+                {dateTime(c.createdAt)}
               </span>
-              <span className="num shrink-0 text-xs text-ink-3">{(fhirDate(r) ?? '').slice(0, 10)}</span>
-            </li>
-          ))}
-        </ul>
-      )}
+            </p>
+            <p className="mt-0.5 text-xs text-ink-2">
+              {c.sender.displayName}
+              {c.sender.department ? `(${c.sender.department})` : ''} 선생님이 보냄{c.status === 'opened' ? ' · 연 적 있음' : ''}
+            </p>
+            <p className="mt-1 line-clamp-2 text-[12.5px] leading-5 text-ink" title={c.note}>
+              {c.note}
+            </p>
+            {asking === c.id ? (
+              <div className="mt-2 rounded-control bg-surface-2 px-2.5 py-2 text-xs text-ink-2">
+                보낸 의료진에게 거절로 보입니다.
+                <span className="mt-1.5 flex gap-1.5">
+                  <button type="button" className="btn-primary btn-sm h-7" onClick={() => onDecline(c)}>
+                    거절하기
+                  </button>
+                  <button type="button" className="btn-ghost btn-sm h-7" onClick={() => setAsking(null)}>
+                    취소
+                  </button>
+                </span>
+              </div>
+            ) : (
+              <div className="mt-2 flex gap-1.5">
+                <button type="button" className="btn-primary btn-sm h-7" onClick={() => onOpen(c)}>
+                  {c.status === 'opened' ? '다시 열기' : '열기'}
+                </button>
+                {c.status === 'pending' && (
+                  <button type="button" className="btn-ghost btn-sm h-7 text-ink-2" onClick={() => setAsking(c.id)}>
+                    거절
+                  </button>
+                )}
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
     </section>
   );
 }
 
-function recent(items: FhirResource[], n: number): FhirResource[] {
-  return [...items].sort((a, b) => (fhirDate(b) ?? '').localeCompare(fhirDate(a) ?? '')).slice(0, n);
+function PatientRow({ p, active, current }: { p: WorklistPatient; active: boolean; current: boolean }) {
+  return (
+    <li>
+      <Link
+        to={`/emr/${encodeURIComponent(p.fhirId)}`}
+        aria-current={active ? 'page' : undefined}
+        className={`block border-b border-line px-4 py-2.5 ${active ? 'bg-iris-tint shadow-[inset_3px_0_0_var(--zp-iris)]' : 'hover:bg-surface-2'}`}
+      >
+        <span className="flex items-baseline gap-2">
+          <span className="num text-[13px] font-semibold text-ink" title={p.regno ? '등록번호' : '환자 번호'}>
+            {numberOf(p)}
+          </span>
+          {current && <span className="rounded-[5px] bg-iris px-1.5 py-px text-[10.5px] font-bold text-iris-on">AI 대화 중</span>}
+          <span className="num ml-auto text-[11.5px] text-ink-3" title="마지막 내원">
+            {p.lastRecord ?? '–'}
+          </span>
+        </span>
+        <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-3">
+          {who(p)}
+          <StatusTag status={p.status} label={p.statusLabel} openItems={p.openItems} />
+          <AccessTag p={p} />
+        </span>
+        <span className="mt-1 block truncate text-[12.5px] text-ink-2" title={p.conditions.join(', ')}>
+          {p.conditions.slice(0, 2).join(', ') || '진단 기록 없음'}
+        </span>
+      </Link>
+    </li>
+  );
+}
+
+function ChartHeader({
+  chart,
+  row,
+  onBack,
+  onConsult,
+  onCancelConsult,
+}: {
+  chart: EmrChart;
+  row: WorklistPatient | null;
+  onBack(): void;
+  /** 담당 의료진이면 협진 의뢰 보내기 */
+  onConsult: (() => void) | null;
+  onCancelConsult(c: EmrConsult): void;
+}) {
+  const p = chart.patient;
+  const via = chart.access?.via;
+  const grant = chart.access?.grant ?? null;
+  const received = chart.consult?.received ?? null;
+  const sent = chart.consult?.sent ?? [];
+  const last = p.lastRecord;
+  const facts: [string, string][] = [
+    ['대표 진단', p.conditions.slice(0, 3).join(', ') || '없음'],
+    [p.status === 'DORMANT' ? '마지막 내원 때 진행 중' : '진행 중', `진단 ${chart.problems.active} · 처방 ${chart.medications.active} · 관리 계획 ${chart.carePlans.active}`],
+    ['마지막 내원', last ? `${last} (${sinceDay(last)})` : '–'],
+    ['내원', `${chart.visitDays}일${chart.firstRecord ? ` (${chart.firstRecord.slice(0, 4)}년부터)` : ''}`],
+  ];
+  return (
+    <header className="border-b border-line bg-emr-banner px-4 py-3 md:px-5">
+      <button type="button" onClick={onBack} className="btn-ghost btn-sm -ml-2 mb-1 h-7 gap-1 text-ink-2 lg:hidden">
+        <ArrowLeft className="h-3.5 w-3.5" aria-hidden />내 담당 환자
+      </button>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+        <h2 className="flex items-baseline gap-1.5 text-ink">
+          <span className="text-xs font-semibold text-ink-3">{p.regno ? '등록번호' : '환자 번호'}</span>
+          <span className="num text-[19px] font-bold tracking-[-0.01em]">{numberOf(p)}</span>
+        </h2>
+        <span className="text-[13px] text-ink-2">{who(p)}</span>
+        <StatusTag status={p.status} label={p.statusLabel} openItems={p.openItems} />
+        {via === 'consult' && grant ? (
+          <ConsultTag expiresAt={grant.expiresAt} />
+        ) : via === 'break_glass' && grant ? (
+          <GlassTag expiresAt={grant.expiresAt} />
+        ) : (
+          row?.access === 'assigned' && <span className="rounded-[5px] border border-line px-1.5 py-px text-[10.5px] font-semibold text-ink-3">담당</span>
+        )}
+        {onConsult && (
+          <button type="button" className="btn-ghost btn-sm ml-auto h-8 gap-1.5 border border-line bg-surface text-ink-2" onClick={onConsult}>
+            <Send className="h-3.5 w-3.5" aria-hidden />
+            협진 의뢰
+          </button>
+        )}
+      </div>
+      <dl className="mt-2 grid grid-cols-1 gap-x-6 gap-y-1 text-[13px] sm:grid-cols-2 2xl:flex 2xl:flex-wrap">
+        {facts.map(([k, v]) => (
+          <div key={k} className="flex min-w-0 items-baseline gap-2">
+            <dt className="shrink-0 text-xs text-ink-3">{k}</dt>
+            <dd className="min-w-0 truncate font-semibold text-ink" title={v}>
+              {v}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      {via === 'break_glass' && grant && (
+        <p className="mt-2 text-xs leading-5 text-ink-2">
+          {grant.reasonLabel}: {grant.note} · 이 열람은 감사 기록에 남고 보안 담당자가 검토합니다.
+        </p>
+      )}
+      {via === 'consult' && (
+        <p className="mt-2 text-xs leading-5 text-ink-2">
+          {received ? `${received.sender.displayName}${received.sender.department ? `(${received.sender.department})` : ''} 선생님의 협진 의뢰: ${received.note}` : grant?.note}
+          {' · '}이 열람은 감사 기록에 남고 보안 담당자가 검토합니다.
+        </p>
+      )}
+      {sent.length > 0 && (
+        <ul className="mt-2 space-y-1">
+          {sent.map((c) => (
+            <li key={c.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-2">
+              <Send className="h-3 w-3 text-iris-text" aria-hidden />
+              <span>
+                {c.receiver.displayName}
+                {c.receiver.department ? `(${c.receiver.department})` : ''} 선생님께 협진 의뢰함 ·{' '}
+                <strong className="font-semibold text-ink">{c.status === 'opened' ? '상대가 열어 봄' : '아직 열지 않음'}</strong>
+              </span>
+              <button type="button" className="btn-ghost btn-sm h-6 px-1.5 text-xs text-ink-3 hover:text-ink" onClick={() => onCancelConsult(c)}>
+                의뢰 취소
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </header>
+  );
 }
 
 /**
- * EMR 외래 진료 목록 (python -m medicloak). 환자와 진료 목적을 골라 진료 지원 AI를 연다.
- * 환자 기록은 가상 EMR의 FHIR API(/fhir)에서 읽는다. 여기 나오는 환자는 외래 환자뿐이고,
- * 진료 지원 AI가 찾아 줄 비슷한 과거 사례의 기록은 EMR로 열 수 없다 (AI 답과 MediCloak 보호를 거쳐서만 보인다).
+ * 내 담당 환자 (python -m medicloak): 로그인한 의료진의 담당 외래 환자 목록 → 차트 요약 → 유사 사례 찾기(진료 지원 AI).
+ * 담당이 아닌 환자는 목록에 없다. 협진은 담당 의료진이 보낸 의뢰를 목록 위에서 번호 없이 열고, 당직 · 응급처럼 꼭 봐야 할 때만
+ * '담당 외 환자 열기'에 등록번호와 사유를 적고 연다 (ADR-0034 · ADR-0036).
+ * 여기 나오는 환자는 외래 환자뿐이다. 진료 지원 AI가 찾아 줄 과거 사례의 기록은 EMR로 열 수 없다 (AI 답과 MediCloak 보호를 거쳐서만 보인다).
  */
 export function EmrPage() {
+  const { fhirId: picked = null } = useParams();
   const navigate = useNavigate();
   const toast = useToast();
-  const { state, actions } = useWorkspace();
+  const { state } = useWorkspace();
+  const currentTrial = state.patient.data?.trialId;
   const [list, setList] = useState<WorklistPatient[] | null>(null);
+  const [me, setMe] = useState<EmrMe | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [q, setQ] = useState('');
-  const [picked, setPicked] = useState<string | null>(null);
-  const [purpose, setPurpose] = useState<string | null>(null);
-  const [chart, setChart] = useState<{ id: string; conditions: FhirResource[] | null; meds: FhirResource[] | null } | null>(null);
-  const [busy, setBusy] = useState(false);
-  /** 열기가 실패한 까닭 (다시 시도하거나 닫을 때까지 남긴다) */
-  const [failed, setFailed] = useState<OpenFailure | null>(null);
   const [tab, setTab] = useState<StatusTab>('ACTIVE');
-  const [confirm, setConfirm] = useState(false);
-  const [progress, setProgress] = useState<LaunchProgress | null>(null);
-  // 오늘 볼 진단: 진료 목적마다 고를 수 있는 진단(서버) · 의사가 기본과 다르게 고른 것 (진료 목적 → 진단 사건 번호)
-  const [visits, setVisits] = useState<{ id: string; purposes: Record<string, VisitChoice[]> | null } | null>(null);
-  const [chosen, setChosen] = useState<Record<string, string>>({});
-  const detailRef = useRef<HTMLElement>(null);
-  const current = state.patient.data ?? null;
-  const currentTrial = current?.trialId;
+  const [chart, setChart] = useState<{ id: string; data: EmrChart | null; error: ApiError | Error | null } | null>(null);
+  const [glassOpen, setGlassOpen] = useState(false);
+  const [consultOpen, setConsultOpen] = useState(false);
+  const [consults, setConsults] = useState<EmrConsult[]>([]);
+  const [reload, setReload] = useState(0);
 
   useEffect(() => {
     const ctl = new AbortController();
@@ -107,184 +289,116 @@ export function EmrPage() {
         setList(x);
         setError(null);
       },
-      (e) => !(e instanceof DOMException) && setError(e instanceof Error ? e.message : '외래 목록을 불러오지 못했습니다.'),
+      (e) => !(e instanceof DOMException) && setError(e instanceof Error ? e.message : '담당 환자 목록을 불러오지 못했습니다.'),
+    );
+    emrApi.me(ctl.signal).then(setMe, () => undefined);
+    emrApi.consults(ctl.signal).then(
+      (x) => setConsults(x.received),
+      () => undefined,
     );
     return () => ctl.abort();
-  }, []);
+  }, [reload]);
 
-  const counts = useMemo(
-    () => {
-      const n = (s: WorklistPatient['status']) => list?.filter((p) => p.status === s).length ?? 0;
-      return { ACTIVE: n('ACTIVE'), RESOLVED: n('RESOLVED'), DORMANT: n('DORMANT'), ALL: list?.length ?? 0 };
-    },
-    [list],
-  );
+  // 고른 환자의 차트 요약 (열면 서버가 접근 기록에 남긴다)
+  useEffect(() => {
+    if (!picked) {
+      setChart(null);
+      return;
+    }
+    const ctl = new AbortController();
+    setChart({ id: picked, data: null, error: null });
+    emrApi.chart(picked, ctl.signal).then(
+      (data) => setChart((c) => (c && c.id === picked ? { ...c, data } : c)),
+      (e) => !(e instanceof DOMException) && setChart((c) => (c && c.id === picked ? { ...c, error: e instanceof Error ? e : new Error(String(e)) } : c)),
+    );
+    return () => ctl.abort();
+  }, [picked, reload]);
 
+  const mine = useMemo(() => (list ?? []).filter((p) => !p.access || p.access === 'assigned'), [list]);
+  const glass = useMemo(() => (list ?? []).filter((p) => p.access === 'consult' || p.access === 'break_glass'), [list]);
+  // 받은 협진 의뢰 중 열 것: 아직 열지 않았거나, 열었던 열람이 끝나 목록에 없는 것 (기한 안)
+  const inbox = useMemo(() => consults.filter((c) => c.open && (c.status === 'pending' || !glass.some((p) => p.fhirId === c.fhirId))), [consults, glass]);
+  const counts = useMemo(() => {
+    const n = (s: Status) => mine.filter((p) => p.status === s).length;
+    return { ACTIVE: n('ACTIVE'), RESOLVED: n('RESOLVED'), DORMANT: n('DORMANT'), ALL: mine.length };
+  }, [mine]);
   const shown = useMemo(() => {
     const t = q.trim().toLowerCase();
-    if (!list) return [];
-    const inTab = tab === 'ALL' ? list : list.filter((p) => p.status === tab);
+    const inTab = tab === 'ALL' ? mine : mine.filter((p) => p.status === tab);
     if (!t) return inTab;
     // 진단 이름이 영어라 한국어 이름(기관지염 · 치은염 …)도 함께 찾는다
     return inTab.filter((p) =>
-      [p.identifier, ...p.conditions, ...p.purposes.map((x) => `${x.mainDx ?? ''} ${x.item ?? ''} ${x.purposeLabel}`)].some((s) =>
+      [p.regno ?? '', p.regno?.replace('-', '') ?? '', p.identifier, ...p.conditions, ...p.purposes.map((x) => `${x.mainDx ?? ''} ${x.item ?? ''} ${x.purposeLabel}`)].some((s) =>
         `${s} ${koreanNames(s)}`.toLowerCase().includes(t),
       ),
     );
-  }, [list, q, tab]);
+  }, [mine, q, tab]);
 
-  const patient = list?.find((p) => p.fhirId === picked) ?? null;
+  const row = list?.find((p) => p.fhirId === picked) ?? null;
+  const isCurrent = (p: WorklistPatient) => p.purposes.some((x) => x.trialId === currentTrial);
+  const breakGlass = me?.breakGlass.on ? me.breakGlass : null;
+  const chartData = chart?.id === picked ? chart.data : null;
+  const chartError = chart?.id === picked ? chart.error : null;
 
-  // 고른 환자의 진단 · 처방 기록 (FHIR)
-  useEffect(() => {
-    if (!picked) return;
-    const ctl = new AbortController();
-    setChart({ id: picked, conditions: null, meds: null });
-    emrApi.search('Condition', picked, ctl.signal).then(
-      (b) => setChart((c) => (c && c.id === picked ? { ...c, conditions: recent((b.entry ?? []).map((e) => e.resource), 6) } : c)),
-      () => setChart((c) => (c && c.id === picked ? { ...c, conditions: [] } : c)),
-    );
-    emrApi.search('MedicationRequest', picked, ctl.signal).then(
-      (b) => setChart((c) => (c && c.id === picked ? { ...c, meds: recent((b.entry ?? []).map((e) => e.resource), 6) } : c)),
-      () => setChart((c) => (c && c.id === picked ? { ...c, meds: [] } : c)),
-    );
-    return () => ctl.abort();
-  }, [picked]);
-
-  // 고른 환자의 '오늘 볼 진단' 후보 (진료 목적마다). 받지 못하면 고르기 없이 기본 기준 진료로 연다.
-  useEffect(() => {
-    if (!picked) return;
-    const ctl = new AbortController();
-    setVisits({ id: picked, purposes: null });
-    emrApi.visits(picked, ctl.signal).then(
-      (x) => setVisits((v) => (v && v.id === picked ? { id: picked, purposes: x.purposes } : v)),
-      () => setVisits((v) => (v && v.id === picked ? { id: picked, purposes: {} } : v)),
-    );
-    return () => ctl.abort();
-  }, [picked]);
-
-  // 여는 동안 서버가 알려 주는 지금 단계 (실제 LLM 호출이 차례로 몇 번 이어진다)
-  useEffect(() => {
-    if (!busy) {
-      setProgress(null);
-      return;
-    }
-    let stop = false;
-    let timer = 0;
-    const tick = () => {
-      emrApi.launchProgress().then(
-        (p) => !stop && setProgress(p),
-        () => undefined,
-      );
-      if (!stop) timer = window.setTimeout(tick, 700);
-    };
-    timer = window.setTimeout(tick, 250);
-    return () => {
-      stop = true;
-      window.clearTimeout(timer);
-    };
-  }, [busy]);
-
-  function pick(p: WorklistPatient) {
-    setConfirm(false);
-    if (p.fhirId !== picked) setFailed(null); // 다른 환자를 고르면 앞의 실패 안내는 지운다
-    setPicked(p.fhirId);
-    const cur = p.purposes.find((x) => x.trialId === currentTrial);
-    setPurpose((cur ?? p.purposes[0]).purpose);
-    // 지금 연 대화가 고른 진단으로 연 것이면 그 진단을 골라 둔다 ('돌아가기'가 되게)
-    setChosen(cur && current?.visitChosen && current.visitEvent ? { [cur.purpose]: current.visitEvent } : {});
-    window.setTimeout(() => {
-      if (window.matchMedia('(max-width: 1023px)').matches) detailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }, 0);
+  function onOpened(fhirId: string, created: boolean, regno?: string | null) {
+    setGlassOpen(false);
+    const no = regno ?? fhirId.slice(0, 8);
+    toast(created ? `${no} 환자를 예외 열람으로 열었습니다. 감사 기록에 남았습니다.` : `${no} 환자는 이미 예외 열람 중입니다.`);
+    setReload((n) => n + 1);
+    navigate(`/emr/${encodeURIComponent(fhirId)}`);
   }
 
-  async function open() {
-    if (!patient || !purpose) return;
-    setConfirm(false);
-    setFailed(null);
-    setBusy(true);
-    const started = Date.now();
+  async function openConsult(c: EmrConsult) {
     try {
-      const r = await emrApi.launch(patient.fhirId, purpose, visitEvent);
-      actions.resetAndReload();
-      toast(`환자 ${patient.identifier}로 진료 지원 AI를 열었습니다${r.seconds != null ? ` (${Math.round(r.seconds)}초)` : ''}.`);
-      navigate('/');
+      const r = await emrApi.openConsult(c.id);
+      toast(`협진 의뢰로 ${c.regno ?? '환자'} 차트를 열었습니다. ${me?.consult?.hours ?? 12}시간 동안 볼 수 있습니다.`);
+      setReload((n) => n + 1);
+      navigate(`/emr/${encodeURIComponent(r.fhirId)}`);
     } catch (e) {
-      const status = e instanceof ApiError ? (e.status ?? 0) : 0;
-      setFailed(openFailure(status, e instanceof Error ? e.message : '진료 지원 AI를 열지 못했습니다.', (Date.now() - started) / 1000));
-      // 앞단이 끊었어도 서버는 그 사이 환자를 열었을 수 있다: 진료 중 환자 띠를 다시 받는다
-      if (!status || status >= 500) actions.resetAndReload();
-    } finally {
-      setBusy(false);
+      toast(e instanceof Error ? e.message : '협진 의뢰를 열지 못했습니다.');
+      setReload((n) => n + 1);
     }
   }
 
-  const sel = patient?.purposes.find((x) => x.purpose === purpose) ?? null;
-  const choices = (patient && purpose && visits?.id === patient.fhirId && visits.purposes?.[purpose]) || null;
-  const defaultChoice = choices?.find((c) => c.isDefault) ?? null;
-  // 기본과 다르게 고른 진단 (없으면 null = 기본 기준 진료)
-  const choice = (purpose && chosen[purpose] && choices?.find((c) => c.eventId === chosen[purpose] && !c.isDefault)) || null;
-  const visitEvent = choice?.eventId ?? null;
-  // 진료 목적이 모두 같은 날 기준이면 날짜를 한 번만 보인다 (오늘 진단을 골랐으면 카드마다)
-  const days = [...new Set((patient?.purposes ?? []).map((x) => x.visitDate))];
-  const sameDay = days.length === 1 && !choice ? days[0] : null;
-  const selIsCurrent =
-    !!sel && sel.trialId === currentTrial && (current?.visitChosen ? current.visitEvent === visitEvent : visitEvent === null);
-  const switching = !!current && !!sel && !selIsCurrent;
-
-  function choose(eventId: string) {
-    if (!purpose) return;
-    setChosen((c) => {
-      const next = { ...c };
-      if (eventId === defaultChoice?.eventId) delete next[purpose];
-      else next[purpose] = eventId;
-      return next;
-    });
-    setConfirm(false);
+  async function declineConsult(c: EmrConsult) {
+    try {
+      await emrApi.declineConsult(c.id);
+      toast(`${c.sender.displayName} 선생님의 협진 의뢰를 거절했습니다.`);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '협진 의뢰를 거절하지 못했습니다.');
+    }
+    setReload((n) => n + 1);
   }
 
-  // 환자 · 진료 목적(· 오늘 진단)을 고르고 1초쯤 머물면 서버가 첫 답을 뒤에서 미리 만들어 둔다 ('열기'가 짧아진다). 결과는 화면에 알리지 않는다.
-  const prefetchFor = sel && !selIsCurrent && patient ? JSON.stringify([patient.fhirId, sel.purpose, visitEvent]) : null;
-  useEffect(() => {
-    if (!prefetchFor) return;
-    const [fhirId, why, ev] = JSON.parse(prefetchFor) as [string, string, string | null];
-    const t = window.setTimeout(() => void emrApi.prefetch(fhirId, why, ev), 1000);
-    return () => window.clearTimeout(t);
-  }, [prefetchFor]);
-
-  function onOpen() {
-    if (selIsCurrent) {
-      navigate('/');
-      return;
+  async function cancelConsult(c: EmrConsult) {
+    try {
+      await emrApi.cancelConsult(c.id);
+      toast(`${c.receiver.displayName} 선생님께 보낸 협진 의뢰를 취소했습니다. 그 의뢰로 연 열람도 끝났습니다.`);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '협진 의뢰를 취소하지 못했습니다.');
     }
-    if (switching && !confirm) {
-      setConfirm(true);
-      return;
-    }
-    void open();
+    setReload((n) => n + 1);
   }
 
   return (
-    <div className="grid h-full min-h-0 grid-cols-1 overflow-y-auto lg:grid-cols-[minmax(0,1fr)_400px] lg:overflow-hidden">
-      <section aria-label="외래 진료 목록" className="flex flex-col lg:min-h-0 lg:border-r lg:border-line">
-        <header className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-line px-4 py-3 md:px-5">
-          <div className="min-w-0">
-            <h2 className="text-[15px] font-bold text-ink">외래 진료 목록</h2>
-            <p className="text-xs text-ink-3">지금 진료할 환자를 고르세요. 고른 환자로 진료 지원 AI가 열리고, 위의 진료 중 환자가 이 환자로 바뀝니다.</p>
-          </div>
-          <label className="relative ml-auto w-full sm:w-[280px]">
-            <span className="sr-only">환자 찾기</span>
+    <div className="grid h-full min-h-0 grid-cols-1 lg:grid-cols-[300px_minmax(0,1fr)]">
+      <aside aria-label="내 담당 환자" className={`${picked ? 'hidden lg:flex' : 'flex'} min-h-0 flex-col border-line bg-surface lg:border-r`}>
+        <header className="border-b border-line px-4 pb-3 pt-3.5">
+          <h2 className="flex items-baseline gap-2 text-[15px] font-bold text-ink">
+            내 담당 환자
+            {list && <span className="num text-[13px] font-semibold text-ink-3">{mine.length}명</span>}
+          </h2>
+          <label className="relative mt-2.5 block">
+            <span className="sr-only">담당 환자 찾기</span>
             <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-ink-3" aria-hidden />
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="환자 번호, 진단(한글 · 영문), 처치"
+              placeholder="등록번호, 진단(한글 · 영문), 처치"
               className="h-9 w-full rounded-control border border-line-input bg-surface pl-8 pr-3 text-[13px] text-ink outline-none placeholder:text-ink-3 focus:border-focus"
             />
           </label>
-        </header>
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-line px-4 py-2 md:px-5">
-          <div role="tablist" aria-label="진료 상태" className="flex flex-wrap gap-1">
+          <div role="tablist" aria-label="진료 상태" className="mt-2.5 grid grid-cols-4 gap-0.5 rounded-[9px] bg-surface-2 p-0.5">
             {TABS.map((t) => (
               <button
                 key={t.id}
@@ -292,232 +406,129 @@ export function EmrPage() {
                 type="button"
                 aria-selected={tab === t.id}
                 onClick={() => setTab(t.id)}
-                className={`h-7 rounded-[8px] px-2.5 text-[13px] font-semibold ${tab === t.id ? 'bg-surface text-ink shadow-sm ring-1 ring-line' : 'text-ink-3 hover:text-ink'}`}
+                className={`flex h-[34px] flex-col items-center justify-center rounded-[7px] text-[11.5px] font-semibold leading-tight ${tab === t.id ? 'bg-surface text-ink shadow-sm ring-1 ring-line' : 'text-ink-3 hover:text-ink'}`}
               >
-                {t.label} <span className="num font-normal text-ink-3">{counts[t.id]}</span>
+                <span className="whitespace-nowrap">{t.label}</span>
+                <span className="num text-[10.5px] font-normal text-ink-3">{counts[t.id]}</span>
               </button>
             ))}
           </div>
-          <p className="flex min-w-0 items-start gap-1.5 text-xs leading-5 text-ink-3">
-            <Info className="mt-[3px] h-3.5 w-3.5 shrink-0" aria-hidden />
-            <span>비슷한 과거 사례는 이 목록에서 찾지 않습니다. 진료 지원 AI는 이 목록에 없는 병원의 과거 기록 환자에서 찾고, 그 기록은 MediCloak을 거쳐서만 보입니다.</span>
-          </p>
-        </div>
+        </header>
         {error ? (
           <ErrorState message={error} />
         ) : !list ? (
-          <LoadingState label="외래 목록을 불러오는 중" />
+          <LoadingState label="담당 환자를 불러오는 중" />
         ) : (
-          <div className="scroll-thin lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
-            <table className="w-full border-collapse text-[13px]">
-              <thead className="bg-page lg:sticky lg:top-0 lg:z-[1]">
-                <tr className="text-left text-xs text-ink-3">
-                  <th className="border-b border-line px-4 py-2 font-semibold md:pl-5">환자</th>
-                  <th className="hidden border-b border-line px-3 py-2 font-semibold sm:table-cell">진료 상태</th>
-                  <th className="hidden border-b border-line px-3 py-2 font-semibold md:table-cell">대표 진단</th>
-                  <th className="border-b border-line px-3 py-2 font-semibold">진료 목적</th>
-                  <th className="hidden border-b border-line px-3 py-2 text-right font-semibold sm:table-cell">마지막 기록</th>
-                </tr>
-              </thead>
-              <tbody>
-                {shown.map((p) => {
-                  const active = p.fhirId === picked;
-                  const isCurrent = p.purposes.some((x) => x.trialId === currentTrial);
-                  return (
-                    <tr
-                      key={p.fhirId}
-                      onClick={() => pick(p)}
-                      aria-selected={active}
-                      className={`cursor-pointer ${active ? 'bg-iris-tint' : 'hover:bg-surface-2'}`}
-                    >
-                      <td className={`border-b border-line px-4 py-2.5 align-top md:pl-5 ${active ? 'shadow-[inset_3px_0_0_var(--zp-iris)]' : ''}`}>
-                        <button type="button" onClick={() => pick(p)} className="text-left">
-                          <span className="font-mono text-[13px] font-semibold text-ink">{p.identifier}</span>
-                          {isCurrent && (
-                            <span className="ml-2 rounded-[5px] bg-iris px-1.5 py-px text-[10.5px] font-bold text-iris-on" title="위 진료 중 환자 띠에 열려 있는 환자">
-                              지금 연 환자
-                            </span>
-                          )}
-                        </button>
-                        <span className="mt-0.5 flex items-center gap-1.5 text-xs text-ink-3">
-                          {who(p)}
-                          <span className="sm:hidden">
-                            <StatusTag p={p} />
-                          </span>
-                        </span>
-                      </td>
-                      <td className="hidden border-b border-line px-3 py-2.5 align-top sm:table-cell">
-                        <StatusTag p={p} />
-                      </td>
-                      <td className="hidden max-w-[260px] border-b border-line px-3 py-2.5 align-top text-ink-2 md:table-cell">
-                        <span className="line-clamp-2">{p.conditions.slice(0, 2).join(', ') || '기록 없음'}</span>
-                      </td>
-                      <td className="border-b border-line px-3 py-2.5 align-top">
-                        <span className="text-xs leading-5 text-ink-2">{p.purposes.map((x) => x.purposeLabel).join(' · ')}</span>
-                      </td>
-                      <td className="num hidden border-b border-line px-3 py-2.5 text-right align-top text-xs text-ink-3 sm:table-cell">{p.lastRecord ?? '–'}</td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            {shown.length === 0 && <p className="px-5 py-8 text-center text-[13px] text-ink-3">맞는 환자가 없습니다.</p>}
-            <p className="px-4 py-3 text-xs text-ink-3 md:px-5">
-              외래 환자 {list.length}명 · 진단 · 처방 기록은 EMR의 FHIR R4 API에서 읽습니다.
-            </p>
+          <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
+            {inbox.length > 0 && <ConsultInbox items={inbox} onOpen={(c) => void openConsult(c)} onDecline={(c) => void declineConsult(c)} />}
+            {glass.length > 0 && (
+              <section aria-label="담당 외 환자 (협진 · 예외 열람)" className="border-b border-line">
+                <h3 className="bg-surface-2 px-4 py-1.5 text-[11.5px] font-bold text-ink-2">담당 외 환자 · 협진 · 예외 열람</h3>
+                <ul>
+                  {glass.map((p) => (
+                    <PatientRow key={p.fhirId} p={p} active={p.fhirId === picked} current={isCurrent(p)} />
+                  ))}
+                </ul>
+              </section>
+            )}
+            {mine.length === 0 ? (
+              <p className="px-4 py-8 text-center text-[13px] leading-6 text-ink-3">
+                아직 담당으로 배정된 환자가 없습니다.
+                <br />
+                병원 관리자에게 담당 배정을 요청하세요.
+              </p>
+            ) : shown.length === 0 ? (
+              <p className="px-4 py-8 text-center text-[13px] text-ink-3">맞는 환자가 없습니다.</p>
+            ) : (
+              <ul>
+                {shown.map((p) => (
+                  <PatientRow key={p.fhirId} p={p} active={p.fhirId === picked} current={isCurrent(p)} />
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+        <footer className="border-t border-line px-4 py-3">
+          {breakGlass ? (
+            <button type="button" className="btn-ghost btn-sm h-8 w-full justify-center gap-1.5 border border-line text-ink-2" onClick={() => setGlassOpen(true)}>
+              <LockKeyhole className="h-3.5 w-3.5" aria-hidden />
+              담당 외 환자 열기
+            </button>
+          ) : (
+            me && <p className="text-xs leading-5 text-ink-3">이 병원 설정에서는 담당 환자만 열 수 있습니다.</p>
+          )}
+        </footer>
+      </aside>
+
+      <section aria-label="환자 차트" className={`${picked ? 'flex' : 'hidden lg:flex'} min-h-0 flex-col`}>
+        {!picked ? (
+          <div className="grid flex-1 place-items-center px-6 py-12 text-center">
+            <div className="max-w-[360px]">
+              <Stethoscope className="mx-auto h-7 w-7 text-ink-3" aria-hidden />
+              <p className="mt-3 text-[14px] font-semibold text-ink">환자를 고르면 차트 요약이 나옵니다</p>
+              <p className="mt-1.5 text-[13px] leading-6 text-ink-2">진단 이력, 처방, 시술, 관리 계획, 최근 내원을 본 뒤 필요하면 같은 화면에서 유사 사례를 찾습니다.</p>
+              <p className="mt-4 flex items-start justify-center gap-1.5 text-left text-xs leading-5 text-ink-3">
+                <Info className="mt-[3px] h-3.5 w-3.5 shrink-0" aria-hidden />
+                <span>비슷한 과거 사례는 이 목록에서 찾지 않습니다. 진료 지원 AI는 병원의 과거 기록 환자에서 찾고, 그 기록은 MediCloak을 거쳐서만 보입니다.</span>
+              </p>
+            </div>
+          </div>
+        ) : chartError ? (
+          <div className="flex flex-1 flex-col">
+            <div className="px-4 pt-3 lg:hidden">
+              <button type="button" onClick={() => navigate('/emr')} className="btn-ghost btn-sm -ml-2 h-7 gap-1 text-ink-2">
+                <ArrowLeft className="h-3.5 w-3.5" aria-hidden />내 담당 환자
+              </button>
+            </div>
+            <ErrorState message={chartError.message} />
+            {chartError instanceof ApiError && chartError.status === 403 && breakGlass && (
+              <div className="flex justify-center pb-8">
+                <button type="button" className="btn-ghost btn-sm gap-1.5 border border-line" onClick={() => setGlassOpen(true)}>
+                  <LockKeyhole className="h-3.5 w-3.5" aria-hidden />
+                  담당 외 환자 열기
+                </button>
+              </div>
+            )}
+          </div>
+        ) : !chartData ? (
+          <LoadingState label="차트를 불러오는 중" />
+        ) : (
+          // 좁은 화면: 머리 · 유사 사례 찾기 · 차트가 한 줄로 함께 내려간다.
+          // 넓은 화면(xl): 머리는 위에 두고, 차트와 유사 사례 찾기가 따로 내려간다 (한쪽이 길어도 다른 쪽 끝까지 볼 수 있게)
+          <div className="scroll-thin min-h-0 flex-1 overflow-y-auto xl:flex xl:flex-col xl:overflow-hidden">
+            <ChartHeader
+              chart={chartData}
+              row={row}
+              onBack={() => navigate('/emr')}
+              onConsult={chartData.consult?.canSend && me?.consult?.on ? () => setConsultOpen(true) : null}
+              onCancelConsult={(c) => void cancelConsult(c)}
+            />
+            <div className="grid grid-cols-1 gap-4 p-4 md:px-5 xl:min-h-0 xl:flex-1 xl:grid-cols-[minmax(0,1fr)_372px] xl:gap-0 xl:p-0">
+              <div className="scroll-thin xl:order-2 xl:min-h-0 xl:overflow-y-auto xl:border-l xl:border-line xl:p-4">
+                <SimilarCaseBox fhirId={chartData.patient.fhirId} identifier={numberOf(chartData.patient)} purposes={chartData.purposes ?? row?.purposes ?? []} />
+              </div>
+              <div className="scroll-thin min-w-0 xl:order-1 xl:min-h-0 xl:overflow-y-auto xl:p-4 xl:pl-5">
+                <ChartSummary chart={chartData} />
+                <p className="mt-3 text-xs leading-5 text-ink-3">차트는 병원 EMR(가상 EMR)의 진료 기록에서 만든 요약입니다. 연 일은 접근 기록에 남습니다.</p>
+              </div>
+            </div>
           </div>
         )}
       </section>
-
-      <aside ref={detailRef} aria-label="고른 환자" className="flex flex-col border-t border-line bg-surface lg:min-h-0 lg:border-t-0">
-        {!patient ? (
-          <div className="grid flex-1 place-items-center px-6 py-12 text-center">
-            <div>
-              <Stethoscope className="mx-auto h-7 w-7 text-ink-3" aria-hidden />
-              <p className="mt-3 text-[13px] text-ink-2">목록에서 환자를 고르면 진단 · 처방 기록과 진료 목적이 여기에 나옵니다.</p>
-            </div>
-          </div>
-        ) : (
-          <>
-            <div className="scroll-thin lg:min-h-0 lg:flex-1 lg:overflow-y-auto">
-              <header className="px-4 pb-3 pt-4">
-                <p className="text-xs text-ink-3">환자</p>
-                <p className="mt-0.5 font-mono text-[18px] font-bold text-ink">{patient.identifier}</p>
-                <p className="mt-0.5 flex items-center gap-2 text-[13px] text-ink-2">
-                  {who(patient)}
-                  <StatusTag p={patient} />
-                </p>
-              </header>
-              <div className="border-t border-line px-4 py-3.5">
-                <p id="purpose-label" className="flex items-baseline justify-between gap-2 text-xs font-semibold text-ink-3">
-                  진료 목적
-                  {sameDay && (
-                    <span className="num font-normal" title="진료 지원 AI는 이 목적에 맞는 가장 최근 진료를 기준으로 환자 요약(나이 · 성별 · 주진단 · 동반질환 · 고려 중인 처치)을 만듭니다">
-                      {sameDay} 진료 기준
-                    </span>
-                  )}
-                </p>
-                <div role="radiogroup" aria-labelledby="purpose-label" className="mt-2 space-y-1.5">
-                  {patient.purposes.map((x) => {
-                    const on = x.purpose === purpose;
-                    // 오늘 진단을 골랐으면 고른 진료 목적 카드는 그 진단의 진료일 기준으로 보인다
-                    const v = on && choice ? { date: choice.date, dx: choice.label, item: choice.item, co: choice.comorbidity } : { date: x.visitDate, dx: x.mainDx, item: x.item, co: x.comorbidity };
-                    return (
-                      <label
-                        key={x.trialId}
-                        className={`flex cursor-pointer gap-2.5 rounded-control border px-3 py-2.5 ${on ? 'border-iris bg-iris-tint' : 'border-line hover:bg-surface-2'}`}
-                      >
-                        <input type="radio" name="purpose" className="mt-1 accent-[var(--zp-iris)]" checked={on} onChange={() => setPurpose(x.purpose)} />
-                        <span className="min-w-0 text-[13px]">
-                          <span className="font-semibold text-ink">{x.purposeLabel}</span>
-                          {!sameDay && (
-                            <span className="num ml-2 text-xs text-ink-3" title="진료 지원 AI는 이 목적에 맞는 가장 최근 진료를 기준으로 환자 요약(나이 · 성별 · 주진단 · 동반질환 · 고려 중인 처치)을 만듭니다">
-                              {v.date} 진료 기준
-                            </span>
-                          )}
-                          <span className="mt-0.5 block text-ink-2">
-                            {v.dx}
-                            {v.item ? ` · 고려 중: ${v.item}` : ''}
-                          </span>
-                          {v.co && <span className="mt-0.5 block text-xs text-ink-3">동반질환: {v.co}</span>}
-                        </span>
-                      </label>
-                    );
-                  })}
-                </div>
-                {choices && choices.length > 1 && (
-                  <div className="mt-3">
-                    <label htmlFor="visit-pick" className="text-xs font-semibold text-ink-3">
-                      오늘 볼 진단
-                    </label>
-                    <select
-                      id="visit-pick"
-                      value={choice?.eventId ?? defaultChoice?.eventId ?? ''}
-                      onChange={(e) => choose(e.target.value)}
-                      className="mt-1 h-9 w-full rounded-control border border-line-input bg-surface px-2 text-[13px] text-ink focus:border-focus"
-                    >
-                      {choices.map((c) => (
-                        <option key={c.eventId} value={c.eventId}>
-                          {c.label} · {c.date}
-                          {c.isDefault ? ' (기본)' : ''}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="mt-1 text-xs leading-5 text-ink-3">
-                      다른 진단을 고르면 그 진료일을 기준으로 환자 요약을 만들고 비슷한 사례를 찾습니다.
-                    </p>
-                  </div>
-                )}
-              </div>
-              <ChartList title="최근 진단" source="FHIR Condition" items={chart?.id === patient.fhirId ? chart.conditions : null} empty="진단 기록이 없습니다." />
-              <ChartList title="최근 처방" source="FHIR MedicationRequest" items={chart?.id === patient.fhirId ? chart.meds : null} empty="처방 기록이 없습니다." />
-            </div>
-            <footer className="border-t border-line px-4 py-3.5">
-              {confirm && current && (
-                <div role="alertdialog" aria-labelledby="switch-title" aria-describedby="switch-desc" className="mb-2.5 rounded-control border border-caution bg-caution-tint px-3 py-2.5">
-                  <p id="switch-title" className="text-[13px] font-semibold text-ink">
-                    진료 중 환자를 바꿉니다
-                  </p>
-                  <p id="switch-desc" className="mt-1 text-xs leading-5 text-ink-2">
-                    위 띠의 환자({current.ageSexLabel} · {current.primaryDiagnosis})를 닫고 {patient.identifier} 환자로 진료 지원 AI를 엽니다. 지금까지의 대화는 조회 기록에 남습니다.
-                  </p>
-                  <div className="mt-2 flex gap-2">
-                    <button type="button" className="btn-primary btn-sm" onClick={() => void open()}>
-                      바꿔서 열기
-                    </button>
-                    <button type="button" className="btn-ghost btn-sm" onClick={() => setConfirm(false)}>
-                      취소
-                    </button>
-                  </div>
-                </div>
-              )}
-              <button type="button" className="btn-primary h-10 w-full" disabled={busy || !sel || confirm} onClick={onOpen}>
-                {busy ? (
-                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
-                ) : selIsCurrent ? (
-                  <ArrowLeft className="h-4 w-4" aria-hidden />
-                ) : (
-                  <ChevronRight className="h-4 w-4" aria-hidden />
-                )}
-                {busy ? '진료 지원 AI를 여는 중' : !sel ? '진료 목적을 고르세요' : selIsCurrent ? '열린 진료 지원 AI로 돌아가기' : `${sel.purposeLabel} 참고로 진료 지원 AI 열기`}
-              </button>
-              {failed && !busy && (
-                <div role="alert" className="mt-2.5 rounded-control border border-danger bg-danger-tint px-3 py-2.5">
-                  <p className="flex items-center gap-1.5 text-[13px] font-semibold text-danger-text">
-                    <AlertCircle className="h-4 w-4 shrink-0" aria-hidden />
-                    진료 지원 AI를 열지 못했습니다
-                  </p>
-                  <p className="mt-1 text-xs leading-5 text-ink">{failed.detail}</p>
-                  {failed.hint && <p className="mt-0.5 text-xs leading-5 text-ink-2">{failed.hint}</p>}
-                  <div className="mt-2 flex gap-2">
-                    {failed.retry && (
-                      <button type="button" className="btn-primary btn-sm" onClick={() => void open()}>
-                        <RotateCw className="h-3.5 w-3.5" aria-hidden />
-                        다시 시도
-                      </button>
-                    )}
-                    <button type="button" className="btn-ghost btn-sm" onClick={() => setFailed(null)}>
-                      닫기
-                    </button>
-                  </div>
-                </div>
-              )}
-              {busy && (
-                <div role="status" aria-live="polite" className="mt-2.5">
-                  <div className="h-1 overflow-hidden rounded-full bg-surface-2">
-                    <div className="h-full animate-pulse rounded-full bg-iris" style={{ width: `${Math.min(92, 18 + (progress?.calls ?? 0) * 12)}%` }} />
-                  </div>
-                  <p className="mt-1.5 text-xs leading-5 text-ink-2">{progress?.label ?? '비슷한 과거 사례를 찾고 있습니다'}</p>
-                  <p className="num text-[11px] text-ink-3">{Math.round(progress?.elapsed ?? 0)}초 지남</p>
-                </div>
-              )}
-              <p className="mt-1 text-xs leading-5 text-ink-3">
-                AI에는 이 환자의 요약(나이, 성별, 주진단, 동반질환, 고려 중인 처치)만 함께 보냅니다. MediCloak은 AI가 찾아 준 과거 사례 쪽에서 나오는 값을 보호합니다.
-              </p>
-            </footer>
-          </>
-        )}
-      </aside>
+      {glassOpen && breakGlass && <BreakGlassDialog policy={breakGlass} onCancel={() => setGlassOpen(false)} onOpened={onOpened} />}
+      {consultOpen && chartData && me?.consult && (
+        <ConsultDialog
+          fhirId={chartData.patient.fhirId}
+          regno={numberOf(chartData.patient)}
+          policy={me.consult}
+          onCancel={() => setConsultOpen(false)}
+          onSent={(c) => {
+            setConsultOpen(false);
+            toast(c.created ? `${c.receiver.displayName} 선생님께 협진 의뢰를 보냈습니다.` : `${c.receiver.displayName} 선생님께 보낸 협진 의뢰가 이미 있습니다.`);
+            setReload((n) => n + 1);
+          }}
+        />
+      )}
     </div>
   );
 }

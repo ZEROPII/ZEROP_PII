@@ -73,6 +73,8 @@ export type WorkspaceAction =
   | { type: 'send/start'; caseId: CaseId; pending: ChatMessage }
   | { type: 'send/success'; caseId: CaseId; clientMessageId: string; response: SendQuestionResponse }
   | { type: 'send/failure'; caseId: CaseId; clientMessageId: string; error: string }
+  /** 의료진이 답을 기다리다 멈춤: 보낸 질문을 지운다 (서버 대화는 묻기 전 그대로, 질문 글은 입력칸으로 돌아간다) */
+  | { type: 'send/stopped'; caseId: CaseId; clientMessageId: string }
   | { type: 'message/discard'; caseId: CaseId; messageId: string }
   /** 다른 화면(다른 탭)에서 바뀐 대화를 조용히 받아 온다. 보내는 중인 사례는 건드리지 않는다. */
   | { type: 'session/refresh'; caseId: CaseId; session: ConversationSession }
@@ -176,6 +178,13 @@ export function workspaceReducer(state: WorkspaceState, action: WorkspaceAction)
         ...mapMessages(s, (messages) => messages.map((m) => (m.messageId === action.clientMessageId ? { ...m, status: 'failed' } : m))),
         sending: false,
         sendError: action.error,
+      }));
+
+    case 'send/stopped':
+      return updateSession(state, action.caseId, (s) => ({
+        ...mapMessages(s, (messages) => messages.filter((m) => m.messageId !== action.clientMessageId)),
+        sending: false,
+        sendError: undefined,
       }));
 
     case 'session/refresh': {

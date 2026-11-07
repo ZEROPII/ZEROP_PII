@@ -1,5 +1,5 @@
 import { X } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
+import { type ReactNode, useEffect, useRef, useState } from 'react';
 
 const REASONS = ['오탐 확인', '의료진 문의 대응', '규칙 수정 검토', '기타'];
 export const NOTE_MIN = 5;
@@ -8,13 +8,22 @@ export const NOTE_MIN = 5;
  * 원문 열람: 사유를 고르고 무엇을 보려는지 한 줄로 적어야 열린다.
  * 미리 골라 둔 사유는 없다 (기본값을 누르기만 하고 여는 일을 막는다, ADR-0030).
  * 이름 · 시간 · 사유 · 적은 내용이 감사 기록에 남는다.
+ * 의료진 대화 원문 열람이 기본이고, EMR 접근 관리의 차트 열람(ADR-0034)은 제목 · 설명 · 사유를 바꿔 쓴다.
  */
 export function RevealDialog({
   trialId,
+  title,
+  description = '가린 값과 원래 답, 환자 번호가 그대로 보입니다. 사유를 고르고 무엇을 확인하려는지 적어야 열리며, 이름 · 시간과 함께 감사 기록에 남습니다.',
+  reasons = REASONS,
+  placeholder = '예: 사례 2 처방 가림이 오탐인지 확인',
   onCancel,
   onConfirm,
 }: {
   trialId: string;
+  title?: ReactNode;
+  description?: string;
+  reasons?: string[];
+  placeholder?: string;
   onCancel(): void;
   onConfirm(reason: string, note: string): Promise<void>;
 }) {
@@ -50,20 +59,22 @@ export function RevealDialog({
       <div ref={ref} role="dialog" aria-modal="true" aria-labelledby="reveal-title" className="w-full max-w-[480px] rounded-overlay bg-surface p-6 shadow-overlay">
         <div className="flex items-start justify-between gap-3">
           <h2 id="reveal-title" className="text-[17px] font-bold tracking-[-0.02em]">
-            <span className="font-mono">{trialId}</span> 원문 보기
+            {title ?? (
+              <>
+                <span className="font-mono">{trialId}</span> 원문 보기
+              </>
+            )}
           </h2>
           <button type="button" onClick={onCancel} className="btn-ghost -mr-2 -mt-1 h-8 w-8 px-0" aria-label="닫기">
             <X className="h-4 w-4" aria-hidden />
           </button>
         </div>
-        <p className="mt-2 text-[13px] leading-6 text-ink-2">
-          가린 값과 원래 답, 환자 번호가 그대로 보입니다. 사유를 고르고 무엇을 확인하려는지 적어야 열리며, 이름 · 시간과 함께 감사 기록에 남습니다.
-        </p>
+        <p className="mt-2 text-[13px] leading-6 text-ink-2">{description}</p>
         <p id="reveal-reason-label" className="mt-4 text-xs font-bold text-ink-2">
           열람 사유
         </p>
         <div className="mt-1.5 flex flex-wrap gap-1.5" role="radiogroup" aria-labelledby="reveal-reason-label">
-          {REASONS.map((r) => (
+          {reasons.map((r) => (
             <button
               key={r}
               type="button"
@@ -86,7 +97,7 @@ export function RevealDialog({
           maxLength={300}
           rows={2}
           aria-describedby="reveal-note-hint"
-          placeholder="예: 사례 2 처방 가림이 오탐인지 확인"
+          placeholder={placeholder}
           className="mt-1.5 w-full resize-none rounded-control border border-line-input bg-surface px-3 py-2 text-sm leading-6 outline-none focus:border-focus"
         />
         <p id="reveal-note-hint" className={`mt-1 text-[11.5px] ${text.length > 0 && text.length < NOTE_MIN ? 'text-caution-text' : 'text-ink-3'}`}>

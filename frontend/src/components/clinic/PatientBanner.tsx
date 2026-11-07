@@ -1,6 +1,6 @@
-import { ChevronDown, ChevronUp, ClipboardList, RefreshCw, UserRound } from 'lucide-react';
+import { ChevronDown, ChevronUp, FileText, RefreshCw, UserRound, Users } from 'lucide-react';
 import { type RefObject, useCallback, useEffect, useRef, useState } from 'react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
 import { useAuth } from '../../state/AuthContext';
 import { useWorkspace } from '../../state/WorkspaceContext';
 import type { PatientContext, PatientOption } from '../../types/domain';
@@ -26,7 +26,7 @@ function useDismiss(open: boolean, box: RefObject<HTMLDivElement | null>, close:
   }, [open, box, close]);
 }
 
-/** 데모 서버에서만: 다른 질의 환자로 새 대화를 시작한다 (실제 EMR에서는 진료 중 환자가 바뀌는 자리). */
+/** 데모 서버에서만: 다른 질의 환자로 새 대화를 시작한다 (실제 EMR에서는 지금 보는 환자가 바뀌는 자리). */
 function DemoPatientSwitcher() {
   const { state, actions, api } = useWorkspace();
   const toast = useToast();
@@ -74,7 +74,7 @@ function DemoPatientSwitcher() {
       </button>
       {open && (
         <div className="absolute right-0 top-9 z-40 w-[300px] rounded-control border border-line bg-surface p-3 shadow-overlay">
-          <p className="mb-2 text-xs leading-5 text-ink-3">실제 EMR에서는 진료 중인 환자가 바뀌는 자리입니다. 다른 질의 환자로 대화를 새로 시작합니다.</p>
+          <p className="mb-2 text-xs leading-5 text-ink-3">실제 EMR에서는 지금 보는 환자가 바뀌는 자리입니다. 다른 질의 환자로 대화를 새로 시작합니다.</p>
           <label htmlFor="patient-pick" className="sr-only">
             다른 질의 환자
           </label>
@@ -158,18 +158,22 @@ function AiSummaryButton({ p }: { p: PatientContext }) {
 }
 
 /**
- * EMR 환자 띠: 지금 진료 중인 환자. 이 값은 의료진 화면에만 쓰고, 질문 전송 · AI 답 · 사례 데이터 어디에도 섞지 않는다.
- * 좁은 화면에서는 주진단만 보이고 눌러서 펼친다.
+ * 환자 띠: 진료 지원 AI 대화가 열려 있는 '지금 보는 환자'. 이 값은 의료진 화면에만 쓰고, 질문 전송 · AI 답 · 사례 데이터 어디에도 섞지 않는다.
+ * 운영 모드에서는 대화가 열려 있을 때만 보이고, 내 담당 환자 화면(/emr)에서는 숨긴다 (그 화면은 고른 환자의 차트를 따로 보인다,
+ * 목록 위에 한 사람만 떠 있으면 그 사람만 진료 대상처럼 보였다). 좁은 화면에서는 주진단만 보이고 눌러서 펼친다.
  */
 export function PatientBanner() {
   const { state, actions } = useWorkspace();
   const product = useAuth().status === 'user';
+  const { pathname } = useLocation();
   const { patient } = state;
   const [expanded, setExpanded] = useState(false);
   const p = patient.data;
+  if (product && (state.noConversation || pathname === '/emr' || pathname.startsWith('/emr/'))) return null;
 
   const fields: [string, string][] = p
     ? [
+        ...(p.regno ? ([['등록번호', p.regno]] as [string, string][]) : []),
         ['연령 / 성별', p.ageSexLabel],
         ['주진단', p.primaryDiagnosis],
         ['동반질환', p.comorbidities.join(', ') || '없음'],
@@ -179,24 +183,16 @@ export function PatientBanner() {
     : [];
 
   return (
-    <section aria-label="진료 중 환자" className="shrink-0 border-b border-line bg-emr-banner">
+    <section aria-label="지금 보는 환자" className="shrink-0 border-b border-line bg-emr-banner">
       <div className="flex min-h-[44px] items-center gap-x-4 gap-y-1 px-4 py-1.5 md:px-5">
         <span className="inline-flex shrink-0 items-center gap-2 text-[13px] font-bold text-ink">
           <span className="grid h-6 w-6 place-items-center rounded-full bg-iris text-iris-on">
             <UserRound className="h-3.5 w-3.5" aria-hidden />
           </span>
-          진료 중 환자
+          지금 보는 환자
           {p && !state.noConversation && <AiSummaryButton p={p} />}
         </span>
-        {state.noConversation ? (
-          <span className="flex min-w-0 flex-1 items-center gap-3 text-xs text-ink-3">
-            열린 환자가 없습니다.
-            <NavLink to="/emr" className="btn-ghost btn-sm ml-auto h-7 gap-1 text-ink-2">
-              <ClipboardList className="h-3.5 w-3.5" aria-hidden />
-              외래 진료 목록
-            </NavLink>
-          </span>
-        ) : patient.status === 'error' ? (
+        {patient.status === 'error' ? (
           <span className="text-xs text-danger-text">
             환자 정보를 불러오지 못했습니다.{' '}
             <button type="button" className="font-semibold underline" onClick={actions.reloadAll}>
@@ -228,10 +224,18 @@ export function PatientBanner() {
             <span className="ml-auto flex shrink-0 items-center gap-1">
               <MockBadge source={p.source} />
               {product ? (
-                <NavLink to="/emr" className="btn-ghost btn-sm h-7 gap-1 text-ink-2">
-                  <ClipboardList className="h-3.5 w-3.5" aria-hidden />
-                  <span className="hidden sm:inline">다른 환자</span>
-                </NavLink>
+                <>
+                  {p.fhirId && (
+                    <NavLink to={`/emr/${encodeURIComponent(p.fhirId)}`} className="btn-ghost btn-sm h-7 gap-1 text-ink-2" title="이 환자의 차트 요약">
+                      <FileText className="h-3.5 w-3.5" aria-hidden />
+                      <span className="hidden sm:inline">차트</span>
+                    </NavLink>
+                  )}
+                  <NavLink to="/emr" className="btn-ghost btn-sm h-7 gap-1 text-ink-2" title="내 담당 환자 목록">
+                    <Users className="h-3.5 w-3.5" aria-hidden />
+                    <span className="hidden sm:inline">내 환자</span>
+                  </NavLink>
+                </>
               ) : (
                 <DemoPatientSwitcher />
               )}

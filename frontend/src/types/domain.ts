@@ -32,6 +32,10 @@ export interface PatientContext {
   /** 기준 진료의 진단 사건 번호, 의사가 오늘 진단을 골랐는지 */
   visitEvent?: string;
   visitChosen?: boolean;
+  /** 운영 모드: EMR에서 연 환자 (차트로 돌아가는 링크) */
+  fhirId?: string | null;
+  /** 운영 모드: 그 환자의 등록번호 */
+  regno?: string | null;
   /** AI(대상 AI 지시문)에 실제로 보내는 환자 요약 줄 */
   aiSummary?: { label: string; value: string }[];
   /** 유사 사례 검색에 쓰는 이 환자 기록: 기준일까지의 진단 · 약 · 시술 코드 수 */
@@ -95,7 +99,7 @@ export type MessageSegment =
       /** 실제 LLM 답에서 지워진 가린 값의 자리 표시 (그 사례 단락 끝에 붙는다). label: '시기' · '사례 2 나이' */
       placeholder?: boolean;
       label?: string;
-      /** 같은 답에 그 사례의 같은 단서가 다른 값으로 보인다: '처방 약 일부 비공개' */
+      /** 같은 답에 그 사례의 같은 단서가 다른 값으로 보인다: '다른 처방 약 비공개' */
       partial?: boolean;
     };
 
@@ -385,26 +389,136 @@ export interface WorklistPatient {
   fhirId: string;
   /** 화면 표시용 앞 8자리 */
   identifier: string;
+  /** 등록번호 ('26-4821', ADR-0036). 로그인 없는 서버는 없음 */
+  regno?: string | null;
   sex: 'male' | 'female' | 'unknown';
-  /** 가장 최근 진료 목적의 진료일 기준 연령대 ('20대') */
+  /** 가장 최근 진료일 기준 연령대 ('20대') */
   ageBand: string | null;
+  /** 연령대를 센 해 (= 마지막 내원 해). 장기 미내원이면 화면이 '1998년 기준'처럼 같이 보인다 */
+  ageYear?: number | null;
   conditions: string[];
   events: number;
   purposes: WorklistPurpose[];
   featured: boolean;
-  /** ACTIVE 진료 중: 끝나지 않은 진단 · 관리 계획이 있고 최근 기록이 있음 · RESOLVED 완치: 모두 끝남 ·
-   *  DORMANT 장기 미내원: 끝나지 않은 것이 있지만 마지막 기록이 3년보다 오래됨 */
+  /** ACTIVE 진료 중: 진행 중인 진단 · 처방 · 관리 계획이 있고 최근 3년 안에 내원 · RESOLVED 완치: 진행 중인 것이 없음 ·
+   *  DORMANT 장기 미내원: 진행 중인 것이 있지만 마지막 내원이 3년보다 오래됨 */
   status: 'ACTIVE' | 'RESOLVED' | 'DORMANT';
   statusLabel: string;
+  /** 진행 중인 진단 · 처방 · 관리 계획 수 (차트의 '진행 중'과 같다) */
   openItems: number;
-  /** 가상 EMR에 남은 마지막 기록일 */
+  /** 마지막 내원일 (차트의 최근 내원과 같은 날) */
   lastRecord: string | null;
+  /** 이 의료진에게 열린 까닭: 담당 환자 · 협진 의뢰 · 담당 외 예외 열람 (ADR-0034 · ADR-0036). 로그인 없는 서버는 없음 */
+  access?: EmrAccessVia;
+  /** 협진 의뢰 · 예외 열람이면 사유 · 끝나는 시각 */
+  grant?: EmrGrant | null;
+}
+
+export type EmrAccessVia = 'assigned' | 'consult' | 'break_glass';
+
+/** 담당 외 환자 예외 열람 (의료진에게 보이는 것) */
+export interface EmrGrant {
+  id: number;
+  reason: string;
+  reasonLabel: string;
+  note: string | null;
+  createdAt: number;
+  /** 이 시각(초)까지 열 수 있다 */
+  expiresAt: number;
+  /** 협진 의뢰로 연 열람이면 그 의뢰 번호 */
+  consultId?: number | null;
+}
+
+/** 협진 의뢰 (ADR-0036): 담당 의료진이 보내고, 받은 의료진은 번호 없이 연다 */
+export interface EmrConsult {
+  id: number;
+  fhirId: string;
+  regno: string | null;
+  sex?: WorklistPatient['sex'];
+  ageBand?: string | null;
+  note: string;
+  createdAt: number;
+  expiresAt: number;
+  status: 'pending' | 'opened' | 'declined' | 'canceled' | 'expired';
+  statusLabel: string;
+  /** 열거나 다시 열 수 있는지 (열기 전 · 열람함, 기한 안) */
+  open: boolean;
+  openedAt: number | null;
+  closedAt: number | null;
+  closeNote: string | null;
+  sender: { username: string; displayName: string; department: string | null };
+  receiver: { username: string; displayName: string; department: string | null };
+}
+
+/** 협진 의뢰를 받을 수 있는 의료진 */
+export interface Clinician {
+  username: string;
+  displayName: string;
+  department: string | null;
+}
+
+/** GET /api/emr/me: 담당 환자 수와 예외 열람 설정 */
+export interface EmrMe {
+  assigned: number | null;
+  active?: number;
+  breakGlass: { on: boolean; hours?: number; noteMin?: number; reasons?: { id: string; label: string }[] };
+  /** 협진 의뢰: 받고 아직 열지 않은 수 (waiting) · 의뢰가 유효한 날 수 */
+  consult?: { on: boolean; noteMin: number; days: number; hours: number; waiting: number };
+}
+
+/** 차트 요약의 한 줄: 같은 이름은 묶어 횟수 · 처음 · 마지막 날 */
+export interface ChartItem {
+  label: string;
+  times: number;
+  first: string | null;
+  last: string | null;
+  /** 진행 중인 진단 · 처방 · 관리 계획 */
+  active: boolean;
+  /** 종료일은 없지만 오래되어 진행 중으로 세지 않음 (마지막 처방이 마지막 내원보다 1년 넘게 앞섬 · 오래된 급성 질환) */
+  noEnd?: boolean;
+  ended: string | null;
+}
+
+export interface ChartGroup {
+  items: ChartItem[];
+  total: number;
+  active: number;
+  /** 종료일 없음(오래됨) 수 */
+  noEnd?: number;
+}
+
+/** GET /api/emr/chart: 차트 요약 (생년 · 거주 지역 없음) */
+export interface EmrChart {
+  patient: Omit<WorklistPatient, 'purposes' | 'featured' | 'access' | 'grant'>;
+  problems: ChartGroup;
+  medications: ChartGroup;
+  procedures: ChartGroup;
+  carePlans: ChartGroup;
+  /** 최근 내원: 진료마다 그날 기록된 것 (최근 것부터) */
+  visits: { date: string; items: { kind: 'problems' | 'medications' | 'procedures' | 'carePlans'; label: string }[] }[];
+  /** 해마다 내원한 날 수 (마지막 내원 해까지 최근 10년) */
+  yearly: { year: number; visits: number }[];
+  visitDays: number;
+  firstRecord: string | null;
+  /** 내원한 날 전체 (오래된 것부터) */
+  visitDates?: string[];
+  /** 가상 EMR 기준일 (합성 데이터의 마지막 기록일). 진료 상태(장기 미내원 3년)는 이 날 기준 */
+  refDate?: string | null;
+  /** 진료 지원 AI 목적 (목록 줄과 같음). 의료진 차트만 */
+  purposes?: WorklistPurpose[];
+  access?: { via: EmrAccessVia; grant: EmrGrant | null };
+  /** 협진 의뢰: 보낼 수 있는지(담당 의료진만) · 이 환자로 보낸 열린 의뢰 · 이 열람을 연 받은 의뢰 */
+  consult?: { canSend: boolean; sent: EmrConsult[]; received: EmrConsult | null };
 }
 
 /** 진료 지원 AI를 여는 동안의 진행 (GET /api/emr/launch/progress) */
 export interface LaunchProgress {
   active: boolean;
   label?: string;
+  /** 지금 단계: target(답 쓰기 · 사례 정리) · extractor(확인) · rewriter(고쳐 쓰기) · recheck(다시 확인) */
+  step?: 'target' | 'extractor' | 'rewriter' | 'recheck';
+  /** 멈추기를 눌러 멈추는 중 */
+  stopping?: boolean;
   /** 지금까지 보낸 실제 LLM 호출 수 */
   calls?: number;
   elapsed?: number;
@@ -421,6 +535,8 @@ export interface ClinicHistoryItem {
   purpose: string;
   /** 진료한 환자 번호 (EMR 환자 번호 앞 8자리) */
   patientId?: string | null;
+  /** 진료한 환자의 등록번호 (ADR-0036) */
+  regno?: string | null;
   current: boolean;
   archived: boolean;
 }

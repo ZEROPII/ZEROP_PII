@@ -14,6 +14,8 @@
 #   기간 범위 (coarsen_durations): 내보낼 글의 상대 기간(며칠 · 몇 주 · 몇 달)을 범위로 바꾼다 ('약 12일' → '약 1~2주').
 #     후보 수 계산에는 기간 노드가 없으므로, 묻는 범위(사례 하나 · 전체)와 상관없이 늘 같은 범위로만 보인다.
 #     절대 날짜(시기)는 지금처럼 후보 수로 판정하고, 기간은 날짜와 따로 범위로 보인다.
+#     기간 뒤에 '이상 · 넘게'(하한) · '이내 · 미만 · 이하'(상한) · '정도 · 가량'(어림)이 붙으면 그 말까지 한 번에 바꾼다
+#     ('약 2년 이상' → '1년 이상', '3일 이내' → '3일 이내'). 범위 뒤에 '이상'이 남아 '약 1~3년 이상'처럼 읽히지 않게 한다 (ADR-0035).
 #   duration_mentions: 내보낸 글의 기간 범위를 사례마다 찾는다 (사례 노트 '기간' 항목).
 #
 #   내보낼 글 다듬기 (post_release, ADR-0032 · 연구자 4인 검토 P0-3 · P1-4). 후보 수 계산에 없는 값이 글에 그대로 나가지 않게 한다.
@@ -23,6 +25,8 @@
 #     - 짐작 문장 ('…피임 목적으로 보입니다', '…일 가능성이 있습니다')은 사례 문장에서 뺀다. 기록에 없는 원인 · 목적을 사실처럼
 #       남기지 않는다 (지시문 v6의 짐작 금지를 출력에서도 확인).
 #     - 사례 문장에 나온 영문 낱말이 그 답의 사례 문서 · 그 상위 범주 이름 어디에도 없으면 '설명 안 되는 용어'로 기록한다 (글은 그대로).
+#     - 기록 말투를 진료 화면 말로 (natural_wording, ADR-0035): 사례 문서의 '종료 기록 없음'(처방 종료일이 없음)을 대상 AI가
+#       '종료 기록이 없습니다'로 옮기면 무엇이 없는지 알기 어렵다. '종료일 없이 계속 처방되었습니다'로 바꾼다 (처방을 복용으로 바꾸지 않음).
 #   사례 문장(사례 표기가 있거나 앞 문장의 사례를 잇는 문장)만 다룬다. 일반 설명 문장은 그대로 둔다.
 
 from __future__ import annotations
@@ -326,6 +330,30 @@ _DUR = re.compile(
 
 _TAIL = re.compile(r"\s*(동안|간|전)(?=[의에은는을이가도]?(?:\s|$|[,.)])|부터|까지)")
 
+#: 기간 바로 뒤의 하한 · 상한 · 어림 말. '2년이 넘는'처럼 조사를 끼운 하한도 본다.
+_BOUND = re.compile(r"(?P<low>\s*(?:이상|초과)|(?:이|가|을|를)?\s*넘(?:게|도록|는|은|어))|(?P<high>\s*(?:이내|미만|이하|안에))"
+                    r"|(?P<about>\s*(?:정도|가량|쯤|남짓|내외|전후)|여(?=\s|$|[,.)]))")
+#: 하한은 그 기간보다 짧은 가장 가까운 값으로, 상한은 긴 가장 가까운 값으로 (참인 채로 더 넓게). 10년보다 긴 상한은 바꾸지 않는다.
+LOW_STEPS: list[tuple[float, str]] = [(1, "하루"), (3, "3일"), (7, "1주"), (14, "2주"), (30, "1개월"), (91, "3개월"), (182, "6개월"),
+                                      (365, "1년"), (1095, "3년")]
+HIGH_STEPS: list[tuple[float, str]] = [(3, "3일"), (7, "1주"), (14, "2주"), (31, "1개월"), (92, "3개월"), (183, "6개월"), (365, "1년"),
+                                       (1095, "3년"), (1825, "5년"), (3650, "10년")]
+
+
+def _bounded(days: float, b: re.Match[str], label: str, ranged: bool) -> str | None:
+    """'약 2년 이상' 같은 기간 + 뒤말을 바꿀 글. 바꾸지 않으면 None."""
+    if b.group("low") is not None:
+        word = next((w for t, w in reversed(LOW_STEPS) if t <= days), LOW_STEPS[0][1])
+        tail = b.group("low").strip()
+        if "넘" in tail:
+            verb = tail.lstrip("이가을를").strip()
+            return f"{word}{'이' if _final_sound(word) else '가'} {verb}" if tail[0] in "이가을를" else f"{word} {verb}"
+        return f"{word} 이상" if tail == "이상" else f"{word} 넘게"
+    if b.group("high") is not None:
+        word = next((w for t, w in HIGH_STEPS if t >= days - 0.5), None)
+        return None if word is None else f"{word} {b.group('high').strip()}"
+    return f"약 {label}" if ranged else label
+
 
 def bucket(days: float) -> tuple[str, bool]:
     for top, label, ranged in BUCKETS:
@@ -359,6 +387,19 @@ def coarsen_durations(text: str) -> tuple[str, list[tuple[str, str]]]:
         label, ranged = bucket(days)
         new = f"약 {label}" if ranged and m.group(1) in ("약", "대략", "거의") else label
         end = m.end()
+        b = _BOUND.match(text, end)
+        if b:
+            got = _bounded(days, b, label, ranged)
+            if got is None:
+                continue                                 # '10년 미만'처럼 넓힐 값이 없는 상한은 그대로
+            new, end = (f"총 {got}" if m.group(1) == "총" else got), b.end()
+            old = text[m.start():end]
+            if old.replace(" ", "") != new.replace(" ", ""):
+                out.append(text[pos:m.start()])
+                out.append(new)
+                pos = end
+                changes.append((old, new))
+            continue                                     # 같으면 그대로 ('3일 이내', '1년 이상')
         tail = _TAIL.match(text, end)
         if tail and not ranged and label != "약 1년":
             # '이틀 동안' → '3일 이내', '3일 전' → '최근 3일 이내', '5년 전' → '3년도 더 전' (어색한 '3일 이내 동안'을 피한다)
@@ -381,8 +422,10 @@ def coarsen_durations(text: str) -> tuple[str, list[tuple[str, str]]]:
     return "".join(out), changes
 
 
+_BOUND_WORDS = sorted({w for _, w in LOW_STEPS + HIGH_STEPS}, key=len, reverse=True)
 _BUCKET_RX = re.compile(r"(?<![\d~∼\-.])(?:" + "|".join(
-    (r"(?:약\s*)?" + re.escape(lab)) if ranged else re.escape(lab) for _, lab, ranged in sorted(BUCKETS, key=lambda x: -len(x[1]))) + r")")
+    [r"(?:" + "|".join(map(re.escape, _BOUND_WORDS)) + r")(?:이|가)?\s?(?:이상|넘게|넘는|넘은|이내|미만|이하)"]
+    + [(r"(?:약\s*)?" + re.escape(lab)) if ranged else re.escape(lab) for _, lab, ranged in sorted(BUCKETS, key=lambda x: -len(x[1]))]) + r")")
 
 
 def duration_mentions(text: str, n_cases: int) -> list[tuple[str, str]]:
@@ -644,6 +687,42 @@ def unexplained_terms(text: str, docs: list[dict[str, Any]], n_cases: int, data:
     return uniq[:20]
 
 
+# ── 기록 말투를 진료 화면 말로 (ADR-0035) ─────────────────────────
+
+_NO_END = re.compile(r"(?:처방\s*)?종료\s*(?:일\s*)?(?:기록|날짜)\s*(?:이|은|도|가)?\s*"
+                     r"(?P<end>없(?:습니다|어요|는\s*상태입니다|으며|고|음)|없이)")
+_PLAN_CTX = re.compile(r"관리\s*계획|계획은|계획도|계획이")
+_MED_CTX = re.compile(r"처방|약|MG|Tablet|Capsule|Injection|Spray|Gel|Solution|Patch|Inhaler", re.I)
+_DONE_CTX = re.compile(r"(?:처방|진행)(?:되었|받았|됐)(?:으며|고)\s*$")
+_NO_END_TAIL = {"없습니다": "습니다", "없어요": "습니다", "없는상태입니다": "습니다", "없으며": "으며", "없고": "고"}
+
+
+def natural_wording(text: str) -> tuple[str, list[dict[str, Any]]]:
+    """
+    '종료 기록이 없습니다' → '종료일 없이 계속 처방되었습니다' (과거 사례의 기록이라 지난 일로 쓴다. 처방을 복용으로 바꾸지 않는다).
+    앞에 '처방되었으며'가 있으면 '종료일 없이 이어졌습니다', 관리 계획 문장이면 '계속 진행되었습니다'. 바꾼 것을 편집 목록으로.
+    """
+    edits: list[dict[str, Any]] = []
+
+    def rep(m: re.Match[str]) -> str:
+        start = max(text.rfind("\n", 0, m.start()), text.rfind(". ", 0, m.start()))
+        ctx = text[start + 1:m.start()]
+        plan = bool(_PLAN_CTX.search(ctx)) and not _MED_CTX.search(ctx)
+        end = re.sub(r"\s+", "", m.group("end"))
+        if end == "없이":
+            new = "종료일 없이"
+        elif end == "없음":
+            new = f"종료일 없음(계속 {'진행' if plan else '처방'})"
+        elif _DONE_CTX.search(ctx):
+            new = "종료일 없이 이어졌" + _NO_END_TAIL.get(end, "습니다")
+        else:
+            new = f"종료일 없이 계속 {'진행되었' if plan else '처방되었'}" + _NO_END_TAIL.get(end, "습니다")
+        edits.append(dict(kind="wording", before=m.group(0), after=new))
+        return new
+
+    return _NO_END.sub(rep, text), edits
+
+
 def post_release(text: str, n_cases: int, docs: list[dict[str, Any]] | None = None, data: Any = None) -> tuple[str, list[dict[str, Any]]]:
     """내보낼 글 다듬기 전체 (위 설명). (다듬은 글, 편집 목록). 기간 범위는 coarsen_durations와 같다."""
     edits: list[dict[str, Any]] = []
@@ -652,6 +731,8 @@ def post_release(text: str, n_cases: int, docs: list[dict[str, Any]] | None = No
     text, ed = coarsen_intervals(text)
     edits += ed
     text, ed = coarsen_counts(text, n_cases)
+    edits += ed
+    text, ed = natural_wording(text)
     edits += ed
     text, ed = _rewrite_sentences(text, n_cases, _fix_absence)
     edits += ed

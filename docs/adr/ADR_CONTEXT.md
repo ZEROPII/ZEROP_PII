@@ -1,7 +1,7 @@
 # Zero PII 의사결정 요약 (AI · 새 팀원용)
 
 > 이 파일은 `python scripts/adr.py index`가 `docs/adr/*.md`에서 만든다. 직접 고치지 않는다.
-> ADR 33건 (유효 31 · 대체·폐기 2), 마지막 결정일 2026-11-06.
+> ADR 37건 (유효 35 · 대체·폐기 2), 마지막 결정일 2026-11-07.
 
 ## 읽는 법
 
@@ -1217,6 +1217,194 @@ PR 템플릿에 "이 PR이 바꾸는 결정과 ADR 번호" 칸을 둔다.
   - `tests/test_rag_remeasure.py`: 가짜 HTTP 위 실제 LLM 경로로 R2 → R4 → 사후 계산 → 원본 대조 → R6를 끝까지 한 번 돈다.
   - `tests/medicloak/test_review_hardening.py`: 날짜 값 바로잡기.
 
+### ADR-0034. 의료진은 담당 외래 환자만 열고, 담당이 아닌 환자는 사유를 적은 예외 열람으로만 연다 (EMR 접근 관리)
+
+- 승인 · 2026-11-07 · 결정 양승준 · S5 · 시스템·화면
+- 근거: `webdemo/backend/access.py`, `webdemo/backend/app.py`, `webdemo/backend/fhir.py`, `webdemo/backend/emr.py`, `webdemo/backend/store.py`, `webdemo/backend/monitor.py`, `medicloak/cli.py`, `frontend/src/pages/EmrPage.tsx`, `frontend/src/pages/EmrAccessPage.tsx`, `frontend/src/components/clinic/PatientBanner.tsx`, `tests/medicloak/test_assignment.py`, `tests/medicloak/test_medicloak.py`, `medicloak/README.md`
+
+**결정**
+
+### 1. 담당 배정 (`webdemo/backend/access.py`)
+
+- 외래 환자(QUERY_POOL 115명)마다 담당 의료진을 둔다 (`emr_assignment`). 한 환자에 여러 명을 둘 수 있다.
+- 처음에는 규칙으로 나눈다. 환자 번호 순서대로, 지금 담당 환자가 가장 적은 의료진 계정에 하나씩 준다 (같으면 먼저 만든 계정). 처음 계정 둘이면 58명 · 57명이다.
+- `init`과 서버를 켤 때, 담당이 없는 외래 환자만 같은 규칙으로 채운다. 이미 담당이 있는 환자는 옮기지 않는다.
+- 바꾸기는 명령으로만 한다: `python -m medicloak assign [list | add <번호> <아이디> | remove <번호> <아이디> | auto [--reset]]`. 바꾼 일은 감사 기록(`emr_assign`)에 남고, 환자는 번호 대신 기호로 남는다.
+
+### 2. 의료진은 담당 환자만 연다
+
+- `/api/emr/worklist`는 로그인한 의료진의 담당 환자와 예외 열람 중인 환자만 돌려준다. 줄마다 `access`(assigned · break_glass)가 붙는다.
+- 같은 검사를 차트 요약(`/api/emr/chart`, 새로 만듦) · 오늘 볼 진단(`/api/emr/visits`) · 진료 지원 AI 열기(`/api/emr/launch`) · 첫 답 미리 준비(`/api/emr/prefetch`) · FHIR(`/fhir/Patient`, `/fhir/{자원}?patient=`)에 건다.
+- 외래 환자가 아니면 지금처럼 404다. 외래 환자인데 담당이 아니면 403이다 (머리글 `X-MediCloak-State: not-assigned`, FHIR는 OperationOutcome `forbidden`).
+- 거부는 접근 기록과 감사 기록(`emr_denied`)에 남긴다. 같은 의료진 · 환자 · 요청의 거부를 60초 안에 또 받으면 한 번으로 센다.
+- 진료 지원 AI 목적(연구 계획의 trial)이 없는 외래 환자 1명도 목록에 넣는다. 목적 없이 차트만 볼 수 있다.
+
+### 3. 담당 외 환자 열기 (예외 열람, break-glass)
+
+- 환자 번호(앞 8자리) · 사유 분류(협진 · 당직/응급 · 기타) · 직접 쓴 설명(5자 이상)을 모두 적어야 열린다. 미리 골라 둔 사유는 없다 (ADR-0030과 같은 규칙).
+- 연 뒤 12시간 동안 담당 환자처럼 목록 · 차트 · 진료 지원 AI를 쓴다. FHIR Patient의 생년 · 거주 지역은 빼고 보인다.
+- 연 일은 감사 기록(`break_glass`)과 접근 기록에 남고, 보안 담당자 EMR 접근 화면에 '검토 대기'로 올라온다.
+- 검토는 두 가지다: 적절함(`ok`)과 확인 필요(`flag`). 확인 필요는 까닭을 적어야 하고, 열람을 바로 끝낸다. 검토도 감사 기록(`break_glass_review`)에 남는다.
+- 같은 환자를 이미 열어 두었으면 새로 만들지 않는다. 담당 환자를 예외 열람으로 열려고 하면 409다.
+- `serve --break-glass off`면 새로 열 수 없고, 열어 둔 것도 쓰지 않는다 (담당 환자만).
+
+### 4. 접근 기록 (`emr_access`)
+
+- 다음을 환자마다 남긴다: 차트 열람(1분 안에 다시 열면 한 번), EMR 연동(FHIR) 조회(10분에 한 번), 진료 지원 AI 열기, 거부, 예외 열람, 보안 담당자 차트 열람.
+- 감사 기록에는 보안에 중요한 일(거부 · 예외 열람 · 검토 · 보안 담당자 열람 · 배정 변경)만 같이 남긴다.
+
+### 5. 보안 담당자 EMR 접근 화면 (`/emr-access`)
+
+- 외래 환자마다 기호(P-xxxxxx) · 진료 상태 · 담당 · 마지막 접근 · 7일 접근 수 · 예외 열람 수만 보인다 (`GET /api/monitor/emr`). 진단 · 나이 · 성별 · 환자 번호는 보내지 않는다.
+- 차트는 사유(분류 + 5자 이상 설명)를 적어야 열린다 (`POST /api/monitor/emr/patients/{기호}/reveal`). 그때 환자 번호와 차트 요약이 보이고, 감사 기록(`emr_reveal`)에 남는다. 의료진 대화 원문 열람(ADR-0030)과 같은 규칙이다.
+- 환자 기호의 열쇠와 식은 관제 화면 · 감사 기록과 같다 (`access.subject_tag`). 명령줄도 같은 열쇠를 쓴다.
+- 배정은 이 화면에서 보기만 한다.
+
+### 6. 의료진 화면 흐름
+
+- 로그인하면 '내 담당 환자'(`/emr`)가 열린다. 왼쪽 목록(상태 탭 · 찾기 · 담당 외 환자 열기) → 가운데 차트 요약(진단 이력 · 처방 · 시술 · 관리 계획 · 최근 내원 · 내원 흐름) → 오른쪽 '유사 사례 찾기' 순서다. 유사 사례 찾기는 진료 목적 · 오늘 볼 진단 · 첫 답 미리 준비 · 열기를 지금까지와 같이 한다.
+- 환자를 고르면 주소가 `/emr/{환자 id}`로 바뀐다. 좁은 화면에서는 목록과 차트를 한 화면씩 보인다.
+- 위 환자 띠는 '지금 보는 환자'로 이름을 바꾼다. 운영 모드에서는 진료 지원 AI 대화가 열려 있을 때만 보이고, 내 담당 환자 화면에서는 숨긴다. 띠의 '차트'를 누르면 그 환자의 차트로 돌아간다.
+- 데모 모드(`python -m webdemo`, 로그인 · EMR 없음)는 띠 이름 말고는 바꾸지 않는다.
+
+**결과와 영향**
+
+- DB에 표 셋이 늘었다: `emr_assignment` · `emr_grant` · `emr_access`. `CREATE TABLE IF NOT EXISTS`라 기존 DB를 열면 그대로 붙고, 서버를 켤 때 담당을 채운다.
+- 검사는 여는 때 한다. 담당이 바뀌어도 이미 열린 진료 지원 AI 대화는 이어진다.
+- 새로 만든 의료진 계정은 담당이 없다. 운영자가 `assign add` 또는 `assign auto --reset`으로 준다.
+- 테스트: `tests/medicloak/test_assignment.py` 8건(규칙 · 번호 찾기 · 예외 열람 · 접근 기록 · 기호 · 차트 요약 · 명령). `tests/medicloak/test_medicloak.py`에 담당 · 예외 열람 · 보안 담당자 화면 흐름 1건을 더했다. 기존 테스트의 열기 도우미는 그 환자를 담당으로 먼저 더한다. 앞단 vitest에 감사 기록 글과 남은 시간 표시를 더했다.
+- 연구 하네스(`medical/`) · 고정본(`medical/bundle/`)은 바꾸지 않았다.
+
+### ADR-0035. 답을 기다리는 시간을 줄이고, 기다리는 동안 멈출 수 있게 하며, 진행은 걸린 초 대신 단계로 보인다
+
+- 승인 · 2026-11-07 · 결정 양승준 · S5 · 시스템·화면
+- 근거: `webdemo/backend/split_extract.py`, `webdemo/backend/live.py`, `webdemo/backend/gate.py`, `webdemo/backend/engine.py`, `webdemo/backend/app.py`, `webdemo/backend/autocheck.py`, `webdemo/backend/clinic.py`, `medicloak/cli.py`, `scripts/measure_latency.py`, `frontend/src/components/common/StageTrack.tsx`, `frontend/src/components/clinic/ClinicalChat.tsx`, `frontend/src/components/emr/SimilarCaseBox.tsx`, `frontend/src/components/chat/ChatInput.tsx`, `tests/medicloak/test_split_extract.py`, `tests/medicloak/test_medicloak.py`
+
+**결정**
+
+### 1. 입력 게이팅 색인 (`webdemo/backend/gate.py`)
+
+- 엔진을 켤 때 노드 → 그 노드를 가진 환자 집합(frozenset)을 한 번 만든다 (`event_index`). 사건마다 상위 노드까지 넣는다.
+- 환자 단위가 아닌 노드를 볼 때 이 색인을 쓴다. 판정 결과는 그대로다.
+- 프로파일링: 열기 CPU 3.57초 → 1.44초, 질문 CPU 0.24초 → 0.03초.
+
+### 2. 단서 추출을 사례마다 나눠 동시에 부르기 (`webdemo/backend/split_extract.py`)
+
+- 답에 '사례N'이 둘 이상 나오면, 같은 추출 지시문 끝에 '이번에는 사례N만'을 붙여 사례마다 따로 부른다. 사례 번호가 없는 문단(지금 환자 소개, 사례 전체를 묶은 문장)이 있으면 그 값만 뽑는 호출을 하나 더 한다.
+- 호출마다 답 전체를 그대로 보여 준다. '사례1과 같은 약'처럼 앞 사례를 가리키는 말도 풀 수 있게 하려는 것이다.
+- 결과는 `case_ref`로 걸러 사례 순서대로 이어 붙인 JSON 배열 하나로 돌려준다. 연구 모듈(`medical/`)의 추출 · 정규화 · 판정 코드는 바꾸지 않는다.
+- 나누지 않는 경우: 사례 번호가 하나 이하, 지시문 끝이 답과 다름, 나눈 호출 하나라도 JSON 배열이 아님(→ 한 번에 다시 부름). `.env`의 `LLM_MIN_INTERVAL_SEC`가 0보다 크면(요청 간격 제한) 나누지 않는다.
+- 나눈 호출들은 LLM 자리(`_Slots`) 하나를 같이 쓴다. 의료진 질문이 뒤 작업(비교 갈래 · 미리 준비)을 기다리지 않는 규칙은 그대로다.
+- 서버 옵션 `--extract-parallel N`(기본 4, 1이면 끔). 측정 스크립트에도 같은 옵션을 두었다 (`scripts/measure_latency.py --extract-parallel`, 기본 1).
+- 자동 레드팀 설정 지문(`autocheck.settings_of`)에 추출 방식을 넣었다. 나누기를 켜고 끄면 설정이 바뀐 것으로 보고 다시 점검한다 (ADR-0028).
+
+### 3. 질문 · 열기 멈추기
+
+- `POST /api/clinic/stop`(질문), `POST /api/emr/launch/stop`(진료 지원 AI 열기). 응답은 `{status: idle | stopping}`이다.
+- 멈추기를 누르면 보내 둔 LLM 호출 하나는 끝까지 받고 그 결과는 쓰지 않는다. 다음 호출 전에 턴을 끝낸다 (`QuestionStopped`). 턴을 기록하지 않으므로 대화 · 공개 원장 · 후보 수는 묻기 전 그대로다 (LLM 오류와 같은 처리).
+- 질문 요청은 409와 머리글 `X-MediCloak-State: stopped`로 끝난다. 그 사이 답을 다 만들었으면 그 답이 그대로 간다.
+- 감사 기록: `clinic_stop` · `emr_launch_stop` (그때까지 보낸 호출 수). 대상 AI에 이미 보낸 질문은 보낸 것이므로 기록에 남긴다.
+- 화면: 답을 기다리는 동안 보내기 단추가 '멈추기'로 바뀌고, 기다림 카드와 유사 사례 찾기에도 '멈추기'가 있다. 멈추면 질문은 입력칸으로 돌아간다.
+
+### 4. 진행 표시는 걸린 초 대신 단계로
+
+- 진행 API(`/api/clinic/progress`, `/api/emr/launch/progress`)는 지금 단계 `step`(target · extractor · rewriter · recheck)과 `stopping`을 돌려준다. `elapsed`는 기록용으로 남기고 화면에는 보이지 않는다.
+- `StageTrack`: 막대 셋 — ① 답 쓰기(열기는 '사례 찾기') ② 보호 기준 확인 ③ 필요하면 고쳐 쓰기. 끝난 단계는 채우고, 지금 단계는 빛이 지나가는 막대로 보인다. 움직임을 줄인 설정이면 반쯤 채운 막대로 멈춘다.
+- 여는 중 단추는 돌아가는 표시 대신 오른쪽으로 흐르는 꺾쇠 셋을 보인다. 열기를 마친 알림에서도 걸린 초를 뺐다.
+
+**결과와 영향**
+
+- 사례가 여럿인 답의 추출은 호출 수가 (사례 수 + 1)까지 늘고, 호출마다 같은 지시문을 보내므로 입력 토큰도 그만큼 는다. 출력 토큰은 거의 같다.
+- 사례가 하나인 질문(고른 사례에 묻기)은 나누지 않으므로 빨라지지 않는다. 열기(첫 답)와 '찾은 사례 전체' 질문이 대상이다.
+- 테스트: `tests/medicloak/test_split_extract.py` 4건(나누는 조건 · 합친 순서 · 실패하면 한 번에 · 동시 호출과 자리 하나), `test_medicloak.py`에 멈추기 1건(질문 · 열기, 대화 그대로, 감사 기록). 앞단 vitest에 멈춘 질문 지우기 1건.
+- 연구 하네스(`medical/`) · 고정본(`medical/bundle/`)은 바꾸지 않았다.
+
+### ADR-0036. 외래 환자에 등록번호를 두고, 담당이 아닌 환자는 협진 의뢰(번호 없이)와 등록번호 예외 열람으로 연다
+
+- 승인 · 2026-11-07 · 결정 양승준 · S5 · 시스템·화면
+- 근거: `webdemo/backend/access.py`, `webdemo/backend/store.py`, `webdemo/backend/app.py`, `webdemo/backend/fhir.py`, `medicloak/cli.py`, `frontend/src/pages/EmrPage.tsx`, `frontend/src/components/emr/ConsultDialog.tsx`, `frontend/src/components/emr/BreakGlassDialog.tsx`, `frontend/src/pages/EmrAccessPage.tsx`, `frontend/src/pages/HistoryPage.tsx`, `frontend/src/components/clinic/PatientBanner.tsx`, `tests/medicloak/test_assignment.py`, `tests/medicloak/test_medicloak.py`, `docs/adr/0034-medicloak-emr-assignment-and-break-glass.md`
+
+**결정**
+
+### 1. 등록번호 (`emr_regno`)
+
+- 외래 환자마다 `26-` + 네 자리 번호를 하나 둔다 (예: `26-4821`). 처음 볼 때(`init` · 서버를 켤 때 담당 채우기와 함께) 정해 DB에 두고, 다시 켜도 바뀌지 않는다.
+- 네 자리는 무작위로 고르고 겹치지 않게 한다. 환자 순서대로 늘어나는 번호면 하나씩 늘려 가며 열어 볼 수 있다.
+- 내 담당 환자 목록 · 차트 머리 · 지금 보는 환자 띠 · 지난 진료 목록에 보인다. 목록 찾기에도 쓴다 (`264821`처럼 붙여 써도 된다).
+- 보안 담당자 화면에는 기호(P-xxxxxx)만 보인다. 등록번호는 사유를 적은 차트 열람(`reveal`) 때만 환자 번호와 함께 보인다.
+
+### 2. 예외 열람은 등록번호로
+
+- '담당 외 환자 열기'는 등록번호를 받는다. 예전 환자 번호(앞 8자리)도 그대로 받는다.
+- 화면 설명은 '당직 · 응급처럼 꼭 봐야 할 때'로 바꾸고, 협진이면 목록 위 협진 의뢰에서 열라고 안내한다. 사유 · 12시간 · 감사 기록 · 사후 검토는 ADR-0034 그대로다.
+
+### 3. 협진 의뢰 (`emr_consult`)
+
+- 보내기: 담당 의료진만 차트 머리의 '협진 의뢰'에서 보낸다. 받을 의료진(쓰는 의료진 계정 가운데 나를 뺀)과 의뢰 내용(5자 이상)을 적는다. 받을 사람이 이미 그 환자의 담당이면 보내지 않는다. 같은 환자를 같은 의료진에게 보낸 열린 의뢰가 있으면 새로 만들지 않는다.
+- 받기: 받은 의료진의 목록 맨 위 '받은 협진 의뢰'에 등록번호 · 성별 · 연령대 · 보낸 의료진 · 의뢰 내용이 보인다. 진단은 열어서 본다.
+- 열기: '열기'를 누르면 번호를 적지 않고 12시간 열람이 열린다 (사유 분류 '협진', 사유는 보낸 의료진과 의뢰 내용). 목록에는 '협진 · 남은 시간'으로 보인다. 의뢰는 7일 동안 유효하고, 그 안에 열람이 끝났으면 다시 열 수 있다.
+- 거절(받은 의료진) · 취소(보낸 의료진). 취소하면 그 의뢰로 연 열람도 바로 끝난다.
+- 협진 의뢰로 연 열람은 예외 열람과 같이 FHIR Patient의 생년 · 거주 지역을 빼고 보인다.
+- `serve --break-glass off`여도 협진 의뢰는 쓴다. 스스로 여는 예외 열람만 끈다.
+
+### 4. 기록
+
+- 감사 기록: `emr_consult`(보냄) · `emr_consult_open`(열람 시작) · `emr_consult_decline` · `emr_consult_cancel`. 환자는 기호로 남는다.
+- 접근 기록(`emr_access`): 같은 네 가지를 환자마다 남긴다. 협진으로 연 뒤의 차트 열람은 길(via) '협진 의뢰'로 남는다.
+- 보안 담당자 EMR 접근 화면: 검토 대기 목록에 '협진 의뢰'로 올라오고, 보낸 의료진과 의뢰 내용이 같이 보인다. 7일 협진 의뢰 수를 집계에 더했다.
+
+### 5. DB
+
+- 표 둘(`emr_regno` · `emr_consult`)을 더하고, `emr_grant`에 `consult_id` 칸을 더했다. 이미 있는 DB 파일은 열 때 `ALTER TABLE`로 칸을 붙인다 (`Store._add_columns`).
+
+**결과와 영향**
+
+- 테스트: `tests/medicloak/test_assignment.py` 3건(등록번호 · 협진 의뢰 규칙 · 예전 DB 칸 붙이기), `test_medicloak.py` 1건(등록번호 목록 · 협진 의뢰 보내기 · 열기 · 취소 · 보안 담당자 화면 · 등록번호 예외 열람).
+- 연구 하네스(`medical/`) · 고정본(`medical/bundle/`)은 바꾸지 않았다.
+
+### ADR-0037. 의료진 화면은 처음 쓰는 사람 기준으로 읽히게 한다 (보호 표시 설명 · 답 말투 · 차트 날짜와 진행 중 판단)
+
+- 승인 · 2026-11-07 · 결정 양승준 · S5 · 시스템·화면
+- 근거: `frontend/src/components/clinic/ClinicValue.tsx`, `frontend/src/components/clinic/ClinicalMessage.tsx`, `webdemo/backend/textguard.py`, `webdemo/backend/live.py`, `webdemo/backend/emr.py`, `frontend/src/components/emr/ChartSummary.tsx`, `frontend/src/pages/EmrPage.tsx`, `frontend/src/lib/time.ts`, `tests/medicloak/test_medicloak.py`, `frontend/src/lib/time.test.ts`
+
+**결정**
+
+### 1. 보호 표시는 누르면 설명이 뜬다 (`ClinicValue.tsx`)
+
+- '비공개' · '범위' 표시는 단추다. 누르면 그 자리에 설명 창이 뜬다: 어느 사례의 무엇을, MediCloak이 바꿨다는 것, 까닭 한 줄(후보가 적음 · 조회 목적 · 보안 담당자 규칙 · 공개 단위), 과거 사례 기록은 그대로라는 것, 세부 정보 요청 안내. 후보 수 같은 숫자는 쓰지 않는다.
+- 같은 사례의 같은 항목이 답에 일부 보일 때의 꼬리표를 '처방 약 일부 비공개' → '다른 처방 약 비공개'로 바꿨다.
+- 답 아래에 사례마다 무엇을 가리고 넓혔는지 한 줄씩 보인다 (예: '사례 1 · 처방 약 · 관리 계획 비공개 · 기간 범위로'). 표시를 누르면 설명이 보인다는 것과, 표시는 진료 지원 AI가 아니라 MediCloak이 붙였다는 것을 같이 적는다.
+- 설명 창은 화면 기준으로 띄워 답 카드에 잘리지 않게 하고, 바깥을 누르거나 Esc · 스크롤이면 닫는다.
+
+### 2. 답 말투 (`textguard.post_release` · 대상 AI 답 형식)
+
+- '종료 기록이 없습니다' → '종료일 없이 계속 처방되었습니다'. 앞에 '처방되었으며'가 있으면 '종료일 없이 이어졌습니다', 관리 계획 문장이면 '계속 진행되었습니다'. 과거 사례의 기록이라 지난 일로 쓰고, 처방을 복용으로 바꾸지 않는다 (명세 v0.1).
+- 기간 뒤에 '이상 · 넘게'(하한) · '이내 · 미만 · 이하'(상한) · '정도 · 가량'(어림)이 붙으면 그 말까지 한 번에 바꾼다. 하한은 그 기간보다 짧은 가장 가까운 값('약 2년 이상' → '1년 이상'), 상한은 긴 가장 가까운 값('2년 미만' → '3년 미만'), 어림은 범위('2년 정도' → '약 1~3년')다. 참인 채로 더 넓어진다. 10년보다 긴 상한은 바꾸지 않는다. 이전에 '3일 이내' → '3일 이내 이내'로 바뀌던 것도 함께 고쳐졌다.
+- 대상 AI 답 형식(`ANSWER_STYLE`)에 한 줄을 더했다: '종료 기록 없음'은 처방 종료일이 없다는 뜻이니 '종료일 없이 계속 처방되었습니다'처럼 쓴다. 답 형식 지문(`ANSWER_STYLE_ID`)이 바뀌어 첫 답 나눠 쓰기 키도 바뀐다.
+
+### 3. 차트 날짜와 진행 중 판단 (`emr.py`)
+
+- 목록과 차트의 날짜는 모두 '마지막 내원'(진료의 첫날)이다. 진료 상태(장기 미내원 3년)도 이 날로 센다.
+- 진행 중: 종료일 없는 기록이 있고, 다음이 아닐 때.
+  - 처방: 마지막 처방이 마지막 내원보다 1년 넘게 앞섬.
+  - 급성 질환(이름에 acute · 감염 · 패혈증 · 골절 · 손상 등이 있고 chronic이 없음): 마지막 기록이 마지막 내원보다 1년 넘게 앞섬.
+  - 만성 질환은 기록이 한 번뿐이어도 종료일이 없으면 진행 중이다 (Synthea 기록 방식).
+- 진행 중이 아닌 종료일 없는 기록은 '종료일 없음 · 오래된 처방'으로 따로 보인다.
+- 진료 상태의 '진행 중'에 처방을 넣었다. 목록의 openItems는 차트의 '진행 중' 수(진단 · 처방 · 관리 계획)와 같다. 진행 중 처방이 있는 '완치'는 없다.
+- 장기 미내원 환자의 연령대는 그 해를 같이 보인다 ('40대(1970년 기준)'). 차트 머리의 '진행 중'은 '마지막 내원 때 진행 중'으로 보인다.
+
+### 4. 내원 흐름 (`ChartSummary.tsx`)
+
+- 위에 숫자 셋: 마지막 내원(날짜와 '5개월 전') · 최근 1년(오늘 앞 365일 동안 내원한 날) · 전체(날 수와 처음 해).
+- 아래에 해마다 내원한 날 수 막대 (마지막 내원 해까지 최근 10년). 숫자는 가장 많은 해에만 붙이고, 나머지는 마우스를 올리면 '2024년 12일'로 보인다. 막대 폭은 24px까지, 위만 둥글게. 화면 읽기 프로그램에는 해마다 날 수를 목록으로 준다.
+- 내원 흐름을 차트 요약 맨 위에 둔다.
+
+**결과와 영향**
+
+- 진료 상태 분포(외래 115명)가 진료 중 80 · 완치 24 · 장기 미내원 11에서 진료 중 82 · 완치 22 · 장기 미내원 11로 바뀌었다.
+- 테스트: `test_medicloak.py`의 글 다듬기 단위 시험에 기간 뒤말 · 말투 바꾸기를 더했다. 앞단 vitest에 날짜 표시('5개월 전' · 최근 1년) 2건을 더했다.
+- 연구 하네스(`medical/`) · 고정본(`medical/bundle/`)은 바꾸지 않았다.
+
 ## 대체 · 폐기된 결정
 
 - ADR-0002. 억제 기준을 k ≤ 3으로 둔다 (2026-09-23, 대체됨 → ADR-0007)
@@ -1336,3 +1524,16 @@ Synthea 추가 생성 요청과 생성본의 묶음 검사. 합성데이터 담�
 - R4 · R6 실제 LLM 실행(Mac, 토큰 비용)과 R5 사람 검수.
 - 검증기의 진단 · 시술 동의어는 문서 표기와 표준 이름뿐이다. SNOMED 동의어 표가 생기면 더한다.
 - R7(실사용 부하)은 R4 결과를 보고 정한다.
+
+**ADR-0034**
+
+- 배정을 진료 일정(예약 · 접수)과 잇는 일.
+- 예외 열람 검토 기한과 알림.
+
+**ADR-0035**
+
+- 나눠 부르기를 켠 상태로 실제 LLM 시간을 다시 잰다 (`scripts/measure_latency.py --extract-parallel 4`). 이 ADR에는 아직 실제 LLM으로 잰 단축 시간을 적지 않았다.
+
+**ADR-0036**
+
+- 의뢰 알림(받은 의뢰가 오면 화면 밖에서 알리기)과 의뢰 회신(협진 소견)을 기록하는 일.

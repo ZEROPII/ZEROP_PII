@@ -13,6 +13,7 @@
 #     GET  /api/clinic/patients                          데모 환자 목록 (데모 모드만)
 #   가상 EMR (운영 모드, 의료진)
 #     GET  /api/emr/worklist · POST /api/emr/launch {fhirId, purpose}     GET /fhir/metadata · /fhir/Patient · /fhir/{자원}?patient=
+#     GET  /api/emr/consults · /api/emr/directory · POST /api/emr/consults {fhirId, to, note} · …/{id}/open · decline · cancel  협진 의뢰
 #   보안 담당자
 #     GET  /api/watch                                    의료진 대화 목록 (지난 대화 포함)
 #     GET  /api/watch/{대화}/…                           그 대화의 의료진 화면 계약을 숫자 그대로 (위와 같은 경로, 읽기 전용)
@@ -45,12 +46,15 @@ from core.llm_client import LLMError
 from medical.config import ROOT
 from medical.terminology_api import terminology_router
 from webdemo.backend import redact
+from webdemo.backend.access import CONSULT_DAYS, FHIR_DEDUP, NOTE_MIN, REASON_KO, REVIEW_KO as GRANT_REVIEW_KO, EmrAccess, NotAssigned
 from webdemo.backend.assist import ReviewAssistant
 from webdemo.backend.autocheck import ACTOR as AUTO_ACTOR, AUTO_FUZZER, AUTO_PER_TYPE, AutoRedteam
-from webdemo.backend.auth import COOKIE, ROLE_KO, SESSION_TTL, Auth, LoginBlocked, roles_for, route_path, user_view
+from webdemo.backend.auth import COOKIE, ROLE_KO, SESSION_TTL, Auth, LoginBlocked, actor_label, roles_for, route_path, user_view
 from webdemo.backend.clinic import PREFLIGHT_LIMIT, ArchivedConversation, ClinicConversation, ClinicDesk, Conflict, DeskRegistry, NotFound
 from webdemo.backend.engine import ARMS, DemoError, Engine, summarize
+from webdemo.backend.emr import FhirNotFound
 from webdemo.backend.fhir import FEATURED, OutpatientEmr, fhir_router, find_trial, worklist
+from webdemo.backend.live import QuestionStopped
 from webdemo.backend.monitor import REVIEW_KO, Monitor
 from webdemo.backend.persist import Persist
 from webdemo.backend.review import RELEASE_VERSION
@@ -61,8 +65,9 @@ POC_FILE = HERE.parent / "data" / "poc_summary.json"
 EVAL_DIR = ROOT / "eval_demo"
 PRODUCT_LOCATION = "MediCloak 외래 진료 지원"
 # 운영 모드: 의료진 대화는 EMR에서 환자를 열 때 시작한다 (기본 환자를 저절로 열지 않음). 열린 대화가 없으면 409와 이 머리글.
-NO_CONVERSATION = "열린 진료 지원 AI 대화가 없습니다. 외래 진료 목록에서 환자를 열어 주세요."
+NO_CONVERSATION = "열린 진료 지원 AI 대화가 없습니다. 내 담당 환자 목록에서 환자를 열어 주세요."
 NO_CONVERSATION_HEADERS = {"X-MediCloak-State": "no-conversation"}
+STOPPED_HEADERS = {"X-MediCloak-State": "stopped"}
 OFFICER_PREFLIGHT_LIMIT = 30           # 보안 담당자 '질문 미리 세기': 계정마다 OFFICER_PREFLIGHT_WINDOW초 안에 (ADR-0032)
 OFFICER_PREFLIGHT_WINDOW = 600.0
 
@@ -79,6 +84,7 @@ class Product:
     auto_redteam: str = "off"               # change: 설정(판정 규칙 판 · 답 형식 · 모델 · 규칙 추출)이 마지막 점검과 다르면 켤 때 점검을 돌린다
     auto_daily: str | None = None           # 'HH:MM': 매일 그 시각에도 점검 (autocheck.py)
     prefetch: bool = True                   # EMR에서 환자 · 목적을 고르면 첫 답을 뒤에서 미리 만들어 둔다 (engine.prefetch)
+    break_glass: bool = True                # 담당이 아닌 외래 환자를 사유를 적고 12시간 열 수 있게 한다 (access.py, ADR-0034)
 
 
 class NewSession(BaseModel):
@@ -168,6 +174,29 @@ class LoginIn(BaseModel):
     password: str = Field(..., min_length=1, max_length=256)
 
 
+class BreakGlassIn(BaseModel):
+    """담당 외 환자 열기: 등록번호('26-4821') 또는 환자 번호(앞 8자리) · 사유 분류(consult · on_call · other) · 직접 쓴 설명 (5자 이상)."""
+    patient: str = Field(..., min_length=6, max_length=64)
+    reason: str = Field(..., max_length=20)
+    note: str = Field("", max_length=300)
+
+
+class ConsultIn(BaseModel):
+    """협진 의뢰 보내기: 환자 · 받을 의료진 아이디 · 의뢰 내용 (5자 이상)."""
+    fhirId: str = Field(..., min_length=1, max_length=64)
+    to: str = Field(..., min_length=1, max_length=64)
+    note: str = Field("", max_length=300)
+
+
+class ConsultCloseIn(BaseModel):
+    note: str | None = Field(None, max_length=300)
+
+
+class GrantReviewIn(BaseModel):
+    action: str = Field(..., max_length=20)
+    note: str | None = Field(None, max_length=300)
+
+
 class LaunchIn(BaseModel):
     fhirId: str = Field(..., min_length=1, max_length=64)
     purpose: str = Field(..., examples=["PRESCRIPTION"])
@@ -197,7 +226,14 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
             eng.on_compare_done = persist.save_session          # 뒤에서 계산한 비교 갈래(C1S)도 DB에 남긴다
         state.update(engine=eng, monitor=mon, registry=registry, persist=persist, store=store,
                      auth=Auth(store) if product and product.auth else None,
-                     emr=OutpatientEmr(store) if store is not None else None, worklist=None)
+                     emr=OutpatientEmr(store) if store is not None else None, worklist=None,
+                     access=EmrAccess(store, break_glass=product.break_glass) if product is not None and store is not None else None)
+        if state["access"] is not None:              # 담당이 없는 외래 환자는 규칙으로 나눠 둔다 (처음 켤 때 · 새 환자)
+            got = state["access"].fill()
+            if got["assigned"]:
+                mon.log("emr_assign", None, actor="담당 배정 규칙 (자동)", assigned=got["assigned"], counts=got["counts"])
+                print(f"[medicloak] 담당 배정: 외래 환자 {got['assigned']}명을 의료진 계정에 나눴습니다 "
+                      + " · ".join(f"{k} {v}명" for k, v in got["counts"].items()))
         if state["auth"] is None:
             state["clinic"] = registry.desk_for(None)          # 데모: 화면 하나 = 대화 하나
         if store is not None:                                 # 서버가 꺼질 때 돌고 있던 레드팀 실행은 끊긴 것으로 남긴다
@@ -287,6 +323,10 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
     @app.exception_handler(DemoError)
     async def demo_error(_, exc: DemoError):
         return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+    @app.exception_handler(NotAssigned)
+    async def not_assigned(_, exc: NotAssigned):
+        return JSONResponse(status_code=403, content={"detail": str(exc)}, headers={"X-MediCloak-State": "not-assigned"})
 
     # ── 로그인 · 역할 (운영 모드) ─────────────────────────
     @app.middleware("http")
@@ -413,7 +453,14 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
 
     @r.get("/patient-context")
     def patient_context(request: Request) -> dict[str, Any]:
-        return cur(request).patient_context()
+        c = cur(request)
+        out = c.patient_context()
+        launch = getattr(c.session, "launch", None) or {}
+        if launch.get("fhirId"):
+            out["fhirId"] = launch["fhirId"]          # 의료진 화면만: 지금 보는 환자의 차트로 돌아가는 링크 (보안 담당자 API에는 넣지 않는다)
+            if state.get("access") is not None:
+                out["regno"] = state["access"].regno(launch["fhirId"])     # 환자 띠의 등록번호 (ADR-0036)
+        return out
 
     @r.get("/cases")
     def cases(patientContextId: str, request: Request) -> list[dict[str, Any]]:
@@ -437,23 +484,31 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
             raise HTTPException(422, "질문이 비어 있습니다.")
         d = opened(request)
         key = launch_key(request)
-        st = dict(started=time.time(), label="질문을 보내는 중", calls=0, extracted=False)
+        st = dict(started=time.time(), label="질문을 보내는 중", step="target", calls=0, extracted=False, stop=threading.Event())
 
         def on_call(role: str, n: int) -> None:
             step = ("recheck" if st["extracted"] else "extractor") if role == "extractor" else role
             st["extracted"] = st["extracted"] or role == "extractor"
-            st.update(label=ask_step_ko.get(step, st["label"]), calls=n)
+            st.update(label=ask_step_ko.get(step, st["label"]), step=step, calls=n)
 
         watcher = getattr(getattr(d.peek(), "session", None), "watcher", None)
         if watcher is not None:
-            watcher.watch, watcher.calls = on_call, 0
+            watcher.watch, watcher.calls, watcher.stop = on_call, 0, st["stop"]
         with asking_lock:
             asking[key] = st
         try:
             out = guard(lambda: d.ask(case_id, body.sessionId, body.question, body.clientMessageId, body.scope))
+        except QuestionStopped:
+            conv = d.peek()
+            ref = conv.ref_of(case_id) if conv is not None else None
+            mon().log("clinic_stop", conv.session if conv is not None else None, user=user_of(request), actor="의료진", case=ref,
+                      calls=st["calls"], scope=body.scope,
+                      **(mon().subjects(conv.session, None if body.scope == "all" else [ref]) if conv is not None else {}))
+            raise HTTPException(409, "질문을 멈췄습니다. 대화는 묻기 전 그대로이고, 대상 AI에 보낸 질문은 감사 기록에 남았습니다.",
+                                headers=STOPPED_HEADERS) from None
         finally:
             if watcher is not None:
-                watcher.watch = None
+                watcher.watch, watcher.stop = None, None
             with asking_lock:
                 if asking.get(key) is st:
                     asking.pop(key)
@@ -467,12 +522,27 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
 
     @r.get("/clinic/progress")
     def clinic_progress(request: Request) -> dict[str, Any]:
-        """질문에 답하는 중이면 지금 단계 · 실제 LLM 호출 수 · 걸린 초. 엔진 잠금을 쓰지 않는다."""
+        """질문에 답하는 중이면 지금 단계(step: target · extractor · rewriter · recheck) · 실제 LLM 호출 수 · 걸린 초. 엔진 잠금을 쓰지 않는다."""
         with asking_lock:
             st = asking.get(launch_key(request))
             if st is None:
                 return dict(active=False)
-            return dict(active=True, label=st["label"], calls=st["calls"], elapsed=round(time.time() - st["started"], 1))
+            return dict(active=True, label=st["label"], step=st["step"], calls=st["calls"], elapsed=round(time.time() - st["started"], 1),
+                        stopping=st["stop"].is_set())
+
+    @r.post("/clinic/stop")
+    def clinic_stop(request: Request) -> dict[str, Any]:
+        """
+        답을 기다리는 질문을 멈춘다. 보내 둔 LLM 호출 하나는 끝까지 받되 그 답은 쓰지 않고, 다음 호출 전에 그 턴을 끝낸다
+        (대화 상태는 묻기 전 그대로). 질문 요청은 409(X-MediCloak-State: stopped)로 끝난다. 이미 답을 다 만들었으면 그 답이 간다.
+        """
+        with asking_lock:
+            st = asking.get(launch_key(request))
+            if st is None:
+                return dict(status="idle")
+            st["stop"].set()
+            st["label"] = "질문을 멈추는 중"
+        return dict(status="stopping")
 
     @r.post("/cases/{case_id}/preflight")
     def preflight(case_id: str, body: PreflightIn, request: Request) -> dict[str, Any]:
@@ -538,13 +608,15 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
         """이 의료진의 대화 목록 (지금 대화 · 지난 대화). 숫자 없이 언제 · 어떤 환자 · 질문 몇 번."""
         d = desk(request)
         out, seen = [], set()
+        nos = state["access"].regnos() if state.get("access") is not None else {}     # 등록번호 (ADR-0036)
         with eng().lock:
             for conv in list(d.history.values()):
                 s = conv.session
                 pc = conv.patient_context()
+                fid = (s.launch or {}).get("fhirId") or s.patient_id
                 out.append(dict(id=s.id, trialId=s.trial_id, startedAt=s.created, lastActive=s.last_active, questions=s.turn,
                                 patient=f"{pc['ageSexLabel']} · {pc['primaryDiagnosis']}", purpose=pc["queryPurpose"],
-                                patientId=((s.launch or {}).get("fhirId") or s.patient_id)[:8], current=conv is d.peek(), archived=False))
+                                patientId=fid[:8], regno=nos.get(fid), current=conv is d.peek(), archived=False))
                 seen.add(s.id)
         store, u = state["store"], user_of(request)
         if store is not None and u is not None:
@@ -554,7 +626,8 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
                 pc = c["clinic"]["patient"]
                 out.append(dict(id=c["conv_id"], trialId=c["trial_id"], startedAt=c["started_at"], lastActive=c["last_active"],
                                 questions=c["turns"], patient=f"{pc['ageSexLabel']} · {pc['primaryDiagnosis']}", purpose=pc["queryPurpose"],
-                                patientId=(c.get("patient_fhir_id") or "")[:8] or None, current=False, archived=True))
+                                patientId=(c.get("patient_fhir_id") or "")[:8] or None, regno=nos.get(c.get("patient_fhir_id") or ""),
+                                current=False, archived=True))
         out.sort(key=lambda x: (not x["current"], -(x["lastActive"] or 0)))
         return out
 
@@ -564,13 +637,228 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
             raise HTTPException(404, "EMR 연동은 운영 모드(python -m medicloak)에서만 켜집니다.")
         return state["emr"]
 
-    @r.get("/emr/worklist")
-    def emr_worklist() -> list[dict[str, Any]]:
+    def all_outpatients() -> list[dict[str, Any]]:
+        """외래 환자 전체 목록 줄 (한 번 만들어 두고, 의료진마다 담당 · 예외 열람으로 거른다)."""
         e = emr()
         if state["worklist"] is None:
             with eng().lock:
                 state["worklist"] = worklist(eng(), e)
         return state["worklist"]
+
+    def row_of(fhir_id: str) -> dict[str, Any] | None:
+        return next((x for x in all_outpatients() if x["fhirId"] == fhir_id), None)
+
+    def access_of() -> EmrAccess:
+        if state.get("access") is None:
+            raise HTTPException(404, "EMR 접근 관리는 운영 모드(python -m medicloak)에서만 켜집니다.")
+        return state["access"]
+
+    def not_mine() -> str:
+        if state["access"] is not None and state["access"].break_glass:
+            return "담당 환자가 아닙니다. 꼭 봐야 하면 '담당 외 환자 열기'에서 사유를 적고 여세요."
+        return "담당 환자가 아닙니다. 이 서버에서는 담당 환자만 열 수 있습니다."
+
+    def emr_check(request: Request, fhir_id: str, what: str) -> tuple[str, dict[str, Any] | None] | None:
+        """
+        담당 환자이거나 예외 열람 중이면 (담당 · 예외 열람, 열람). 아니면 NotAssigned (거부를 접근 기록 · 감사 기록에 남긴다).
+        외래 환자인지는 부르는 쪽이 먼저 확인한다 (아니면 404). 로그인 없는 앱 · 데모에서는 검사하지 않는다 (None).
+        """
+        a, u = state.get("access"), user_of(request)
+        if a is None or u is None:
+            return None
+        v = a.via(u["user_id"], fhir_id)
+        if v is None:
+            if a.record(u["user_id"], fhir_id, "denied", detail=what, dedup=60):        # 같은 거부를 잇달아 받으면 한 번만
+                mon().log("emr_denied", None, user=u, actor="의료진", what=what, patient_tag=mon().tag(fhir_id))
+            raise NotAssigned(not_mine())
+        if what == "fhir":
+            a.record(u["user_id"], fhir_id, "fhir", via=v[0], grant_id=v[1]["id"] if v[1] else None, dedup=FHIR_DEDUP)
+        return v
+
+    class FhirGuard:
+        @staticmethod
+        def scope(request: Request) -> set[str] | None:
+            a, u = state.get("access"), user_of(request)
+            return set(a.visible(u["user_id"])) if a is not None and u is not None else None
+
+        check = staticmethod(emr_check)
+
+    def outpatient_or_404(fhir_id: str) -> None:
+        try:
+            emr().patient_row(fhir_id)
+        except FhirNotFound:
+            raise HTTPException(404, "외래 진료 목록에 없는 환자입니다.") from None
+
+    def grant_view(g: dict[str, Any] | None) -> dict[str, Any] | None:
+        """의료진에게 보내는 예외 열람 (사유 · 끝나는 시각)."""
+        if not g:
+            return None
+        return dict(id=g["id"], reason=g["reason"], reasonLabel=g["reasonLabel"], note=g["note"], createdAt=g["createdAt"], expiresAt=g["expiresAt"],
+                    consultId=g.get("consultId"))
+
+    @r.get("/emr/worklist")
+    def emr_worklist(request: Request) -> list[dict[str, Any]]:
+        """
+        내 담당 환자 (+ 협진 의뢰 · 예외 열람으로 연 환자). access: assigned · consult · break_glass. regno: 등록번호.
+        로그인 없는 앱이면 외래 환자 전체.
+        """
+        rows = all_outpatients()
+        a, u = state.get("access"), user_of(request)
+        if a is None or u is None:
+            return rows
+        vis, nos = a.visible(u["user_id"]), a.regnos()
+        return [dict(x, access=vis[x["fhirId"]][0], grant=grant_view(vis[x["fhirId"]][1]), regno=nos.get(x["fhirId"]))
+                for x in rows if x["fhirId"] in vis]
+
+    @r.get("/emr/me")
+    def emr_me(request: Request) -> dict[str, Any]:
+        """의료진 화면이 쓰는 접근 설정: 담당 환자 수 · 예외 열람을 쓸 수 있는지 · 열 수 있는 시간 · 사유 분류."""
+        emr()
+        a, u = state.get("access"), user_of(request)
+        if a is None or u is None:
+            return dict(assigned=None, breakGlass=dict(on=False))
+        return dict(assigned=len(a.assigned_ids(u["user_id"])), active=len(a.active_grants(u["user_id"])) if a.break_glass else 0,
+                    breakGlass=dict(on=a.break_glass, hours=a.hours, noteMin=NOTE_MIN, reasons=[dict(id=k, label=v) for k, v in REASON_KO.items()]),
+                    consult=dict(on=True, noteMin=NOTE_MIN, days=CONSULT_DAYS, hours=a.hours, waiting=a.open_consults(u["user_id"])))
+
+    @r.get("/emr/chart")
+    def emr_chart(request: Request, fhirId: str = Query(..., min_length=1, max_length=64)) -> dict[str, Any]:
+        """
+        환자 차트 요약 (진단 이력 · 처방 · 시술 · 관리 계획 · 최근 내원 · 내원 흐름)과 진료 지원 AI 목적.
+        담당 환자 · 예외 열람 중인 환자만. 열면 접근 기록에 남긴다 (같은 환자를 1분 안에 다시 열면 한 번으로).
+        """
+        outpatient_or_404(fhirId)
+        v = emr_check(request, fhirId, "chart")
+        out = emr().chart(fhirId)
+        row = row_of(fhirId)
+        if row is not None and row.get("ageBand"):
+            out["patient"]["ageBand"] = row["ageBand"]          # 목록 줄과 같은 연령대 (가장 최근 진료 목적의 진료일 기준)
+        out["purposes"] = row["purposes"] if row is not None else []
+        out["access"] = dict(via=v[0] if v else "assigned", grant=grant_view(v[1]) if v else None)
+        a, u = state.get("access"), user_of(request)
+        if a is not None and u is not None and v is not None:
+            a.record(u["user_id"], fhirId, "chart", via=v[0], grant_id=v[1]["id"] if v[1] else None, dedup=60)
+            out["patient"]["regno"] = a.regno(fhirId)
+            # 담당 의료진만 협진 의뢰를 보낸다. 이 환자로 보낸 의뢰(열려 있는 것)는 차트 머리에 보인다
+            out["consult"] = dict(canSend=v[0] == "assigned",
+                                  sent=[c for c in a.consults(u["user_id"])["sent"] if c["fhirId"] == fhirId and c["open"]],
+                                  received=next((c for c in a.consults(u["user_id"])["received"]
+                                                 if c["fhirId"] == fhirId and v[1] and c["id"] == v[1].get("consultId")), None))
+        return out
+
+    @r.post("/emr/break-glass")
+    def emr_break_glass(body: BreakGlassIn, request: Request) -> dict[str, Any]:
+        """
+        담당 외 환자 열기 (예외 열람): 환자 번호 · 사유 분류 · 직접 쓴 설명. 열면 GRANT_HOURS시간 동안 목록 · 차트 · 진료 지원 AI를
+        담당 환자처럼 쓸 수 있고(FHIR Patient의 생년 · 거주 지역은 빼고), 감사 기록 · 접근 기록에 남아 보안 담당자가 검토한다.
+        """
+        emr()
+        a, u = access_of(), user_of(request)
+        if u is None:
+            raise HTTPException(401, "로그인이 필요합니다.")
+        if not a.break_glass:
+            raise HTTPException(403, "이 서버에서는 담당이 아닌 환자를 열 수 없습니다 (--break-glass off).")
+        if body.reason not in REASON_KO:
+            raise HTTPException(422, f"사유 분류는 {', '.join(REASON_KO.values())} 중 하나를 고르세요.")
+        if len(body.note.strip()) < NOTE_MIN:
+            raise HTTPException(422, f"여는 이유를 한 줄로 써 주세요 ({NOTE_MIN}자 이상).")
+        fid = a.resolve(body.patient)
+        if fid is None:
+            raise HTTPException(404, "그 등록번호의 외래 환자가 없습니다. 등록번호(예: 26-4821)를 확인하세요.")
+        if fid in a.assigned_ids(u["user_id"]):
+            raise HTTPException(409, "이미 담당 환자입니다. 내 담당 환자 목록에서 여세요.")
+        g, created = a.open_grant(u["user_id"], fid, body.reason, body.note)
+        if created:
+            a.record(u["user_id"], fid, "break_glass", via="break_glass", grant_id=g["id"], detail=f"{g['reasonLabel']}: {g['note']}")
+            mon().log("break_glass", None, user=u, actor="의료진", reason=g["reasonLabel"], note=g["note"], hours=a.hours, grant=g["id"],
+                      patient_tag=mon().tag(fid))
+        return dict(fhirId=fid, identifier=fid[:8], regno=a.regno(fid), created=created, grant=grant_view(g))
+
+    # ── 협진 의뢰 (ADR-0036): 담당 의료진이 보내고, 받은 의료진은 번호 없이 연다 ──
+    def clinician_or_401(request: Request) -> tuple[EmrAccess, dict[str, Any]]:
+        emr()
+        a, u = access_of(), user_of(request)
+        if u is None:
+            raise HTTPException(401, "로그인이 필요합니다.")
+        return a, u
+
+    def consult_view(c: dict[str, Any], nos: dict[str, str]) -> dict[str, Any]:
+        """의료진에게 보내는 협진 의뢰: 등록번호 · 성별 · 연령대를 붙인다 (진단은 열어서 본다)."""
+        x = row_of(c["fhirId"]) or {}
+        return dict(c, regno=nos.get(c["fhirId"]), sex=x.get("sex"), ageBand=x.get("ageBand"))
+
+    @r.get("/emr/directory")
+    def emr_directory(request: Request) -> list[dict[str, Any]]:
+        """협진 의뢰를 받을 수 있는 의료진 (나를 뺀 쓰는 계정)."""
+        a, u = clinician_or_401(request)
+        return a.directory(except_user=u["user_id"])
+
+    @r.get("/emr/consults")
+    def emr_consults(request: Request) -> dict[str, Any]:
+        """받은 협진 의뢰(열 수 있는 것 먼저) · 보낸 협진 의뢰."""
+        a, u = clinician_or_401(request)
+        got, nos = a.consults(u["user_id"]), a.regnos()
+        return dict(received=[consult_view(c, nos) for c in got["received"]], sent=[consult_view(c, nos) for c in got["sent"]])
+
+    @r.post("/emr/consults")
+    def emr_consult_send(body: ConsultIn, request: Request) -> dict[str, Any]:
+        """담당 환자에 대해 다른 의료진에게 협진 의뢰를 보낸다. 같은 의료진에게 열린 의뢰가 있으면 그것을 돌려준다 (created=false)."""
+        a, u = clinician_or_401(request)
+        outpatient_or_404(body.fhirId)
+        v = guard(lambda: emr_check(request, body.fhirId, "consult"))
+        if v is None or v[0] != "assigned":
+            raise HTTPException(403, "협진 의뢰는 담당 의료진만 보낼 수 있습니다.")
+        to = state["store"].user_by_name(body.to) if state.get("store") is not None else None
+        if to is None or to["role"] != "clinician" or not to["active"]:
+            raise HTTPException(404, "받을 의료진을 찾지 못했습니다.")
+        try:
+            c, created = a.send_consult(u["user_id"], body.fhirId, to["user_id"], body.note)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
+        if created:
+            a.record(u["user_id"], body.fhirId, "consult", via="assigned", detail=f"{to['display_name']}: {c['note']}")
+            mon().log("emr_consult", None, user=u, actor="의료진", to=actor_label(to, to["username"]), note=c["note"], consult=c["id"],
+                      patient_tag=mon().tag(body.fhirId))
+        return dict(consult_view(c, a.regnos()), created=created)
+
+    @r.post("/emr/consults/{cid}/open")
+    def emr_consult_open(cid: int, request: Request) -> dict[str, Any]:
+        """받은 협진 의뢰로 환자를 연다 (번호를 적지 않는다. 사유 분류 '협진', 의뢰 내용이 사유). 열람은 GRANT_HOURS시간."""
+        a, u = clinician_or_401(request)
+        try:
+            c, g, created = a.open_consult(cid, u["user_id"])
+        except KeyError:
+            raise HTTPException(404, "받은 협진 의뢰가 아닙니다.") from None
+        except PermissionError as exc:
+            raise HTTPException(409, str(exc)) from None
+        if created:
+            a.record(u["user_id"], c["fhirId"], "consult_open", via="consult", grant_id=g["id"], detail=g["note"])
+            mon().log("emr_consult_open", None, user=u, actor="의료진", consult=cid, grant=g["id"], hours=a.hours,
+                      sender=c["sender"]["displayName"], patient_tag=mon().tag(c["fhirId"]))
+        return dict(consult=consult_view(c, a.regnos()), fhirId=c["fhirId"], grant=grant_view(g), created=created)
+
+    def close_consult(cid: int, body: ConsultCloseIn | None, request: Request, how: str) -> dict[str, Any]:
+        a, u = clinician_or_401(request)
+        try:
+            c = a.close_consult(cid, u["user_id"], how, body.note if body else None)
+        except KeyError:
+            raise HTTPException(404, "받은 · 보낸 협진 의뢰가 아닙니다.") from None
+        except PermissionError as exc:
+            raise HTTPException(409, str(exc)) from None
+        a.record(u["user_id"], c["fhirId"], "consult_decline" if how == "declined" else "consult_cancel", detail=c.get("closeNote"))
+        mon().log("emr_consult_decline" if how == "declined" else "emr_consult_cancel", None, user=u, actor="의료진", consult=cid,
+                  note=c.get("closeNote"), patient_tag=mon().tag(c["fhirId"]))
+        return consult_view(c, a.regnos())
+
+    @r.post("/emr/consults/{cid}/decline")
+    def emr_consult_decline(cid: int, request: Request, body: ConsultCloseIn | None = None) -> dict[str, Any]:
+        """받은 의료진이 협진 의뢰를 거절한다 (까닭은 쓰지 않아도 된다)."""
+        return close_consult(cid, body, request, "declined")
+
+    @r.post("/emr/consults/{cid}/cancel")
+    def emr_consult_cancel(cid: int, request: Request, body: ConsultCloseIn | None = None) -> dict[str, Any]:
+        """보낸 의료진이 협진 의뢰를 취소한다. 그 의뢰로 연 열람도 바로 끝난다."""
+        return close_consult(cid, body, request, "canceled")
 
     # 진료 지원 AI를 여는 동안의 진행 (의료진마다). 첫 답은 실제 LLM을 차례로 여러 번 부르므로 화면이 지금 단계를 보여 준다.
     launching: dict[str, dict[str, Any]] = {}
@@ -591,28 +879,38 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
 
     @r.post("/emr/launch")
     def emr_launch(body: LaunchIn, request: Request) -> dict[str, Any]:
-        emr()
+        outpatient_or_404(body.fhirId)
+        v = emr_check(request, body.fhirId, "launch")
         tid = find_trial(eng(), body.fhirId, body.purpose)
         d = desk(request)
         key = launch_key(request)
-        st = dict(started=time.time(), label="비슷한 과거 사례를 찾고 있습니다", calls=0, extracted=False)
+        st = dict(started=time.time(), label="비슷한 과거 사례를 찾고 있습니다", step="target", calls=0, extracted=False, stop=threading.Event())
 
         def on_call(role: str, n: int) -> None:
             step = ("recheck" if st["extracted"] else "extractor") if role == "extractor" else role
             st["extracted"] = st["extracted"] or role == "extractor"
-            st.update(label=step_ko.get(step, st["label"]), calls=n)
+            st.update(label=step_ko.get(step, st["label"]), step=step, calls=n)
 
         ev = guard(lambda: eng().check_visit(tid, body.visitEvent))
         with launching_lock:
             launching[key] = st
         try:
-            guard(lambda: d.start(tid, launch=dict(fhirId=body.fhirId, purpose=body.purpose, visitEvent=ev), on_call=on_call, visit_event=ev))
+            guard(lambda: d.start(tid, launch=dict(fhirId=body.fhirId, purpose=body.purpose, visitEvent=ev), on_call=on_call, visit_event=ev,
+                                  stop=st["stop"]))
+        except QuestionStopped:
+            mon().log("emr_launch_stop", None, user=user_of(request), actor="의료진", trial=tid, purpose=body.purpose, calls=st["calls"],
+                      patient_tag=mon().tag(body.fhirId))
+            raise HTTPException(409, "진료 지원 AI 열기를 멈췄습니다. 열려 있던 대화는 그대로입니다.", headers=STOPPED_HEADERS) from None
         finally:
             with launching_lock:
                 if launching.get(key) is st:
                     launching.pop(key)
-        mon().log("emr_launch", d.session, user=user_of(request), actor="의료진", purpose=body.purpose, **visit_note(d.session),
+        via = dict(access=v[0], grant=v[1]["id"] if v[1] else None) if v else {}
+        mon().log("emr_launch", d.session, user=user_of(request), actor="의료진", purpose=body.purpose, **visit_note(d.session), **via,
                   **mon().subjects(d.session, []))
+        a, u = state.get("access"), user_of(request)
+        if a is not None and u is not None and v is not None:
+            a.record(u["user_id"], body.fhirId, "launch", via=v[0], grant_id=v[1]["id"] if v[1] else None, detail=body.purpose)
         return dict(status="ok", workspaceId=d.workspace_id, trialId=tid, seconds=round(time.time() - st["started"], 1), calls=st["calls"])
 
     @r.post("/emr/prefetch")
@@ -621,7 +919,8 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
         진료 목적(· 오늘 진단)을 고른 채 잠시 머물면 화면이 부른다. 첫 답을 뒤에서 미리 만들어 '열기'를 짧게 한다 (engine.prefetch).
         대화는 만들지 않는다. 지금 연 대화와 같으면 하지 않는다(current). 도는 중이면 이것을 다음에 한다(queued). serve --prefetch off면 off.
         """
-        emr()
+        outpatient_or_404(body.fhirId)
+        emr_check(request, body.fhirId, "prefetch")
         if product is not None and not product.prefetch:
             return dict(status="off")
         tid = find_trial(eng(), body.fhirId, body.purpose)
@@ -641,12 +940,14 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
         return dict(status=eng().prefetch(tid, launch_key(request), ev, on_done=done))
 
     @r.get("/emr/visits")
-    def emr_visits(fhirId: str = Query(..., min_length=1, max_length=64)) -> dict[str, Any]:
+    def emr_visits(request: Request, fhirId: str = Query(..., min_length=1, max_length=64)) -> dict[str, Any]:
         """
         오늘 볼 진단으로 고를 수 있는 것 (진료 목적마다): 진단 이름마다 그 목적이 성립하는 가장 최근 사건, 최근 것부터.
-        항목마다 진료일 · 고려 중 처치 · 동반질환. 기본(지금 기준 진료)에는 isDefault. 외래 환자만 (과거 기록 환자는 404).
+        항목마다 진료일 · 고려 중 처치 · 동반질환. 기본(지금 기준 진료)에는 isDefault. 외래 환자만 (과거 기록 환자는 404),
+        그중 담당 환자 · 예외 열람 중인 환자만 (아니면 403).
         """
-        emr()
+        outpatient_or_404(fhirId)
+        emr_check(request, fhirId, "visits")
         e = eng()
         tids = [(tid, qt) for tid, pid, qt, _ in e.plan if pid == fhirId]
         if not tids:
@@ -660,7 +961,19 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
             st = launching.get(launch_key(request))
             if st is None:
                 return dict(active=False)
-            return dict(active=True, label=st["label"], calls=st["calls"], elapsed=round(time.time() - st["started"], 1))
+            return dict(active=True, label=st["label"], step=st["step"], calls=st["calls"], elapsed=round(time.time() - st["started"], 1),
+                        stopping=st["stop"].is_set())
+
+    @r.post("/emr/launch/stop")
+    def emr_launch_stop(request: Request) -> dict[str, Any]:
+        """진료 지원 AI 열기를 멈춘다 (보내 둔 호출 하나는 끝까지 받고, 그다음에 멈춘다. 열려 있던 대화는 그대로)."""
+        with launching_lock:
+            st = launching.get(launch_key(request))
+            if st is None:
+                return dict(status="idle")
+            st["stop"].set()
+            st["label"] = "여는 것을 멈추는 중"
+        return dict(status="stopping")
 
     # ── 보안 담당자: 의료진 대화를 숫자와 함께 (읽기 전용) ──
     w = APIRouter(prefix="/api/watch", dependencies=guarded)
@@ -770,7 +1083,91 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
                     auth=state["auth"] is not None, persist=state["store"] is not None, llmUsage=e.live_usage(),
                     autoRedteam=dict(onChange=state["auto"].on_change and state["auto"].enabled, daily=state["auto"].daily if state["auto"].enabled else None,
                                      decisionText=state["auto"].decision_text),
-                    protections=e.protections())
+                    protections=e.protections(), emrAccess=state["access"].describe() if state.get("access") is not None else None)
+
+    # ── 보안 담당자: EMR 접근 관리 (목록 · 배정 · 접근 기록. 차트는 사유를 적은 열람 때만) ──
+    def tag_map() -> dict[str, str]:
+        """기호 → 외래 환자 id (기호만 화면에 보내고, 열람 · 검토 요청은 기호로 받는다)."""
+        return {mon().tag(f): f for f in access_of().outpatients()}
+
+    def by_tag(tag: str) -> str:
+        f = tag_map().get(tag)
+        if f is None:
+            raise HTTPException(404, f"없는 환자 기호입니다: {tag}")
+        return f
+
+    def grant_public(g: dict[str, Any]) -> dict[str, Any]:
+        """보안 담당자에게 보내는 예외 열람: 환자 번호 대신 기호."""
+        out = {k: v for k, v in g.items() if k not in ("fhirId", "userId")}
+        out["tag"] = mon().tag(g["fhirId"])
+        return out
+
+    @r.get("/monitor/emr")
+    def monitor_emr() -> dict[str, Any]:
+        """외래 환자마다 기호 · 진료 상태 · 담당 의료진 · 마지막 접근 · 최근 7일 접근 수 · 예외 열람 수 (진단 · 나이 · 번호 없음)."""
+        a = access_of()
+        now, window = time.time(), 7 * 86400
+        team, st = a.team(), a.stats(now - window)
+        grants = a.grants(limit=1000)
+        bg = collections.Counter(g["fhirId"] for g in grants)
+        pending = collections.Counter(g["fhirId"] for g in grants if g["review"] is None)
+        patients = []
+        for x in all_outpatients():
+            f, s0 = x["fhirId"], st.get(x["fhirId"], {})
+            patients.append(dict(tag=mon().tag(f), status=x["status"], statusLabel=x["statusLabel"], team=team.get(f, []),
+                                 lastAccess=s0.get("last"), recent=s0.get("recent", 0), denied=s0.get("denied", 0),
+                                 breakGlass=bg[f], pendingReview=pending[f]))
+        patients.sort(key=lambda p: (-p["pendingReview"], -((p["lastAccess"] or {}).get("at") or 0), p["tag"]))
+        kpi = dict(outpatients=len(patients), unassigned=sum(not p["team"] for p in patients), pendingReview=a.pending(),
+                   charts24h=a.count_since(now - 86400, ("chart", "fhir")), denied7d=a.count_since(now - window, ("denied",)),
+                   breakGlass7d=a.count_since(now - window, ("break_glass",)), reveals7d=a.count_since(now - window, ("reveal",)),
+                   consults7d=a.count_since(now - window, ("consult",)))
+        return dict(kpi=kpi, patients=patients, grants=[grant_public(g) for g in grants[:100]], clinicians=a.counts(),
+                    breakGlass=a.break_glass, grantHours=a.hours, windowDays=7)
+
+    @r.get("/monitor/emr/patients/{tag}")
+    def monitor_emr_patient(tag: str) -> dict[str, Any]:
+        """한 환자의 접근 기록 · 담당 · 예외 열람 (차트 없이)."""
+        a = access_of()
+        f = by_tag(tag)
+        x = row_of(f) or {}
+        return dict(tag=tag, status=x.get("status"), statusLabel=x.get("statusLabel"), team=a.team().get(f, []),
+                    history=a.history(f, 200), grants=[grant_public(g) for g in a.grants(fhir_id=f)])
+
+    @r.post("/monitor/emr/patients/{tag}/reveal")
+    def monitor_emr_reveal(tag: str, body: RevealIn, request: Request) -> dict[str, Any]:
+        """사유를 적고 차트를 연다: 환자 번호와 차트 요약이 보인다. 감사 기록 · 접근 기록에 남긴다."""
+        a = access_of()
+        note = (body.note or "").strip() or None
+        if product is not None and (note is None or len(note) < 5):
+            raise HTTPException(422, "차트를 여는 이유를 한 줄로 써 주세요 (5자 이상).")
+        f = by_tag(tag)
+        u = user_of(request)
+        a.record(u["user_id"] if u else None, f, "reveal", via="security", detail=f"{body.reason.strip()}: {note or ''}".strip(": "))
+        mon().log("emr_reveal", None, user=u, reason=body.reason.strip(), note=note, patient_tag=tag)
+        chart = emr().chart(f)
+        x = row_of(f)
+        if x is not None and x.get("ageBand"):
+            chart["patient"]["ageBand"] = x["ageBand"]
+        return dict(tag=tag, identifier=f[:8], regno=a.regno(f), chart=chart, team=a.team().get(f, []), history=a.history(f, 200),
+                    grants=[grant_public(g) for g in a.grants(fhir_id=f)])
+
+    @r.post("/monitor/emr/grants/{grant_id}/review")
+    def monitor_grant_review(grant_id: int, body: GrantReviewIn, request: Request) -> dict[str, Any]:
+        """예외 열람 사후 검토: ok(적절함) · flag(확인 필요, 열람을 바로 끝냄)."""
+        a = access_of()
+        u = user_of(request)
+        if body.action not in GRANT_REVIEW_KO:
+            raise HTTPException(422, f"action은 {', '.join(GRANT_REVIEW_KO)} 중 하나입니다.")
+        if body.action == "flag" and len((body.note or "").strip()) < 5:
+            raise HTTPException(422, "확인이 필요한 까닭을 한 줄로 써 주세요 (5자 이상).")
+        try:
+            g = a.review(grant_id, body.action, body.note, by=actor_label(u, "보안 담당자"))
+        except KeyError:
+            raise HTTPException(404, f"없는 예외 열람입니다: {grant_id}") from None
+        mon().log("break_glass_review", None, user=u, review=body.action, review_label=GRANT_REVIEW_KO[body.action],
+                  note=(body.note or "").strip() or None, grant=grant_id, patient_tag=mon().tag(g["fhirId"]))
+        return grant_public(g)
 
     @r.get("/monitor/sessions/{sid}")
     def monitor_session(sid: str) -> dict[str, Any]:
@@ -1026,7 +1423,7 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
         return out
 
     app.include_router(w)
-    app.include_router(fhir_router(emr), dependencies=guarded)
+    app.include_router(fhir_router(emr, FhirGuard), dependencies=guarded)
     app.include_router(terminology_router(), dependencies=guarded)   # 의료 용어 RAG (/api/terminology/…). 아래 '없는 경로'보다 먼저
 
     @r.api_route("/{rest:path}", methods=["GET", "POST"])

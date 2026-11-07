@@ -302,6 +302,39 @@
     border-radius: 2px;
     background: repeating-linear-gradient(135deg, color-mix(in srgb, var(--emr-lock) 70%, transparent) 0 1.5px, transparent 1.5px 4px);
   }
+  /* 표시(잠금 · 범위)는 누르면 설명이 뜨는 단추다 */
+  button.lock-token,
+  button.range-tag {
+    cursor: pointer;
+  }
+  button.lock-token:hover {
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--emr-lock) 75%, transparent);
+  }
+  button.range-tag:hover {
+    background: var(--zp-iris-tint);
+  }
+  button.lock-token:focus-visible,
+  button.range-tag:focus-visible {
+    outline: 2px solid var(--zp-iris);
+    outline-offset: 1px;
+  }
+  /* 표시를 눌렀을 때의 설명 창 (화면 기준으로 띄워 답 카드에 잘리지 않게) */
+  .value-note {
+    position: fixed;
+    z-index: 60;
+    width: min(300px, calc(100vw - 16px));
+    padding: 10px 12px;
+    border: 1px solid var(--zp-line);
+    border-radius: 10px;
+    background: var(--zp-surface);
+    box-shadow: 0 10px 28px color-mix(in srgb, var(--zp-text) 16%, transparent);
+    font-size: 12.5px;
+    font-weight: 400;
+    line-height: 1.55;
+    color: var(--zp-text-2);
+    text-align: left;
+    white-space: normal;
+  }
   /* 의료진 화면: 넓은 범위로 바꾼 값 */
   .range-value {
     text-decoration: underline dotted var(--zp-iris);
@@ -326,6 +359,92 @@
   .wikilink:focus-visible {
     @apply bg-iris-tint;
     outline: none;
+  }
+  /*
+   * 진료 지원 AI 진행 단계 (StageTrack): 걸린 시간 대신 지금 단계를 막대 셋으로 보인다.
+   * 끝난 단계는 채운 막대, 지금 단계는 빛이 지나가는 막대, 남은 단계는 빈 막대. 움직임을 줄인 설정이면 반쯤 채운 막대로 멈춘다.
+   */
+  .stage-bar {
+    position: relative;
+    display: block;
+    height: 4px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: var(--zp-surface-2);
+  }
+  .stage-track li[data-state='done'] .stage-bar {
+    background: var(--zp-iris);
+  }
+  .stage-track li[data-state='now'] .stage-bar {
+    background: color-mix(in srgb, var(--zp-iris) 20%, var(--zp-surface-2));
+  }
+  .stage-track li[data-state='now'] .stage-bar::after {
+    content: '';
+    position: absolute;
+    inset: 0 auto 0 0;
+    width: 45%;
+    border-radius: inherit;
+    background: linear-gradient(90deg, transparent, var(--zp-iris), transparent);
+    animation: stage-sweep 1.35s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  }
+  .stage-label {
+    display: block;
+    margin-top: 6px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+    line-height: 1.3;
+    color: var(--zp-text-3);
+  }
+  .stage-track li[data-state='done'] .stage-label {
+    color: var(--zp-text-2);
+  }
+  .stage-track li[data-state='now'] .stage-label {
+    font-weight: 600;
+    color: var(--zp-text);
+  }
+  .stage-track.is-stopping .stage-bar::after {
+    animation-play-state: paused;
+    opacity: 0.35;
+  }
+  @keyframes stage-sweep {
+    from {
+      transform: translateX(-100%);
+    }
+    to {
+      transform: translateX(230%);
+    }
+  }
+  /* 여는 중 단추: 오른쪽으로 흐르는 꺾쇠 셋 (돌아가는 표시 대신) */
+  .chev-run {
+    display: inline-flex;
+    align-items: center;
+  }
+  .chev-run svg {
+    width: 15px;
+    height: 15px;
+    margin-left: -7px;
+    opacity: 0.28;
+    animation: chev-run 1.1s ease-in-out infinite;
+  }
+  .chev-run svg:first-child {
+    margin-left: 0;
+  }
+  .chev-run svg:nth-child(2) {
+    animation-delay: 0.16s;
+  }
+  .chev-run svg:nth-child(3) {
+    animation-delay: 0.32s;
+  }
+  @keyframes chev-run {
+    0%,
+    100% {
+      opacity: 0.28;
+    }
+    45% {
+      opacity: 1;
+    }
   }
   /* 연결된 질문을 눌러 대화의 그 자리로 갔을 때 잠깐 표시 */
   .jump-flash {
@@ -355,5 +474,18 @@
   *::after {
     animation-duration: 0ms !important;
     transition-duration: 0ms !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stage-track li[data-state='now'] .stage-bar::after {
+    animation: none;
+    width: 50%;
+    background: var(--zp-iris);
+    opacity: 0.55;
+  }
+  .chev-run svg {
+    animation: none;
+    opacity: 0.8;
   }
 }

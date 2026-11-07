@@ -943,7 +943,7 @@ class ClinicDesk:
         return self.current.workspace_id
 
     def start(self, trial_id: str, *, launch: dict[str, Any] | None = None, on_call: Callable[[str, int], None] | None = None,
-              visit_event: str | None = None) -> ClinicConversation:
+              visit_event: str | None = None, stop: Any = None) -> ClinicConversation:
         with self.lock:
             cur = self._current
             first = next((r for r in cur.session.logs[self.arm] if r.get("turn") == 0), None) if cur is not None else None
@@ -958,7 +958,7 @@ class ClinicDesk:
                 return cur
             with self.eng.lock:
                 s = self.eng.new_session(trial_id, source="clinic", budget=self.budget, llm_mode=self.llm_mode, on_call=on_call,
-                                         visit_event=visit_event, owner=self.owner)
+                                         visit_event=visit_event, owner=self.owner, stop=stop)
                 s.owner = self.owner
                 s.launch = launch
                 conv = ClinicConversation(self.eng, s, self.arm, compare=self.compare, location_label=self.location_label)

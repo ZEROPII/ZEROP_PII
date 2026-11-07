@@ -6,6 +6,10 @@ import type {
   AssistState,
   AutoStatus,
   AuditEntry,
+  EmrAccessOverview,
+  EmrAccessPatient,
+  EmrGrantRecord,
+  EmrRevealResult,
   HiddenItem,
   MonitorDetail,
   MonitorOverview,
@@ -110,6 +114,15 @@ export const monitorApi = {
   /** 검토 보조 초안 (세부 정보 요청마다 서버가 뒤에서 만든다). run은 같은 요청으로 다시 만든다 */
   assist: (sid: string, signal?: AbortSignal) => request<AssistState>(`/monitor/sessions/${encodeURIComponent(sid)}/assist`, { signal }),
   assistRun: (sid: string) => request<AssistState>(`/monitor/sessions/${encodeURIComponent(sid)}/assist`, { method: 'POST' }),
+  /** EMR 접근 관리: 외래 환자마다 기호 · 담당 · 접근 (번호 · 차트 없음) */
+  emrAccess: (signal?: AbortSignal) => request<EmrAccessOverview>('/monitor/emr', { signal }),
+  emrPatient: (tag: string, signal?: AbortSignal) => request<EmrAccessPatient>(`/monitor/emr/patients/${encodeURIComponent(tag)}`, { signal }),
+  /** 사유를 적고 차트를 연다 (환자 번호 · 차트 요약이 보인다. 감사 기록에 남는다) */
+  emrReveal: (tag: string, reason: string, note: string) =>
+    request<EmrRevealResult>(`/monitor/emr/patients/${encodeURIComponent(tag)}/reveal`, { method: 'POST', body: JSON.stringify({ reason, note }) }),
+  /** 예외 열람 사후 검토: ok(적절함) · flag(확인 필요, 열람을 끝냄) */
+  reviewGrant: (id: number, action: 'ok' | 'flag', note?: string) =>
+    request<EmrGrantRecord>(`/monitor/emr/grants/${id}/review`, { method: 'POST', body: JSON.stringify({ action, note: note || null }) }),
   removeRule: (sid: string, ruleId: string) =>
     request<MonitorDetail>(`/monitor/sessions/${encodeURIComponent(sid)}/rules/${encodeURIComponent(ruleId)}`, { method: 'DELETE' }),
 };

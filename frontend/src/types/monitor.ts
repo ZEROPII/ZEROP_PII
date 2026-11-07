@@ -3,7 +3,7 @@
 // 이름은 백엔드(webdemo/backend/monitor.py · engine.py)의 JSON 키를 그대로 쓴다.
 // 원 응답·가린 원래 값·환자 번호는 열람 사유를 남긴 뒤(revealed=true)에만 채워져 온다.
 
-import type { ProtectionPolicy } from './domain';
+import type { EmrChart, ProtectionPolicy } from './domain';
 
 export type ArmKey = 'C0' | 'C1' | 'C1S';
 export type MonitorStatus = 'danger' | 'caution' | 'safe';
@@ -111,6 +111,16 @@ export interface MonitorPolicy extends ProtectionPolicy {
     answerBudgetSec: number | null;
     sensitivity: { on: boolean; strictK?: number; excludedPatients?: number; categories?: { name: string; grade: number }[] };
   };
+  /** EMR 접근 관리 (ADR-0034): 담당 배정 · 예외 열람. 운영 모드만 */
+  emrAccess?: {
+    on: boolean;
+    breakGlass: boolean;
+    grantHours: number;
+    outpatients: number;
+    unassigned: number;
+    clinicians: { username: string; displayName: string; department: string | null; active: boolean; assigned: number }[];
+    pendingReview: number;
+  } | null;
 }
 
 export interface ThreadMessage {
@@ -423,7 +433,8 @@ export interface AuditEntry {
   baseline?: string | null;
   /** 검토 보조 초안(assist_draft): 추천 · 추천별 수 · 쓴 방식 */
   verdict?: string;
-  counts?: Partial<Record<'release' | 'consider' | 'keep' | 'decline', number>>;
+  /** 검토 보조 초안: 추천별 수 · 담당 배정(emr_assign): 계정마다 담당 수 */
+  counts?: Partial<Record<string, number>>;
   writer?: 'llm' | 'template';
   /** 의료진 질문(clinic_question): 대화 턴 · 공개 방식 · 보호한 값 수 */
   turn?: number | null;
@@ -448,6 +459,101 @@ export interface AuditEntry {
   per_type?: number | null;
   /** 보안 담당자 질문 미리 세기(watch_preflight): 질문 글자 수 (본문은 남기지 않음) */
   question_chars?: number;
+  /** EMR 접근 (ADR-0034): 거부한 일 · 예외 열람 시간 · 예외 열람 번호 · 검토 · 배정 */
+  what?: string;
+  hours?: number;
+  grant?: number | null;
+  access?: string;
+  review?: string;
+  review_label?: string;
+  assigned?: number;
+  change?: 'add' | 'remove';
+  clinician?: string;
+  reset?: boolean;
+  /** 협진 의뢰 (ADR-0036): 받는 의료진 · 보낸 의료진 이름 · 의뢰 번호 */
+  to?: string;
+  sender?: string;
+  consult?: number;
+}
+
+/** EMR 접근 기록 한 건 (GET /api/monitor/emr/patients/{기호}) */
+export interface EmrAccessEvent {
+  at: number;
+  action: 'chart' | 'fhir' | 'launch' | 'denied' | 'break_glass' | 'reveal' | string;
+  actionLabel: string;
+  via: string | null;
+  viaLabel: string | null;
+  grantId: number | null;
+  detail: string | null;
+  username: string | null;
+  displayName: string | null;
+  role: string | null;
+}
+
+export interface EmrTeamMember {
+  username: string;
+  displayName: string;
+  department: string | null;
+}
+
+/** 보안 담당자에게 보이는 예외 열람 (환자는 기호로) */
+export interface EmrGrantRecord {
+  id: number;
+  tag: string;
+  reason: string;
+  reasonLabel: string;
+  note: string | null;
+  createdAt: number;
+  expiresAt: number;
+  endedAt: number | null;
+  active: boolean;
+  review: 'ok' | 'flag' | null;
+  reviewLabel: string | null;
+  reviewNote: string | null;
+  reviewedAt: number | null;
+  reviewedBy: string | null;
+  username: string;
+  displayName: string;
+  department: string | null;
+  /** 협진 의뢰로 연 열람이면 보낸 의료진 · 의뢰 내용 (ADR-0036) */
+  consult?: { fromName: string | null; fromDepartment: string | null; note: string | null } | null;
+}
+
+/** GET /api/monitor/emr: 외래 환자마다 기호 · 상태 · 담당 · 접근 (번호 · 진단 · 나이 없음) */
+export interface EmrAccessOverview {
+  kpi: { outpatients: number; unassigned: number; pendingReview: number; charts24h: number; denied7d: number; breakGlass7d: number; reveals7d: number; consults7d?: number };
+  patients: {
+    tag: string;
+    status: 'ACTIVE' | 'RESOLVED' | 'DORMANT';
+    statusLabel: string;
+    team: EmrTeamMember[];
+    lastAccess: EmrAccessEvent | null;
+    recent: number;
+    denied: number;
+    breakGlass: number;
+    pendingReview: number;
+  }[];
+  grants: EmrGrantRecord[];
+  clinicians: (EmrTeamMember & { active: boolean; assigned: number })[];
+  breakGlass: boolean;
+  grantHours: number;
+  windowDays: number;
+}
+
+export interface EmrAccessPatient {
+  tag: string;
+  status: string | null;
+  statusLabel: string | null;
+  team: EmrTeamMember[];
+  history: EmrAccessEvent[];
+  grants: EmrGrantRecord[];
+}
+
+/** 사유를 적은 차트 열람: 환자 번호 · 등록번호 · 차트 요약 */
+export interface EmrRevealResult extends EmrAccessPatient {
+  identifier: string;
+  regno?: string | null;
+  chart: EmrChart;
 }
 
 export interface Proportion {
