@@ -126,7 +126,7 @@ def serve(a: argparse.Namespace) -> None:
     from webdemo.backend.ledger import DisclosureLedger
     ledger = DisclosureLedger(store, window_days=a.ledger_window_days) if a.ledger == "on" else None
     eng = Engine(db.parent / "engine", log=lambda s: print(s.replace("[webdemo]", "[medicloak]", 1)), paths=paths, live_llm=live_llm, live_label=label, first_id=first,
-                 llm_concurrency=a.llm_concurrency, live_rule_extract=not a.no_rule_extract, answer_style=a.answer_style == "on",
+                 llm_concurrency=a.llm_concurrency, extract_parallel=a.extract_parallel, live_rule_extract=not a.no_rule_extract, answer_style=a.answer_style == "on",
                  recent_visit=a.visit == "recent", ledger=ledger, input_gate=a.input_gate == "on",
                  answer_budget=a.answer_budget if a.answer_budget > 0 else None, sensitivity=a.sensitivity == "on", strict_k=a.strict_k)
     pr = eng.protections()
@@ -137,7 +137,8 @@ def serve(a: argparse.Namespace) -> None:
     product = Product(store=store, compare=not a.no_compare, keep=a.keep, cookie_secure=a.cookie_secure,
                       auto_redteam=auto, auto_daily=daily if a.llm == "real" else None, prefetch=a.prefetch == "on",
                       break_glass=a.break_glass == "on")
-    print("[medicloak] EMR 접근 (ADR-0034): 담당 환자만 · 담당 외 예외 열람 " + ("켬 (사유를 적고 12시간)" if product.break_glass else "끔"))
+    print("[medicloak] EMR 접근 (ADR-0034 · ADR-0036): 담당 환자만 · 협진 의뢰 켬 · 담당 외 예외 열람 "
+          + ("켬 (등록번호와 사유를 적고 12시간)" if product.break_glass else "끔"))
     app = create_app(eng, simulations=False, product=product)          # 운영 모드: 환자는 EMR에서 열 때 정해진다
     if not (DIST / "index.html").exists():
         print("[medicloak] 화면 파일(frontend/dist)이 없습니다. --build 를 붙여 한 번 빌드하세요. 지금은 API만 켭니다.", file=sys.stderr)
@@ -301,7 +302,10 @@ def _serve_args(p: argparse.ArgumentParser, top: bool = False) -> None:
     p.add_argument("--llm", choices=("real", "dry-run", "oracle"), **(kw or dict(default="real")),
                    help="의료진 대화의 대상 AI: real(.env의 실제 모델, 기본) · dry-run(연결 점검, LLM을 부르지 않음) · oracle(결정적 응답기)")
     p.add_argument("--env-file", **(kw or dict(default=None)), help="읽을 .env (기본: 저장소 루트의 .env)")
-    p.add_argument("--llm-concurrency", type=int, **(kw or dict(default=1)), help="동시에 보내는 LLM 요청 수 (기본 1)")
+    p.add_argument("--llm-concurrency", type=int, **(kw or dict(default=1)), help="동시에 처리하는 질문의 LLM 요청 수 (기본 1)")
+    p.add_argument("--extract-parallel", type=int, **(kw or dict(default=4)),
+                   help="답에 사례가 둘 이상이면 단서 추출을 사례마다 나눠 이만큼까지 동시에 부른다 (기본 4, 1이면 한 번에, ADR-0035). "
+                        ".env에 LLM_MIN_INTERVAL_SEC가 있으면 나누지 않는다")
     p.add_argument("--build", action="store_true", **(kw or {}), help="시작 전에 frontend/를 빌드한다 (npm 필요)")
     p.add_argument("--no-compare", action="store_true", **(kw or {}), help="의료진 대화에서 비교 갈래(C0 · C1S)를 계산하지 않는다 (호출 줄이기)")
     p.add_argument("--keep", type=int, **(kw or dict(default=12)), help="의료진마다 메모리에 둘 대화 수 (넘으면 DB에만)")
@@ -343,7 +347,7 @@ def _serve_args(p: argparse.ArgumentParser, top: bool = False) -> None:
 
 
 def _defaults(a: argparse.Namespace) -> argparse.Namespace:
-    for k, v in dict(host="127.0.0.1", port=8000, llm="real", env_file=None, llm_concurrency=1, build=False,
+    for k, v in dict(host="127.0.0.1", port=8000, llm="real", env_file=None, llm_concurrency=1, extract_parallel=4, build=False,
                      no_compare=False, keep=12, cookie_secure=False, no_rule_extract=False, answer_style="on",
                      extractor_model=None, rewriter_model=None, auto_redteam="change", auto_redteam_daily=None,
                      prefetch="on", visit="recent", ledger="on", ledger_window_days=90.0, input_gate="on", answer_budget=45.0,

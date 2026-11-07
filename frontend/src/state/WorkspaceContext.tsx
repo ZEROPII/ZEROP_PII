@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useReducer, useRef, type ReactNode } from 'react';
 import { api as defaultApi, type ClinicalCaseApi } from '../api';
-import { isNoConversation } from '../api/types';
+import { ApiError, isNoConversation } from '../api/types';
 import type { CaseId, ChatMessage, QuestionScope } from '../types/domain';
 import { initialWorkspaceState, workspaceReducer, type WorkspaceState } from './workspaceReducer';
 
@@ -160,7 +160,8 @@ export function WorkspaceProvider({ children, api = defaultApi }: { children: Re
         void refreshCases(); // 첫 답에 없던 진단 · 항목이 이 답에 나왔으면 카드에 채운다
         return true;
       } catch (error) {
-        if (!isAbort(error)) dispatch({ type: 'send/failure', caseId, clientMessageId, error: errorMessage(error) });
+        if (error instanceof ApiError && error.state === 'stopped') dispatch({ type: 'send/stopped', caseId, clientMessageId });
+        else if (!isAbort(error)) dispatch({ type: 'send/failure', caseId, clientMessageId, error: errorMessage(error) });
         return false;
       }
     },

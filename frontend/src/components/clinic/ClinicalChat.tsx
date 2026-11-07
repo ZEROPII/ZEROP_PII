@@ -1,4 +1,4 @@
-import { CornerDownLeft, Info, Layers, Loader2, Lock, MessageSquareReply, Ruler, Sparkles } from 'lucide-react';
+import { CornerDownLeft, Info, Layers, Loader2, Lock, MessageSquareReply, Ruler, Sparkles, Square } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { emrApi } from '../../api/emrApi';
 import { overviewOf, splitItem } from '../../lib/caseOverview';
@@ -12,7 +12,9 @@ import { useSelectedCase, useWorkspace } from '../../state/WorkspaceContext';
 import type { CaseId, CaseSummary, LaunchProgress, QuestionScope, SuggestedQuestion } from '../../types/domain';
 import { LogoMark } from '../brand/Logo';
 import { ChatInput } from '../chat/ChatInput';
+import { StageTrack } from '../common/StageTrack';
 import { EmptyState, ErrorState, LoadingState } from '../common/StatusViews';
+import { useToast } from '../layout/Toast';
 import { ClinicalMessage } from './ClinicalMessage';
 import { LockedText } from './ClinicValue';
 
@@ -103,6 +105,10 @@ export function ClinicalChat({ jump, onJumpDone, onOpenMessages }: { jump: JumpT
   const [scope, setScope] = useState<QuestionScope>('case');
   const preflight = usePreflight(caseId, data?.sessionId, scope === 'all' ? '' : draft);
   const [progress, setProgress] = useState<LaunchProgress | null>(null);
+  // 멈추기: 서버에 멈추라고 알리고, 질문 요청이 409(stopped)로 끝나면 질문을 입력칸으로 돌려놓는다
+  const [stopping, setStopping] = useState(false);
+  const stopAsked = useRef(false);
+  const toast = useToast();
   const scrollRef = useRef<HTMLDivElement>(null);
   const messageCount = data?.messages.length ?? 0;
   const rawSuggestions = useSuggestions(caseId, messageCount);
@@ -155,6 +161,23 @@ export function ClinicalChat({ jump, onJumpDone, onOpenMessages }: { jump: JumpT
     };
   }, [sending, live]);
 
+  useEffect(() => {
+    if (!sending) setStopping(false);
+  }, [sending]);
+
+  async function stop() {
+    if (stopping) return;
+    setStopping(true);
+    stopAsked.current = true;
+    try {
+      const r = await emrApi.stopQuestion();
+      if (r.status === 'idle') setStopping(false); // 이미 답을 다 만들었다: 그 답이 온다
+    } catch {
+      setStopping(false);
+      stopAsked.current = false;
+    }
+  }
+
   function pick(s: SuggestedQuestion) {
     setDraft(s.question);
     if (live) setScope(s.scope ?? 'case');
@@ -187,8 +210,11 @@ export function ClinicalChat({ jump, onJumpDone, onOpenMessages }: { jump: JumpT
     if (scopeOverride) setScope(scopeOverride);
     if (!text) setDraft('');
     setHeld(null);
+    stopAsked.current = false;
     const ok = await actions.sendQuestion(caseId, question, live ? sc : 'case');
     if (!ok) setDrafts((d) => (d[caseId] ? d : { ...d, [caseId]: question }));
+    if (!ok && stopAsked.current) toast('질문을 멈췄습니다. 질문은 입력칸에 다시 넣었습니다.');
+    stopAsked.current = false;
   }
 
   const assessment = preflight.assessment;
@@ -272,13 +298,19 @@ export function ClinicalChat({ jump, onJumpDone, onOpenMessages }: { jump: JumpT
           ))
         )}
         {sending && (
-          <div className="flex items-center gap-2.5 text-[13px] text-ink-3" role="status">
-            <LogoMark size={18} className="text-iris-text" />
-            <span className="inline-flex flex-wrap items-center gap-x-2 gap-y-0.5 rounded-control border border-line bg-surface px-3 py-2">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden />
-              {progress?.active ? progress.label : '사례 기록에서 답을 찾아 개인정보 보호 기준으로 확인하는 중'}
-              {progress?.active && <span className="num text-[11px] text-ink-3">{Math.round(progress.elapsed ?? 0)}초</span>}
-            </span>
+          <div className="flex items-start gap-2.5" role="status" aria-live="polite">
+            <LogoMark size={18} className="mt-2.5 shrink-0 text-iris-text" />
+            <div className="w-full max-w-[440px] rounded-control border border-line bg-surface px-3.5 py-3">
+              <StageTrack step={progress?.active ? progress.step : undefined} first="답 쓰기" stopping={stopping || progress?.stopping} />
+              {live && (
+                <div className="mt-2.5 flex justify-end">
+                  <button type="button" className="btn-ghost btn-sm h-7 gap-1.5 text-ink-2" onClick={() => void stop()} disabled={stopping}>
+                    {stopping ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden /> : <Square className="h-3 w-3 fill-current" aria-hidden />}
+                    {stopping ? '멈추는 중' : '멈추기'}
+                  </button>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -396,6 +428,8 @@ export function ClinicalChat({ jump, onJumpDone, onOpenMessages }: { jump: JumpT
           onSubmit={() => void submit()}
           disabled={!data}
           sending={sending}
+          onStop={live ? () => void stop() : undefined}
+          stopping={stopping}
           placeholder={
             !summary ? '사례를 고르세요' : scope === 'all' && live ? '찾은 사례 전체에 대해 질문하세요 (공통점 · 차이 비교)' : `${summary.label}에 대해 질문하세요`
           }

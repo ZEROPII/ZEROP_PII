@@ -101,6 +101,15 @@ describe('workspaceReducer', () => {
     expect(s.sessions.a.data!.messages).toHaveLength(0);
     expect(s.sessions.a.sendError).toBeUndefined();
   });
+  it('질문을 멈추면 보낸 질문을 지우고 오류 없이 보내기 전으로 돌아간다', () => {
+    let s = seeded();
+    s = workspaceReducer(s, { type: 'send/start', caseId: 'a', pending: msg('tmp', 'a', 'user', 'pending') });
+    expect(s.sessions.a.sending).toBe(true);
+    s = workspaceReducer(s, { type: 'send/stopped', caseId: 'a', clientMessageId: 'tmp' });
+    expect(s.sessions.a.data!.messages).toHaveLength(0);
+    expect(s.sessions.a.sending).toBe(false);
+    expect(s.sessions.a.sendError).toBeUndefined();
+  });
   it('조용한 새로 고침은 보내는 중인 사례를 건드리지 않고, 바뀐 대화만 바꾼다', () => {
     let s = seeded();
     const fresh = { sessionId: 's-a', caseId: 'a', messages: [msg('u1', 'a', 'user'), msg('a1', 'a', 'assistant')], questionCount: 1 };

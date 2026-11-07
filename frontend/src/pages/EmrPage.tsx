@@ -1,4 +1,4 @@
-import { ArrowLeft, Info, LockKeyhole, Search, Stethoscope } from 'lucide-react';
+import { ArrowLeft, Info, LockKeyhole, Search, Send, Stethoscope, Users } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { emrApi } from '../api/emrApi';
@@ -6,12 +6,13 @@ import { ApiError } from '../api/types';
 import { ErrorState, LoadingState } from '../components/common/StatusViews';
 import { BreakGlassDialog } from '../components/emr/BreakGlassDialog';
 import { ChartSummary } from '../components/emr/ChartSummary';
+import { ConsultDialog } from '../components/emr/ConsultDialog';
 import { SimilarCaseBox } from '../components/emr/SimilarCaseBox';
 import { useToast } from '../components/layout/Toast';
 import { koreanNames } from '../lib/koTerms';
-import { timeLeft } from '../lib/time';
+import { dateTime, sinceDay, timeLeft } from '../lib/time';
 import { useWorkspace } from '../state/WorkspaceContext';
-import type { EmrChart, EmrMe, WorklistPatient } from '../types/domain';
+import type { EmrChart, EmrConsult, EmrMe, WorklistPatient } from '../types/domain';
 
 const SEX_KO = { male: '남', female: '여', unknown: '성별 미상' } as const;
 type Status = WorklistPatient['status'];
@@ -23,14 +24,23 @@ const TABS: { id: StatusTab; label: string }[] = [
   { id: 'ALL', label: '전체' },
 ];
 const STATUS_TITLE: Record<Status, (open: number) => string> = {
-  ACTIVE: (n) => `끝나지 않은 진단 · 관리 계획 ${n}건, 최근 3년 안에 기록이 있습니다`,
-  RESOLVED: () => '기록된 진단과 관리 계획이 모두 끝났습니다',
-  DORMANT: (n) => `끝나지 않은 진단 · 관리 계획 ${n}건이 있지만 마지막 기록이 3년보다 오래되었습니다`,
+  ACTIVE: (n) => `진행 중인 진단 · 처방 · 관리 계획 ${n}건, 최근 3년 안에 내원했습니다`,
+  RESOLVED: () => '진행 중인 진단 · 처방 · 관리 계획이 없습니다',
+  DORMANT: (n) => `진행 중인 진단 · 처방 · 관리 계획 ${n}건이 있지만 마지막 내원이 3년보다 오래되었습니다`,
 };
 
-/** 성별 · 연령대 (생년 · 거주 지역은 보이지 않는다) */
-function who(p: { sex: WorklistPatient['sex']; ageBand: string | null }): string {
-  return [SEX_KO[p.sex], p.ageBand].filter(Boolean).join(' · ');
+/**
+ * 성별 · 연령대 (생년 · 거주 지역은 보이지 않는다). 연령대는 마지막 내원 때 나이라, 장기 미내원 환자는 그 해를 같이 적는다
+ * ('40대(1970년 기준)'). 오래전 기록의 나이를 지금 나이로 읽지 않게.
+ */
+function who(p: { sex: WorklistPatient['sex']; ageBand: string | null; ageYear?: number | null; status?: Status }): string {
+  const age = p.ageBand && p.status === 'DORMANT' && p.ageYear ? `${p.ageBand}(${p.ageYear}년 기준)` : p.ageBand;
+  return [SEX_KO[p.sex], age].filter(Boolean).join(' · ');
+}
+
+/** 목록 · 차트에 보이는 환자 번호: 등록번호 (없으면 예전처럼 환자 번호 앞 8자리) */
+function numberOf(p: { regno?: string | null; identifier: string }): string {
+  return p.regno ?? p.identifier;
 }
 
 function StatusTag({ status, label, openItems }: { status: Status; label: string; openItems: number }) {
@@ -53,6 +63,78 @@ function GlassTag({ expiresAt }: { expiresAt: number }) {
   );
 }
 
+function ConsultTag({ expiresAt }: { expiresAt: number }) {
+  return (
+    <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-[5px] bg-iris-tint px-1.5 py-px text-[10.5px] font-bold text-iris-text" title="담당 의료진이 보낸 협진 의뢰로 연 환자입니다. 감사 기록에 남고 보안 담당자가 검토합니다.">
+      <Users className="h-3 w-3" aria-hidden />
+      협진 · {timeLeft(expiresAt)}
+    </span>
+  );
+}
+
+function AccessTag({ p }: { p: Pick<WorklistPatient, 'access' | 'grant'> }) {
+  if (p.access === 'consult' && p.grant) return <ConsultTag expiresAt={p.grant.expiresAt} />;
+  if (p.access === 'break_glass' && p.grant) return <GlassTag expiresAt={p.grant.expiresAt} />;
+  return null;
+}
+
+/** 받은 협진 의뢰: 목록 맨 위. '열기'를 누르면 번호를 적지 않고 연다 (사유는 의뢰 내용). */
+function ConsultInbox({ items, onOpen, onDecline }: { items: EmrConsult[]; onOpen(c: EmrConsult): void; onDecline(c: EmrConsult): void }) {
+  const [asking, setAsking] = useState<number | null>(null);
+  return (
+    <section aria-label="받은 협진 의뢰" className="border-b border-line">
+      <h3 className="flex items-center gap-1.5 bg-iris-tint px-4 py-1.5 text-[11.5px] font-bold text-iris-text">
+        <Send className="h-3 w-3" aria-hidden />
+        받은 협진 의뢰 {items.length}건
+      </h3>
+      <ul className="divide-y divide-line">
+        {items.map((c) => (
+          <li key={c.id} className="px-4 py-2.5">
+            <p className="flex items-baseline gap-2">
+              <span className="num text-[13px] font-semibold text-ink">{c.regno ?? '등록번호 없음'}</span>
+              <span className="text-xs text-ink-3">{who({ sex: c.sex ?? 'unknown', ageBand: c.ageBand ?? null })}</span>
+              <span className="num ml-auto text-[11px] text-ink-3" title="보낸 시각">
+                {dateTime(c.createdAt)}
+              </span>
+            </p>
+            <p className="mt-0.5 text-xs text-ink-2">
+              {c.sender.displayName}
+              {c.sender.department ? `(${c.sender.department})` : ''} 선생님이 보냄{c.status === 'opened' ? ' · 연 적 있음' : ''}
+            </p>
+            <p className="mt-1 line-clamp-2 text-[12.5px] leading-5 text-ink" title={c.note}>
+              {c.note}
+            </p>
+            {asking === c.id ? (
+              <div className="mt-2 rounded-control bg-surface-2 px-2.5 py-2 text-xs text-ink-2">
+                보낸 의료진에게 거절로 보입니다.
+                <span className="mt-1.5 flex gap-1.5">
+                  <button type="button" className="btn-primary btn-sm h-7" onClick={() => onDecline(c)}>
+                    거절하기
+                  </button>
+                  <button type="button" className="btn-ghost btn-sm h-7" onClick={() => setAsking(null)}>
+                    취소
+                  </button>
+                </span>
+              </div>
+            ) : (
+              <div className="mt-2 flex gap-1.5">
+                <button type="button" className="btn-primary btn-sm h-7" onClick={() => onOpen(c)}>
+                  {c.status === 'opened' ? '다시 열기' : '열기'}
+                </button>
+                {c.status === 'pending' && (
+                  <button type="button" className="btn-ghost btn-sm h-7 text-ink-2" onClick={() => setAsking(c.id)}>
+                    거절
+                  </button>
+                )}
+              </div>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function PatientRow({ p, active, current }: { p: WorklistPatient; active: boolean; current: boolean }) {
   return (
     <li>
@@ -62,16 +144,18 @@ function PatientRow({ p, active, current }: { p: WorklistPatient; active: boolea
         className={`block border-b border-line px-4 py-2.5 ${active ? 'bg-iris-tint shadow-[inset_3px_0_0_var(--zp-iris)]' : 'hover:bg-surface-2'}`}
       >
         <span className="flex items-baseline gap-2">
-          <span className="font-mono text-[13px] font-semibold text-ink">{p.identifier}</span>
+          <span className="num text-[13px] font-semibold text-ink" title={p.regno ? '등록번호' : '환자 번호'}>
+            {numberOf(p)}
+          </span>
           {current && <span className="rounded-[5px] bg-iris px-1.5 py-px text-[10.5px] font-bold text-iris-on">AI 대화 중</span>}
-          <span className="num ml-auto text-[11.5px] text-ink-3" title="마지막 기록">
+          <span className="num ml-auto text-[11.5px] text-ink-3" title="마지막 내원">
             {p.lastRecord ?? '–'}
           </span>
         </span>
         <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-3">
           {who(p)}
           <StatusTag status={p.status} label={p.statusLabel} openItems={p.openItems} />
-          {p.access === 'break_glass' && p.grant && <GlassTag expiresAt={p.grant.expiresAt} />}
+          <AccessTag p={p} />
         </span>
         <span className="mt-1 block truncate text-[12.5px] text-ink-2" title={p.conditions.join(', ')}>
           {p.conditions.slice(0, 2).join(', ') || '진단 기록 없음'}
@@ -81,13 +165,30 @@ function PatientRow({ p, active, current }: { p: WorklistPatient; active: boolea
   );
 }
 
-function ChartHeader({ chart, row, onBack }: { chart: EmrChart; row: WorklistPatient | null; onBack(): void }) {
+function ChartHeader({
+  chart,
+  row,
+  onBack,
+  onConsult,
+  onCancelConsult,
+}: {
+  chart: EmrChart;
+  row: WorklistPatient | null;
+  onBack(): void;
+  /** 담당 의료진이면 협진 의뢰 보내기 */
+  onConsult: (() => void) | null;
+  onCancelConsult(c: EmrConsult): void;
+}) {
   const p = chart.patient;
-  const glass = chart.access?.via === 'break_glass' ? chart.access.grant : null;
+  const via = chart.access?.via;
+  const grant = chart.access?.grant ?? null;
+  const received = chart.consult?.received ?? null;
+  const sent = chart.consult?.sent ?? [];
+  const last = p.lastRecord;
   const facts: [string, string][] = [
     ['대표 진단', p.conditions.slice(0, 3).join(', ') || '없음'],
-    ['진행 중', `진단 ${chart.problems.active} · 처방 ${chart.medications.active} · 관리 계획 ${chart.carePlans.active}`],
-    ['마지막 기록', p.lastRecord ?? '–'],
+    [p.status === 'DORMANT' ? '마지막 내원 때 진행 중' : '진행 중', `진단 ${chart.problems.active} · 처방 ${chart.medications.active} · 관리 계획 ${chart.carePlans.active}`],
+    ['마지막 내원', last ? `${last} (${sinceDay(last)})` : '–'],
     ['내원', `${chart.visitDays}일${chart.firstRecord ? ` (${chart.firstRecord.slice(0, 4)}년부터)` : ''}`],
   ];
   return (
@@ -96,13 +197,24 @@ function ChartHeader({ chart, row, onBack }: { chart: EmrChart; row: WorklistPat
         <ArrowLeft className="h-3.5 w-3.5" aria-hidden />내 담당 환자
       </button>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <h2 className="font-mono text-[19px] font-bold tracking-[-0.01em] text-ink">{p.identifier}</h2>
+        <h2 className="flex items-baseline gap-1.5 text-ink">
+          <span className="text-xs font-semibold text-ink-3">{p.regno ? '등록번호' : '환자 번호'}</span>
+          <span className="num text-[19px] font-bold tracking-[-0.01em]">{numberOf(p)}</span>
+        </h2>
         <span className="text-[13px] text-ink-2">{who(p)}</span>
         <StatusTag status={p.status} label={p.statusLabel} openItems={p.openItems} />
-        {glass ? (
-          <GlassTag expiresAt={glass.expiresAt} />
+        {via === 'consult' && grant ? (
+          <ConsultTag expiresAt={grant.expiresAt} />
+        ) : via === 'break_glass' && grant ? (
+          <GlassTag expiresAt={grant.expiresAt} />
         ) : (
           row?.access === 'assigned' && <span className="rounded-[5px] border border-line px-1.5 py-px text-[10.5px] font-semibold text-ink-3">담당</span>
+        )}
+        {onConsult && (
+          <button type="button" className="btn-ghost btn-sm ml-auto h-8 gap-1.5 border border-line bg-surface text-ink-2" onClick={onConsult}>
+            <Send className="h-3.5 w-3.5" aria-hidden />
+            협진 의뢰
+          </button>
         )}
       </div>
       <dl className="mt-2 grid grid-cols-1 gap-x-6 gap-y-1 text-[13px] sm:grid-cols-2 2xl:flex 2xl:flex-wrap">
@@ -115,10 +227,33 @@ function ChartHeader({ chart, row, onBack }: { chart: EmrChart; row: WorklistPat
           </div>
         ))}
       </dl>
-      {glass && (
+      {via === 'break_glass' && grant && (
         <p className="mt-2 text-xs leading-5 text-ink-2">
-          {glass.reasonLabel}: {glass.note} · 이 열람은 감사 기록에 남고 보안 담당자가 검토합니다.
+          {grant.reasonLabel}: {grant.note} · 이 열람은 감사 기록에 남고 보안 담당자가 검토합니다.
         </p>
+      )}
+      {via === 'consult' && (
+        <p className="mt-2 text-xs leading-5 text-ink-2">
+          {received ? `${received.sender.displayName}${received.sender.department ? `(${received.sender.department})` : ''} 선생님의 협진 의뢰: ${received.note}` : grant?.note}
+          {' · '}이 열람은 감사 기록에 남고 보안 담당자가 검토합니다.
+        </p>
+      )}
+      {sent.length > 0 && (
+        <ul className="mt-2 space-y-1">
+          {sent.map((c) => (
+            <li key={c.id} className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-2">
+              <Send className="h-3 w-3 text-iris-text" aria-hidden />
+              <span>
+                {c.receiver.displayName}
+                {c.receiver.department ? `(${c.receiver.department})` : ''} 선생님께 협진 의뢰함 ·{' '}
+                <strong className="font-semibold text-ink">{c.status === 'opened' ? '상대가 열어 봄' : '아직 열지 않음'}</strong>
+              </span>
+              <button type="button" className="btn-ghost btn-sm h-6 px-1.5 text-xs text-ink-3 hover:text-ink" onClick={() => onCancelConsult(c)}>
+                의뢰 취소
+              </button>
+            </li>
+          ))}
+        </ul>
       )}
     </header>
   );
@@ -126,7 +261,8 @@ function ChartHeader({ chart, row, onBack }: { chart: EmrChart; row: WorklistPat
 
 /**
  * 내 담당 환자 (python -m medicloak): 로그인한 의료진의 담당 외래 환자 목록 → 차트 요약 → 유사 사례 찾기(진료 지원 AI).
- * 담당이 아닌 환자는 목록에 없고, 협진 · 당직처럼 꼭 봐야 할 때만 '담당 외 환자 열기'로 사유를 적고 연다 (ADR-0034).
+ * 담당이 아닌 환자는 목록에 없다. 협진은 담당 의료진이 보낸 의뢰를 목록 위에서 번호 없이 열고, 당직 · 응급처럼 꼭 봐야 할 때만
+ * '담당 외 환자 열기'에 등록번호와 사유를 적고 연다 (ADR-0034 · ADR-0036).
  * 여기 나오는 환자는 외래 환자뿐이다. 진료 지원 AI가 찾아 줄 과거 사례의 기록은 EMR로 열 수 없다 (AI 답과 MediCloak 보호를 거쳐서만 보인다).
  */
 export function EmrPage() {
@@ -142,6 +278,8 @@ export function EmrPage() {
   const [tab, setTab] = useState<StatusTab>('ACTIVE');
   const [chart, setChart] = useState<{ id: string; data: EmrChart | null; error: ApiError | Error | null } | null>(null);
   const [glassOpen, setGlassOpen] = useState(false);
+  const [consultOpen, setConsultOpen] = useState(false);
+  const [consults, setConsults] = useState<EmrConsult[]>([]);
   const [reload, setReload] = useState(0);
 
   useEffect(() => {
@@ -154,6 +292,10 @@ export function EmrPage() {
       (e) => !(e instanceof DOMException) && setError(e instanceof Error ? e.message : '담당 환자 목록을 불러오지 못했습니다.'),
     );
     emrApi.me(ctl.signal).then(setMe, () => undefined);
+    emrApi.consults(ctl.signal).then(
+      (x) => setConsults(x.received),
+      () => undefined,
+    );
     return () => ctl.abort();
   }, [reload]);
 
@@ -172,8 +314,10 @@ export function EmrPage() {
     return () => ctl.abort();
   }, [picked, reload]);
 
-  const mine = useMemo(() => (list ?? []).filter((p) => p.access !== 'break_glass'), [list]);
-  const glass = useMemo(() => (list ?? []).filter((p) => p.access === 'break_glass'), [list]);
+  const mine = useMemo(() => (list ?? []).filter((p) => !p.access || p.access === 'assigned'), [list]);
+  const glass = useMemo(() => (list ?? []).filter((p) => p.access === 'consult' || p.access === 'break_glass'), [list]);
+  // 받은 협진 의뢰 중 열 것: 아직 열지 않았거나, 열었던 열람이 끝나 목록에 없는 것 (기한 안)
+  const inbox = useMemo(() => consults.filter((c) => c.open && (c.status === 'pending' || !glass.some((p) => p.fhirId === c.fhirId))), [consults, glass]);
   const counts = useMemo(() => {
     const n = (s: Status) => mine.filter((p) => p.status === s).length;
     return { ACTIVE: n('ACTIVE'), RESOLVED: n('RESOLVED'), DORMANT: n('DORMANT'), ALL: mine.length };
@@ -184,7 +328,7 @@ export function EmrPage() {
     if (!t) return inTab;
     // 진단 이름이 영어라 한국어 이름(기관지염 · 치은염 …)도 함께 찾는다
     return inTab.filter((p) =>
-      [p.identifier, ...p.conditions, ...p.purposes.map((x) => `${x.mainDx ?? ''} ${x.item ?? ''} ${x.purposeLabel}`)].some((s) =>
+      [p.regno ?? '', p.regno?.replace('-', '') ?? '', p.identifier, ...p.conditions, ...p.purposes.map((x) => `${x.mainDx ?? ''} ${x.item ?? ''} ${x.purposeLabel}`)].some((s) =>
         `${s} ${koreanNames(s)}`.toLowerCase().includes(t),
       ),
     );
@@ -196,11 +340,44 @@ export function EmrPage() {
   const chartData = chart?.id === picked ? chart.data : null;
   const chartError = chart?.id === picked ? chart.error : null;
 
-  function onOpened(fhirId: string, created: boolean) {
+  function onOpened(fhirId: string, created: boolean, regno?: string | null) {
     setGlassOpen(false);
-    toast(created ? `환자 ${fhirId.slice(0, 8)}를 예외 열람으로 열었습니다. 감사 기록에 남았습니다.` : `환자 ${fhirId.slice(0, 8)}는 이미 예외 열람 중입니다.`);
+    const no = regno ?? fhirId.slice(0, 8);
+    toast(created ? `${no} 환자를 예외 열람으로 열었습니다. 감사 기록에 남았습니다.` : `${no} 환자는 이미 예외 열람 중입니다.`);
     setReload((n) => n + 1);
     navigate(`/emr/${encodeURIComponent(fhirId)}`);
+  }
+
+  async function openConsult(c: EmrConsult) {
+    try {
+      const r = await emrApi.openConsult(c.id);
+      toast(`협진 의뢰로 ${c.regno ?? '환자'} 차트를 열었습니다. ${me?.consult?.hours ?? 12}시간 동안 볼 수 있습니다.`);
+      setReload((n) => n + 1);
+      navigate(`/emr/${encodeURIComponent(r.fhirId)}`);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '협진 의뢰를 열지 못했습니다.');
+      setReload((n) => n + 1);
+    }
+  }
+
+  async function declineConsult(c: EmrConsult) {
+    try {
+      await emrApi.declineConsult(c.id);
+      toast(`${c.sender.displayName} 선생님의 협진 의뢰를 거절했습니다.`);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '협진 의뢰를 거절하지 못했습니다.');
+    }
+    setReload((n) => n + 1);
+  }
+
+  async function cancelConsult(c: EmrConsult) {
+    try {
+      await emrApi.cancelConsult(c.id);
+      toast(`${c.receiver.displayName} 선생님께 보낸 협진 의뢰를 취소했습니다. 그 의뢰로 연 열람도 끝났습니다.`);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : '협진 의뢰를 취소하지 못했습니다.');
+    }
+    setReload((n) => n + 1);
   }
 
   return (
@@ -217,7 +394,7 @@ export function EmrPage() {
             <input
               value={q}
               onChange={(e) => setQ(e.target.value)}
-              placeholder="환자 번호, 진단(한글 · 영문), 처치"
+              placeholder="등록번호, 진단(한글 · 영문), 처치"
               className="h-9 w-full rounded-control border border-line-input bg-surface pl-8 pr-3 text-[13px] text-ink outline-none placeholder:text-ink-3 focus:border-focus"
             />
           </label>
@@ -243,9 +420,10 @@ export function EmrPage() {
           <LoadingState label="담당 환자를 불러오는 중" />
         ) : (
           <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
+            {inbox.length > 0 && <ConsultInbox items={inbox} onOpen={(c) => void openConsult(c)} onDecline={(c) => void declineConsult(c)} />}
             {glass.length > 0 && (
-              <section aria-label="예외 열람 중인 환자" className="border-b border-line">
-                <h3 className="bg-caution-tint px-4 py-1.5 text-[11.5px] font-bold text-caution-text">담당 외 · 예외 열람 중</h3>
+              <section aria-label="담당 외 환자 (협진 · 예외 열람)" className="border-b border-line">
+                <h3 className="bg-surface-2 px-4 py-1.5 text-[11.5px] font-bold text-ink-2">담당 외 환자 · 협진 · 예외 열람</h3>
                 <ul>
                   {glass.map((p) => (
                     <PatientRow key={p.fhirId} p={p} active={p.fhirId === picked} current={isCurrent(p)} />
@@ -315,13 +493,21 @@ export function EmrPage() {
         ) : !chartData ? (
           <LoadingState label="차트를 불러오는 중" />
         ) : (
-          <div className="scroll-thin min-h-0 flex-1 overflow-y-auto">
-            <ChartHeader chart={chartData} row={row} onBack={() => navigate('/emr')} />
-            <div className="grid grid-cols-1 gap-4 p-4 md:px-5 xl:grid-cols-[minmax(0,1fr)_340px] xl:items-start">
-              <div className="xl:sticky xl:top-4 xl:order-2">
-                <SimilarCaseBox fhirId={chartData.patient.fhirId} identifier={chartData.patient.identifier} purposes={chartData.purposes ?? row?.purposes ?? []} />
+          // 좁은 화면: 머리 · 유사 사례 찾기 · 차트가 한 줄로 함께 내려간다.
+          // 넓은 화면(xl): 머리는 위에 두고, 차트와 유사 사례 찾기가 따로 내려간다 (한쪽이 길어도 다른 쪽 끝까지 볼 수 있게)
+          <div className="scroll-thin min-h-0 flex-1 overflow-y-auto xl:flex xl:flex-col xl:overflow-hidden">
+            <ChartHeader
+              chart={chartData}
+              row={row}
+              onBack={() => navigate('/emr')}
+              onConsult={chartData.consult?.canSend && me?.consult?.on ? () => setConsultOpen(true) : null}
+              onCancelConsult={(c) => void cancelConsult(c)}
+            />
+            <div className="grid grid-cols-1 gap-4 p-4 md:px-5 xl:min-h-0 xl:flex-1 xl:grid-cols-[minmax(0,1fr)_372px] xl:gap-0 xl:p-0">
+              <div className="scroll-thin xl:order-2 xl:min-h-0 xl:overflow-y-auto xl:border-l xl:border-line xl:p-4">
+                <SimilarCaseBox fhirId={chartData.patient.fhirId} identifier={numberOf(chartData.patient)} purposes={chartData.purposes ?? row?.purposes ?? []} />
               </div>
-              <div className="min-w-0 xl:order-1">
+              <div className="scroll-thin min-w-0 xl:order-1 xl:min-h-0 xl:overflow-y-auto xl:p-4 xl:pl-5">
                 <ChartSummary chart={chartData} />
                 <p className="mt-3 text-xs leading-5 text-ink-3">차트는 병원 EMR(가상 EMR)의 진료 기록에서 만든 요약입니다. 연 일은 접근 기록에 남습니다.</p>
               </div>
@@ -330,6 +516,19 @@ export function EmrPage() {
         )}
       </section>
       {glassOpen && breakGlass && <BreakGlassDialog policy={breakGlass} onCancel={() => setGlassOpen(false)} onOpened={onOpened} />}
+      {consultOpen && chartData && me?.consult && (
+        <ConsultDialog
+          fhirId={chartData.patient.fhirId}
+          regno={numberOf(chartData.patient)}
+          policy={me.consult}
+          onCancel={() => setConsultOpen(false)}
+          onSent={(c) => {
+            setConsultOpen(false);
+            toast(c.created ? `${c.receiver.displayName} 선생님께 협진 의뢰를 보냈습니다.` : `${c.receiver.displayName} 선생님께 보낸 협진 의뢰가 이미 있습니다.`);
+            setReload((n) => n + 1);
+          }}
+        />
+      )}
     </div>
   );
 }

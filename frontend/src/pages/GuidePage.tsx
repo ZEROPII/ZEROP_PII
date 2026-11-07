@@ -14,7 +14,8 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 const WORDS: [string, string][] = [
   ['사례', 'AI가 찾아 보여 준 비슷한 과거 환자 기록 하나. 이름이나 환자 번호 없이 사례 1, 사례 2로 부릅니다.'],
   ['범위', '정확한 값 대신 보여 드린 넓은 값. 예를 들어 정확한 날짜 대신 연도, 정확한 나이 대신 나이대입니다.'],
-  ['비공개', '그대로 알려 드리면 특정 환자를 알아볼 수 있어 답에서 뺀 값.'],
+  ['비공개', '그대로 알려 드리면 특정 환자를 알아볼 수 있어 MediCloak이 답에서 뺀 값. 표시를 누르면 어느 사례의 무엇인지와 까닭이 보입니다.'],
+  ['AI에 보내지 않음', 'MediCloak이 과거 사례 기록을 진료 지원 AI에 넘기기 전에 가린 값. AI도 그 값을 모르므로 답에 (비공개)로 나옵니다.'],
   ['세부 정보 제한', '지금까지 나온 내용만으로도 환자를 좁힐 수 있는 사례. 새로 묻는 세부 값은 범위로 보이거나 비공개일 수 있습니다.'],
   ['사례 노트', '그 사례에 대해 지금까지 답에 나온 내용을 한 장으로 모은 것. 값마다 그 값을 꺼낸 질문으로 돌아갈 수 있습니다.'],
 ];
@@ -54,27 +55,37 @@ export function GuidePage() {
 
         <Section title="답에 보이는 표시">
           <dl className="space-y-3">
-            <div className="grid grid-cols-[112px_minmax(0,1fr)] items-baseline gap-3">
+            <div className="grid grid-cols-[136px_minmax(0,1fr)] items-baseline gap-3">
               <dt className="font-medium text-ink">Acute bronchitis</dt>
               <dd>표시가 없는 값은 기록 그대로입니다.</dd>
             </div>
-            <div className="grid grid-cols-[112px_minmax(0,1fr)] items-baseline gap-3">
+            <div className="grid grid-cols-[136px_minmax(0,1fr)] items-baseline gap-3">
               <dt className="font-medium text-ink">
                 <span className="range-value">90~94세</span>
                 <span className="range-tag">범위</span>
               </dt>
               <dd>정확한 값 대신 한 단계 넓은 범위로 바꾼 값입니다. 뜻은 같고 덜 자세합니다.</dd>
             </div>
-            <div className="grid grid-cols-[112px_minmax(0,1fr)] items-baseline gap-3">
+            <div className="grid grid-cols-[136px_minmax(0,1fr)] items-baseline gap-3">
               <dt>
                 <span className="lock-token">
                   <Lock className="h-3 w-3" strokeWidth={2.2} aria-hidden />
                   비공개
                 </span>
               </dt>
-              <dd>그대로 알려 드리면 그 환자가 누구인지 알 수 있게 되는 값이라 뺐습니다. 답의 나머지는 그대로입니다.</dd>
+              <dd>그대로 알려 드리면 그 환자가 누구인지 알 수 있게 되는 값이라 MediCloak이 답에서 뺐습니다. '처방 약 비공개'처럼 무엇을 뺐는지 붙고, 같은 사례의 다른 값이 보이면 '다른 처방 약 비공개'로 보입니다. 답의 나머지는 그대로입니다.</dd>
+            </div>
+            <div className="grid grid-cols-[136px_minmax(0,1fr)] items-baseline gap-3">
+              <dt>
+                <span className="lock-token">
+                  <Lock className="h-3 w-3" strokeWidth={2.2} aria-hidden />
+                  AI에 보내지 않음
+                </span>
+              </dt>
+              <dd>과거 사례 기록을 진료 지원 AI에 넘기기 전에 가린 값입니다. AI도 그 값을 모르므로 답에 (비공개)로 쓰고, 화면은 이 표시로 바꿔 보입니다.</dd>
             </div>
           </dl>
+          <p>표시를 누르면 그 자리에 무엇을 왜 바꿨는지 설명이 뜨고, 답 아래에는 사례마다 바뀐 항목이 한 줄씩 보입니다. 표시는 진료 지원 AI가 아니라 MediCloak이 붙입니다.</p>
           <p>
             같은 질문도 대화가 이어지면 다르게 보일 수 있습니다. 앞선 답에서 나온 내용과 합쳐 환자가 좁혀지는지까지 함께 보기 때문입니다.
           </p>
@@ -110,7 +121,7 @@ export function GuidePage() {
         <Section title="화면에서 쓰는 말">
           <dl className="divide-y divide-line rounded-control border border-line bg-surface">
             {WORDS.map(([t, d]) => (
-              <div key={t} className="grid grid-cols-[112px_minmax(0,1fr)] gap-3 px-4 py-3">
+              <div key={t} className="grid grid-cols-[136px_minmax(0,1fr)] gap-3 px-4 py-3">
                 <dt className="font-semibold text-ink">{t}</dt>
                 <dd className="text-[13px] leading-6 text-ink-2">{d}</dd>
               </div>

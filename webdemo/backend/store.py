@@ -7,6 +7,7 @@
 #   공개 원장  disclosure_ledger: 과거 환자마다 의료진 대화가 내보낸 단서(노드)와 대화 · 계정 · 시각 (ledger.py, ADR-0032)
 #   EMR 접근   emr_assignment(외래 환자 ↔ 담당 의료진) · emr_grant(담당 외 예외 열람, 사유 · 기한 · 검토) ·
 #              emr_access(차트 열람 · 거부 등 접근 기록) (access.py, ADR-0034)
+#              emr_regno(외래 환자 등록번호 '26-4821') · emr_consult(담당 의료진이 보낸 협진 의뢰) (access.py, ADR-0036)
 #
 # 쓰기는 연결 하나를 잠금으로 줄 세운다. 데모 · 시범 운영 규모(동시 사용자 수십 명)에서 충분하다.
 # 원 응답과 가린 원래 값은 turn_record · conversation.security_json에만 있고, 이 값은 보안 담당자 API에서도
@@ -84,9 +85,19 @@ CREATE INDEX IF NOT EXISTS emr_assignment_user ON emr_assignment (user_id);
 CREATE TABLE IF NOT EXISTS emr_grant (
   grant_id INTEGER PRIMARY KEY AUTOINCREMENT, fhir_id TEXT NOT NULL, user_id INTEGER NOT NULL REFERENCES app_user(user_id),
   reason TEXT NOT NULL, note TEXT, created_at REAL NOT NULL, expires_at REAL NOT NULL, ended_at REAL,
-  review TEXT, review_note TEXT, reviewed_at REAL, reviewed_by TEXT
+  review TEXT, review_note TEXT, reviewed_at REAL, reviewed_by TEXT, consult_id INTEGER
 );
 CREATE INDEX IF NOT EXISTS emr_grant_user ON emr_grant (user_id, expires_at);
+CREATE TABLE IF NOT EXISTS emr_regno (
+  fhir_id TEXT PRIMARY KEY, regno TEXT NOT NULL UNIQUE, created_at REAL NOT NULL
+);
+CREATE TABLE IF NOT EXISTS emr_consult (
+  consult_id INTEGER PRIMARY KEY AUTOINCREMENT, fhir_id TEXT NOT NULL, from_user INTEGER NOT NULL REFERENCES app_user(user_id),
+  to_user INTEGER NOT NULL REFERENCES app_user(user_id), note TEXT NOT NULL, created_at REAL NOT NULL, expires_at REAL NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending', opened_at REAL, closed_at REAL, close_note TEXT
+);
+CREATE INDEX IF NOT EXISTS emr_consult_to ON emr_consult (to_user, status);
+CREATE INDEX IF NOT EXISTS emr_consult_from ON emr_consult (from_user, created_at);
 CREATE TABLE IF NOT EXISTS emr_access (
   access_id INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL, user_id INTEGER, fhir_id TEXT NOT NULL, action TEXT NOT NULL,
   via TEXT, grant_id INTEGER, detail TEXT
@@ -119,8 +130,19 @@ class Store:
         self.lock = threading.RLock()
         with self.lock:
             self.conn.executescript(SCHEMA)
+            self._add_columns()
         if self.get_meta("schema_version") is None:
             self.set_meta("schema_version", SCHEMA_VERSION)
+
+    #: 나중에 더한 칸 (이미 있는 DB 파일에는 ALTER TABLE로 붙인다. CREATE TABLE IF NOT EXISTS는 있는 표를 바꾸지 않는다)
+    ADDED_COLUMNS = {"emr_grant": [("consult_id", "INTEGER")]}
+
+    def _add_columns(self) -> None:
+        for table, cols in self.ADDED_COLUMNS.items():
+            have = {r[1] for r in self.conn.execute(f"PRAGMA table_info({table})")}
+            for name, typ in cols:
+                if name not in have:
+                    self.conn.execute(f"ALTER TABLE {table} ADD COLUMN {name} {typ}")
 
     # ── 기본 ──
     def q(self, sql: str, args: Iterable[Any] = ()) -> list[sqlite3.Row]:

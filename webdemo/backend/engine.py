@@ -110,7 +110,7 @@ class Engine:
     """
 
     def __init__(self, workdir: Path | None = None, log: Callable[[str], None] = print, *, paths: MedicalPaths | None = None,
-                 live_llm: Any = None, live_label: str | None = None, first_id: int = 1, llm_concurrency: int = 1,
+                 live_llm: Any = None, live_label: str | None = None, first_id: int = 1, llm_concurrency: int = 1, extract_parallel: int = 4,
                  live_rule_extract: bool = True, answer_style: bool = True, recent_visit: bool = False,
                  ledger: Any = None, input_gate: bool = False, answer_budget: float | None = None,
                  sensitivity: bool = False, strict_k: int = DEFAULT_STRICT_K) -> None:
@@ -124,7 +124,8 @@ class Engine:
         base, self.split = build_context(self.cfg, self.llm["staged"], self.workdir / "engine", data=self.data, paths=self.paths)
         self.ctx: dict[str, Context] = {"staged": base, "full": replace(base, llm=self.llm["full"])}
         # 의료진 대화 LLM은 네트워크 호출 동안 엔진 잠금을 푸는 포장(LiveLLM)을 씌운다 (live.py)
-        self.live_llm = LiveLLM(live_llm, self.lock, concurrency=llm_concurrency, data=self.data) if live_llm is not None else None
+        self.live_llm = LiveLLM(live_llm, self.lock, concurrency=llm_concurrency, data=self.data,
+                                extract_parallel=extract_parallel) if live_llm is not None else None
         # 운영 모드: 의료진 대화의 진료 기준을 가장 최근 진료로 (visit.py). 연구 계획 · 레드팀은 연구 기준 그대로
         self.recent_visit = recent_visit
         self._prefetching: dict[str, threading.Thread] = {}
@@ -163,6 +164,8 @@ class Engine:
         self.gate = InputGate(base.kc, self.data, base.defender.g, base.defender.s, floors=True,
                               strict=self.sensitivity.strict if self.sensitivity else None,
                               strict_k=self.sensitivity.strict_k if self.sensitivity else strict_k) if self.input_gate else None
+        if self.gate is not None:
+            self.gate.event_index()                # 켤 때 한 번 만들어 둔다 (처음 여는 환자의 게이팅이 길어지지 않게)
         log(f"[webdemo] 엔진 준비 {time.time() - t0:.1f}초 · 기준 집단 {base.p_ref}명 · 질의 trial {len(self.plan)}개 · Seed {len(base.seeds)}행")
 
     def protections(self) -> dict[str, Any]:
@@ -279,7 +282,7 @@ class Engine:
     # ── 세션 ──
     def new_session(self, trial_id: str, profile: str = "staged", fuzzer: str = "uniform", *, source: str = "manual",
                     budget: int | None = None, llm_mode: str = "oracle", on_call: Callable[[str, int], None] | None = None,
-                    visit_event: str | None = None, owner: dict[str, Any] | None = None) -> "Session":
+                    visit_event: str | None = None, owner: dict[str, Any] | None = None, stop: Any = None) -> "Session":
         if trial_id not in self.trial_of:
             raise DemoError(f"없는 trial입니다: {trial_id}")
         if profile not in PROFILES or fuzzer not in FUZZERS:
@@ -289,7 +292,7 @@ class Engine:
         with self.lock:
             sid = f"S{next(self._ids):04d}"
             s = Session(self, sid, trial_id, profile, fuzzer, source=source, budget=budget, llm_mode=llm_mode, on_call=on_call,
-                        visit_event=visit_event, owner=owner)
+                        visit_event=visit_event, owner=owner, stop=stop)
             self.sessions[sid] = s
             self._trim_usage()
             return s
@@ -453,7 +456,7 @@ class Engine:
 class Session:
     def __init__(self, eng: Engine, sid: str, trial_id: str, profile: str, fuzzer: str, *, source: str = "manual",
                  budget: int | None = None, llm_mode: str = "oracle", on_call: Callable[[str, int], None] | None = None,
-                 visit_event: str | None = None, owner: dict[str, Any] | None = None) -> None:
+                 visit_event: str | None = None, owner: dict[str, Any] | None = None, stop: Any = None) -> None:
         self.eng, self.id, self.trial_id, self.profile, self.fuzzer = eng, sid, trial_id, profile, fuzzer
         self.owner: dict[str, Any] | None = owner          # 의료진 대화: 계정 (user_id, username, label). 원장 기록에 쓰므로 턴 0 전에 둔다
         # 과거 환자 단위 공개 원장 (ADR-0032): 의료진 대화만 읽고 쓴다. 레드팀 · 시뮬레이션 대화는 원장과 상관없다
@@ -477,7 +480,7 @@ class Session:
         live_ctx = None
         if llm_mode == "live":
             live_ctx = replace(eng.live_ctx, llm=AnswerStyleLLM(eng.live_ctx.llm)) if eng.answer_style else eng.live_ctx
-        ctx0 = (replace(live_ctx, llm=Turn0LLM(live_ctx.llm, self.ctx.llm, cache=eng.turn0_cache, on_call=on_call))
+        ctx0 = (replace(live_ctx, llm=Turn0LLM(live_ctx.llm, self.ctx.llm, cache=eng.turn0_cache, on_call=on_call, stop=stop))
                 if live_ctx is not None else self.ctx)
         self.visit_event = visit_event                      # 의사가 고른 오늘 진단 (진단 사건 번호). 없으면 기본 기준 진료
         clinic, live = source == "clinic", llm_mode == "live"

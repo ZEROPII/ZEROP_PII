@@ -4,8 +4,9 @@ import { emrApi } from '../../api/emrApi';
 import type { EmrMe } from '../../types/domain';
 
 /**
- * 담당 외 환자 열기 (예외 열람, ADR-0034): 환자 번호 · 사유 분류 · 직접 쓴 설명을 적어야 열린다.
+ * 담당 외 환자 열기 (예외 열람, ADR-0034 · ADR-0036): 등록번호 · 사유 분류 · 직접 쓴 설명을 적어야 열린다.
  * 미리 골라 둔 사유는 없다. 연 일은 이름 · 시각 · 사유와 함께 감사 기록에 남고 보안 담당자가 검토한다.
+ * 협진 의뢰를 받았으면 이 창 대신 목록 위 '협진 의뢰'에서 번호 없이 연다.
  */
 export function BreakGlassDialog({
   policy,
@@ -14,7 +15,7 @@ export function BreakGlassDialog({
 }: {
   policy: NonNullable<EmrMe['breakGlass']>;
   onCancel(): void;
-  onOpened(fhirId: string, created: boolean): void;
+  onOpened(fhirId: string, created: boolean, regno?: string | null): void;
 }) {
   const reasons = policy.reasons ?? [];
   const noteMin = policy.noteMin ?? 5;
@@ -26,7 +27,8 @@ export function BreakGlassDialog({
   const first = useRef<HTMLInputElement>(null);
   const num = number.trim().toLowerCase();
   const text = note.trim();
-  const numOk = /^[0-9a-f]{8}/.test(num);
+  // 등록번호 '26-4821' (붙여 써도 됨). 예전 환자 번호(앞 8자리)도 받는다
+  const numOk = /^\d{2}\s*-?\s*\d{4}$/.test(num) || /^[0-9a-f]{8}/.test(num);
   const ready = numOk && pick !== null && text.length >= noteMin;
 
   useEffect(() => {
@@ -42,7 +44,7 @@ export function BreakGlassDialog({
     setError(null);
     try {
       const r = await emrApi.breakGlass(num, pick, text);
-      onOpened(r.fhirId, r.created);
+      onOpened(r.fhirId, r.created, r.regno);
     } catch (e) {
       setError(e instanceof Error ? e.message : '담당 외 환자를 열지 못했습니다.');
       setBusy(false);
@@ -62,10 +64,11 @@ export function BreakGlassDialog({
           </button>
         </div>
         <p className="mt-2 text-[13px] leading-6 text-ink-2">
-          협진이나 당직처럼 담당이 아닌 환자를 꼭 봐야 할 때만 씁니다. {policy.hours ?? 12}시간 동안 차트와 진료 지원 AI를 쓸 수 있고, 연 기록은 보안 담당자가 검토합니다.
+          당직 · 응급처럼 담당이 아닌 환자를 꼭 봐야 할 때만 씁니다. {policy.hours ?? 12}시간 동안 차트와 진료 지원 AI를 쓸 수 있고, 연 기록은 보안 담당자가
+          검토합니다. 협진 의뢰를 받았다면 목록 위 협진 의뢰에서 번호 없이 여세요.
         </p>
         <label htmlFor="bg-number" className="mt-4 block text-xs font-bold text-ink-2">
-          환자 번호
+          등록번호
         </label>
         <input
           id="bg-number"
@@ -73,9 +76,10 @@ export function BreakGlassDialog({
           value={number}
           onChange={(e) => setNumber(e.target.value)}
           maxLength={36}
+          inputMode="text"
           autoComplete="off"
           spellCheck={false}
-          placeholder="앞 8자리 (예: 3f9a1c2d)"
+          placeholder="예: 26-4821 (환자 팔찌 · 접수증의 번호)"
           className="mt-1.5 h-10 w-full rounded-control border border-line-input bg-surface px-3 font-mono text-sm text-ink outline-none placeholder:font-sans placeholder:text-ink-3 focus:border-focus"
         />
         <p id="bg-reason-label" className="mt-4 text-xs font-bold text-ink-2">
@@ -105,7 +109,7 @@ export function BreakGlassDialog({
           maxLength={300}
           rows={2}
           aria-describedby="bg-note-hint"
-          placeholder="예: 호흡기내과 협진 의뢰로 처방 이력 확인"
+          placeholder="예: 야간 당직 중 응급실 내원, 처방 이력 확인"
           className="mt-1.5 w-full resize-none rounded-control border border-line-input bg-surface px-3 py-2 text-sm leading-6 text-ink outline-none focus:border-focus"
         />
         <p id="bg-note-hint" className={`mt-1 text-[11.5px] ${text.length > 0 && text.length < noteMin ? 'text-caution-text' : 'text-ink-3'}`}>

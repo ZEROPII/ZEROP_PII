@@ -6,13 +6,13 @@ import { latestRequest, REQUEST_STATE_KO } from '../../lib/requests';
 import { formatTime } from '../../lib/format';
 import { useClinicMessages } from '../../state/ClinicMessages';
 import { useTermDetect } from '../../state/TermContext';
-import type { CaseSummary, ChatMessage, MessageSegment, PrivacyTransformation } from '../../types/domain';
+import type { CaseSummary, ChatMessage, MessageSegment, PrivacyTransformation, ProtectionResult } from '../../types/domain';
 import type { TermMention } from '../../types/terminology';
 import { LogoMark } from '../brand/Logo';
 import { useToast } from '../layout/Toast';
 import { AnswerTerms } from '../terminology/AnswerTerms';
 import { TermText } from '../terminology/TermText';
-import { ClinicValue } from './ClinicValue';
+import { ClinicValue, GatedMark } from './ClinicValue';
 
 interface Props {
   message: ChatMessage;
@@ -32,9 +32,30 @@ function caseIdOfRef(ref: string | undefined, cases: CaseSummary[]): string | nu
   return cases.find((c) => c.label.replace(/\s+/g, '') === ref.replace(/\s+/g, ''))?.caseId ?? null;
 }
 
+const GATED = '(비공개)';
+
+/** 글 속 '(비공개)'(AI에 보내지 않은 값)를 표시로 바꾸고, 나머지 글은 의료 용어 밑줄 (용어 위치는 조각마다 옮긴다) */
+function GatedText({ text, mentions }: { text: string; mentions: TermMention[] | undefined }) {
+  if (!text.includes(GATED)) return <TermText text={text} mentions={mentions} />;
+  const out: JSX.Element[] = [];
+  let pos = 0;
+  for (let k = 0; ; k += 2) {
+    const at = text.indexOf(GATED, pos);
+    const end = at < 0 ? text.length : at;
+    if (end > pos) {
+      const ms = mentions?.filter((m) => m.start >= pos && m.end <= end).map((m) => ({ ...m, start: m.start - pos, end: m.end - pos }));
+      out.push(<TermText key={k} text={text.slice(pos, end)} mentions={ms} />);
+    }
+    if (at < 0) break;
+    out.push(<GatedMark key={k + 1} />);
+    pos = at + GATED.length;
+  }
+  return <>{out}</>;
+}
+
 /** 조각 하나: 글이면 의료 용어 밑줄, 보호 조치가 걸린 값이면 범위 · 비공개 표시 */
 function Piece({ seg, tf, mentions, named }: { seg: MessageSegment; tf: Map<string, PrivacyTransformation>; mentions: TermMention[] | undefined; named: boolean }) {
-  const terms = <TermText text={seg.text} mentions={mentions} />;
+  const terms = <GatedText text={seg.text} mentions={mentions} />;
   if (seg.kind === 'text') return terms;
   if (seg.placeholder)
     return <ClinicValue text={seg.text} transformation={tf.get(seg.transformationId)} placeholderLabel={seg.label ?? '값'} partial={seg.partial} />;
@@ -152,6 +173,7 @@ function AnswerBody({ message, caseLabel }: { message: ChatMessage; caseLabel: s
   const ownRef = caseLabel.replace(/\s+/g, '');
   const refs = new Set(parsed.blocks.flatMap((b) => (b.kind === 'fact' ? [b.caseRef] : [])));
   const showCase = refs.size > 1 || (refs.size === 1 && !refs.has(ownRef));
+  const gated = message.segments.some((x) => x.kind === 'text' && x.text.includes(GATED));
 
   return (
     <>
@@ -161,10 +183,67 @@ function AnswerBody({ message, caseLabel }: { message: ChatMessage; caseLabel: s
           <Block key={i} b={b} tf={tf} mentions={mentions} showCase={showCase} />
         ))}
       </div>
+      {gated && (
+        <p className="px-4 pb-1.5 text-[11.5px] leading-5 text-ink-3">
+          <span className="font-semibold text-emr-lock">AI에 보내지 않음</span>은 MediCloak이 과거 사례 기록을 진료 지원 AI에 넘기기 전에 가린 값입니다.
+          누르면 설명이 보입니다.
+        </p>
+      )}
       <div className="px-4 pb-1 empty:hidden">
         <AnswerTerms mentions={mentions} label="이 답의 의료 용어" />
       </div>
     </>
+  );
+}
+
+/** 이 답에서 MediCloak이 바꾼 곳을 사례마다: 비공개 · 범위로 보인 항목 이름 (몇 개인지는 보이지 않는다) */
+export function changesByCase(p: ProtectionResult): { ref: string | null; hidden: string[]; ranged: string[]; dropped: boolean }[] {
+  const rows = new Map<string, { ref: string | null; hidden: string[]; ranged: string[]; dropped: boolean }>();
+  for (const t of p.transformations) {
+    if (t.action === 'allow') continue;
+    const key = t.caseRef ?? '';
+    const row = rows.get(key) ?? { ref: t.caseRef ?? null, hidden: [], ranged: [], dropped: false };
+    const name = attrName(t);
+    if (t.dropped) row.dropped = true;
+    else if (t.action === 'suppress' && !row.hidden.includes(name)) row.hidden.push(name);
+    else if (t.action === 'generalize' && !row.ranged.includes(name)) row.ranged.push(name);
+    rows.set(key, row);
+  }
+  return [...rows.values()]
+    .filter((r) => r.dropped || r.hidden.length || r.ranged.length)
+    .sort((a, b) => (a.ref ?? '').localeCompare(b.ref ?? '', 'ko', { numeric: true }));
+}
+
+/** 답 아래: 사례마다 무엇을 가리고 넓혔는지 + 표시 읽는 법 */
+function ChangeMap({ p }: { p: ProtectionResult }) {
+  const rows = changesByCase(p);
+  if (!rows.length) return null;
+  return (
+    <div className="mt-2 rounded-control bg-surface px-3 py-2">
+      <ul className="space-y-1">
+        {rows.map((r) => (
+          <li key={r.ref ?? '-'} className="flex flex-wrap items-baseline gap-x-2.5 gap-y-1 text-[12.5px]">
+            <span className="min-w-[3.25rem] font-semibold text-ink">{r.ref ? refLabel(r.ref) : '이 답'}</span>
+            {r.dropped && <span className="text-ink-2">이 답에서 사례 내용을 뺐습니다</span>}
+            {r.hidden.length > 0 && (
+              <span className="inline-flex items-baseline gap-1 text-ink-2">
+                <Lock className="h-3 w-3 shrink-0 translate-y-[1px] text-emr-lock" strokeWidth={2.4} aria-hidden />
+                {r.hidden.join(' · ')} 비공개
+              </span>
+            )}
+            {r.ranged.length > 0 && (
+              <span className="text-ink-2">
+                <span className="range-value">{r.ranged.join(' · ')}</span> 범위로
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+      <p className="mt-1.5 text-[11.5px] leading-5 text-ink-3">
+        글 속 <span className="font-semibold text-emr-lock">비공개</span> · <span className="font-semibold text-iris-text">범위</span> 표시를 누르면 그 자리에서
+        무엇을 왜 바꿨는지 보입니다. 표시는 진료 지원 AI가 아니라 MediCloak이 붙였고, 과거 사례 기록은 그대로입니다.
+      </p>
+    </div>
   );
 }
 
@@ -262,6 +341,7 @@ function ProtectionFooter({ message, caseLabel, cases, until }: { message: ChatM
           )}
         </span>
       </div>
+      <ChangeMap p={p} />
       {why && (
         <div className="mt-2 space-y-1.5 rounded-control bg-surface px-3 py-2.5 leading-6 text-ink-2">
           {whyText(p, who).map((t) => (

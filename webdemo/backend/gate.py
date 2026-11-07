@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import collections
 import re
+import threading
 from typing import Any, Callable
 
 from datetime import date as _date
@@ -67,8 +68,27 @@ class InputGate:
         self.floors, self.strict, self.strict_k = floors, strict, strict_k
         self._has: dict[tuple[str, str], frozenset[str]] = {}
         self.all = frozenset(self.base.by_pat)
+        self._by_node: dict[str, frozenset[str]] | None = None
+        self._index_lock = threading.Lock()
 
     # ── 후보 수 ──
+    def event_index(self) -> dict[str, frozenset[str]]:
+        """
+        노드 → 그 노드(또는 그 아래 노드)의 사건이 있는 과거 환자. 사건마다 조상 노드를 한 번씩만 훑어 한 번 만든다.
+        전에는 값마다 사건 전체(약 5만 건)를 다시 훑어, 처음 여는 환자의 사례 문서 게이팅에 3초 가까이 걸렸다.
+        """
+        if self._by_node is None:
+            with self._index_lock:
+                if self._by_node is None:
+                    b = self.base
+                    idx: dict[str, set[str]] = {}
+                    for p, events in b.by_pat.items():
+                        for i in events:
+                            for a in b.ev_anc[i]:
+                                idx.setdefault(a, set()).add(p)
+                    self._by_node = {n: frozenset(ps) for n, ps in idx.items()}
+        return self._by_node
+
     def has(self, attribute: str, node: str) -> frozenset[str]:
         key = (attribute, node)
         hit = self._has.get(key)
@@ -77,7 +97,7 @@ class InputGate:
             if attribute in PATIENT_LEVEL:
                 hit = frozenset(p for p, a in b.pat.items() if node in a.get(attribute, ()))
             else:
-                hit = frozenset(p for p, idx in b.by_pat.items() if any(node in b.ev_anc[i] for i in idx))
+                hit = self.event_index().get(node, frozenset())
             self._has[key] = hit
         return hit
 

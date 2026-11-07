@@ -412,6 +412,135 @@ def test_assignment_limits_list_chart_and_ai_and_break_glass_is_reviewed(world):
     assert pol["on"] and pol["breakGlass"] and pol["outpatients"] == 115 and pol["unassigned"] == 0
 
 
+def test_stop_a_question_and_an_opening_keeps_the_conversation(world):
+    """
+    질문 멈추기: 보내 둔 호출 하나는 끝까지 받고 그 답은 버린다. 질문은 409(stopped)로 끝나고 대화는 묻기 전 그대로, 감사 기록에 남는다.
+    진료 지원 AI 열기도 같은 방식으로 멈추고, 열려 있던 대화는 그대로다. 진행 표시에는 지금 단계(step)가 있다.
+    """
+    eng = world["eng"]
+    slow = FakeAnthropic(delay=0.5)
+    good = eng.live_llm.inner
+    add_user(world["store"], "doctor_stop", "멈추기", "clinician", "내과", PW)
+    doc = login(world, "doctor_stop")
+    _, sid = launch(doc, "T0014")
+    before = doc.get("/api/cases/case-1/session").json()
+    eng.live_llm.inner = fake_llm(slow)
+    try:
+        done: dict = {}
+        th = threading.Thread(target=lambda: done.update(r=doc.post("/api/cases/case-1/messages",
+                                                                        json=dict(sessionId=sid, question=Q_DRUG, clientMessageId="stop1"))))
+        th.start()
+        deadline = time.time() + 5
+        while time.time() < deadline and not doc.get("/api/clinic/progress").json()["active"]:
+            time.sleep(0.05)
+        p = doc.get("/api/clinic/progress").json()
+        assert p["active"] and p["step"] in ("target", "extractor") and not p["stopping"]
+        assert doc.post("/api/clinic/stop").json()["status"] == "stopping"
+        th.join(20)
+        r = done["r"]
+        assert r.status_code == 409 and r.headers.get("X-MediCloak-State") == "stopped" and "멈췄습니다" in r.json()["detail"]
+        assert doc.get("/api/cases/case-1/session").json() == before                 # 묻기 전 그대로
+        assert doc.post("/api/clinic/stop").json()["status"] == "idle"
+        sec = login(world, "privacy1")
+        a = next(x for x in sec.get("/api/monitor/audit").json() if x["action"] == "clinic_stop")
+        assert a["actor"].startswith("멈추기") and a["calls"] >= 1 and a["patient_tag"]
+        # 열기 멈추기: 처음 여는 환자(첫 답을 받아 둔 것이 없음)를 열다가 멈추면 지금 대화가 그대로 남는다
+        fresh_first_answers(world)
+        assign_to(world, "doctor_stop", "T0002")
+        pid = eng.trial_of["T0002"][0]
+        purpose = eng.trial_of["T0002"][1]
+        th = threading.Thread(target=lambda: done.update(o=doc.post("/api/emr/launch", json=dict(fhirId=pid, purpose=purpose))))
+        th.start()
+        deadline = time.time() + 5
+        while time.time() < deadline and not doc.get("/api/emr/launch/progress").json()["active"]:
+            time.sleep(0.05)
+        assert doc.get("/api/emr/launch/progress").json()["step"] in ("target", "extractor")
+        assert doc.post("/api/emr/launch/stop").json()["status"] == "stopping"
+        th.join(30)
+        assert done["o"].status_code == 409 and done["o"].headers.get("X-MediCloak-State") == "stopped"
+        assert doc.get("/api/cases/case-1/session").json()["sessionId"] == sid                # 열려 있던 대화 그대로
+        assert any(x["action"] == "emr_launch_stop" for x in sec.get("/api/monitor/audit").json())
+    finally:
+        eng.live_llm.inner = good
+    # 멈춘 뒤에도 같은 대화에 다시 물을 수 있다
+    fresh_first_answers(world)
+    r = doc.post("/api/cases/case-1/messages", json=dict(sessionId=sid, question=Q_DRUG, clientMessageId="stop2"))
+    assert r.status_code == 200, r.text
+
+
+def test_registration_number_and_consult_request(world):
+    """
+    등록번호 · 협진 의뢰 (ADR-0036): 목록 · 차트에 등록번호가 보이고, 예외 열람은 등록번호로 연다.
+    담당 의료진이 협진 의뢰를 보내면 받은 의료진은 번호 없이 열고(협진 열람), 보낸 사람이 취소하면 그 열람도 끝난다. 감사 기록에 남는다.
+    """
+    st = world["store"]
+    add_user(st, "consult_a", "의뢰함", "clinician", "내과", PW)
+    add_user(st, "consult_b", "의뢰받음", "clinician", "신장내과", PW)
+    acc = EmrAccess(st)
+    ua, ub = st.user_by_name("consult_a")["user_id"], st.user_by_name("consult_b")["user_id"]
+    f, g2 = [x for x in acc.outpatients() if x not in acc.assigned_ids(ub)][:2]
+    acc.assign(f, ua, "테스트")
+    a, b, sec = login(world, "consult_a"), login(world, "consult_b"), login(world, "privacy1")
+    row = next(x for x in a.get("/api/emr/worklist").json() if x["fhirId"] == f)
+    assert re.fullmatch(r"26-\d{4}", row["regno"]) and row["access"] == "assigned"
+    chart = a.get("/api/emr/chart", params=dict(fhirId=f)).json()
+    assert chart["patient"]["regno"] == row["regno"] and chart["consult"] == dict(canSend=True, sent=[], received=None)
+    assert "consult_b" in {d["username"] for d in a.get("/api/emr/directory").json()}
+    assert "consult_a" not in {d["username"] for d in a.get("/api/emr/directory").json()}
+    # 보내기: 내용 5자 이상 · 있는 의료진 · 담당 환자만
+    assert a.post("/api/emr/consults", json=dict(fhirId=f, to="consult_b", note="짧음")).status_code == 422
+    assert a.post("/api/emr/consults", json=dict(fhirId=f, to="privacy1", note="보안 담당자에게 보내기")).status_code == 404
+    r = a.post("/api/emr/consults", json=dict(fhirId=f, to="consult_b", note="당뇨 신장 합병증 협진 부탁드립니다"))
+    assert r.status_code == 200, r.text
+    c = r.json()
+    assert c["created"] and c["regno"] == row["regno"] and c["status"] == "pending" and c["receiver"]["username"] == "consult_b"
+    assert a.post("/api/emr/consults", json=dict(fhirId=f, to="consult_b", note="한 번 더 보냅니다")).json()["created"] is False
+    assert a.get("/api/emr/chart", params=dict(fhirId=f)).json()["consult"]["sent"][0]["id"] == c["id"]
+    # 받은 의료진: 열기 전에는 차트가 막히고, 목록 위에 의뢰가 보인다 (등록번호 · 성별 · 연령대 · 보낸 사람 · 내용)
+    assert b.get("/api/emr/chart", params=dict(fhirId=f)).status_code == 403
+    got = b.get("/api/emr/consults").json()["received"]
+    assert [x["id"] for x in got] == [c["id"]] and got[0]["regno"] == row["regno"] and got[0]["sender"]["displayName"] == "의뢰함"
+    assert got[0]["ageBand"] == row["ageBand"] and "conditions" not in got[0]
+    assert b.get("/api/emr/me").json()["consult"]["waiting"] == 1
+    assert a.post(f"/api/emr/consults/{c['id']}/open").status_code == 404               # 보낸 사람은 의뢰로 열지 않는다
+    o = b.post(f"/api/emr/consults/{c['id']}/open")
+    assert o.status_code == 200, o.text
+    o = o.json()
+    assert o["fhirId"] == f and o["created"] and o["grant"]["consultId"] == c["id"] and o["consult"]["status"] == "opened"
+    wl = b.get("/api/emr/worklist").json()
+    assert [(x["fhirId"], x["access"]) for x in wl] == [(f, "consult")]
+    bc = b.get("/api/emr/chart", params=dict(fhirId=f)).json()
+    assert bc["access"]["via"] == "consult" and bc["consult"]["received"]["id"] == c["id"] and not bc["consult"]["canSend"]
+    assert "birthDate" not in b.get(f"/fhir/Patient/{f}").json()
+    assert b.post("/api/emr/consults", json=dict(fhirId=f, to="consult_a", note="다시 돌려 보냅니다")).status_code == 403
+    # 보안 담당자: 검토 대기에 '협진 의뢰'로 (보낸 사람 · 내용), 감사 기록에 보내기 · 열기
+    o2 = sec.get("/api/monitor/emr").json()
+    gr = next(x for x in o2["grants"] if x["id"] == o["grant"]["id"])
+    assert gr["consult"]["fromName"] == "의뢰함" and gr["reasonLabel"] == "협진" and o2["kpi"]["consults7d"] >= 1
+    acts = {x["action"] for x in sec.get("/api/monitor/audit").json()}
+    assert {"emr_consult", "emr_consult_open"} <= acts
+    # 취소하면 그 의뢰로 연 열람도 끝난다
+    assert b.post(f"/api/emr/consults/{c['id']}/cancel").status_code == 404             # 받은 사람은 취소하지 못한다
+    done = a.post(f"/api/emr/consults/{c['id']}/cancel", json=dict(note="환자가 전원했습니다"))
+    assert done.status_code == 200 and done.json()["status"] == "canceled"
+    assert b.get("/api/emr/chart", params=dict(fhirId=f)).status_code == 403 and b.get("/api/emr/worklist").json() == []
+    assert b.post(f"/api/emr/consults/{c['id']}/open").status_code == 409
+    assert "emr_consult_cancel" in {x["action"] for x in sec.get("/api/monitor/audit").json()}
+    # 당직 · 응급은 등록번호로 연다
+    no2 = acc.regno(g2)
+    r = b.post("/api/emr/break-glass", json=dict(patient=no2, reason="on_call", note="야간 당직 응급 확인"))
+    assert r.status_code == 200 and r.json()["fhirId"] == g2 and r.json()["regno"] == no2
+    free = next(f"26-{n:04d}" for n in range(1000, 10000) if f"26-{n:04d}" not in acc.regnos().values())
+    r = b.post("/api/emr/break-glass", json=dict(patient=free, reason="on_call", note="없는 번호로 열기"))
+    assert r.status_code == 404 and "등록번호" in r.json()["detail"]
+    rv = sec.post(f"/api/monitor/emr/patients/{mon_tag(world, g2)}/reveal", json=dict(reason="예외 열람 검토", note="당직 사유와 차트 대조"))
+    assert rv.status_code == 200 and rv.json()["regno"] == no2
+
+
+def mon_tag(world, fhir_id: str) -> str:
+    return subject_tag(tag_key(world["store"]), fhir_id)
+
+
 # ── 실제 LLM 경로 (가짜 HTTP) ─────────────────────────────
 
 def test_real_llm_question_is_defended_and_redacted(world):
@@ -611,8 +740,9 @@ def test_llm_wait_does_not_block_other_requests(world):
     """한 의료진의 질문이 LLM 답을 기다리는 동안에도 관제 화면 요청은 바로 돈다 (LiveLLM이 엔진 잠금을 푼다)."""
     eng = world["eng"]
     slow = FakeAnthropic(delay=0.4)
-    good = eng.live_llm.inner
+    good, par = eng.live_llm.inner, eng.live_llm.extract_parallel
     eng.live_llm.inner = fake_llm(slow)
+    eng.live_llm.extract_parallel = 1                      # 사례마다 나눈 추출(ADR-0035)을 끄면 예전처럼 한 번에 하나
     try:
         doc = login(world, "doctor1")
         _, sid = launch(doc, "T0016")
@@ -633,7 +763,7 @@ def test_llm_wait_does_not_block_other_requests(world):
         assert took < 0.35, took                           # LLM 한 번(0.4초)을 기다리지 않았다
         assert eng.wait_compare(30) and slow.max_active == 1
     finally:
-        eng.live_llm.inner = good
+        eng.live_llm.inner, eng.live_llm.extract_parallel = good, par
 
 
 # ── 영속화 · 다시 켜기 ────────────────────────────────────
@@ -1745,6 +1875,21 @@ def test_extraction_guard_unit():
                       ("2019년", "2019년"), ("2주 간격", "2주 간격"), ("10일 만에", "1~2주 만에"), ("약 1년 동안", "약 1년 동안")]:
         assert G.coarsen_durations(raw)[0] == want, raw
     assert G.duration_mentions("사례1은 약 1~2주, 사례2는 약 2~4주 동안 유지되었습니다.", 5) == [("사례1", "약 1~2주"), ("사례2", "약 2~4주")]
+    # 기간 뒤의 하한 · 상한 · 어림 말은 같이 바꾼다 ('약 1~3년 이상'처럼 겹치지 않게, ADR-0035)
+    for raw, want in [("약 2년 이상 처방", "1년 이상 처방"), ("3일 이내 입원", "3일 이내 입원"), ("2년이 넘는 기간", "1년이 넘는 기간"),
+                      ("약 2주 정도", "약 1~2주"), ("5년 이상", "3년 이상"), ("2년 미만", "3년 미만"), ("10년 미만", "10년 미만"),
+                      ("6개월 이상", "6개월 이상"), ("총 2년 이상", "총 1년 이상")]:
+        assert G.coarsen_durations(raw)[0] == want, raw
+    assert G.duration_mentions("사례1은 1년 이상 처방되었고 사례2는 3년 넘게 처방되었습니다.", 5) == [("사례1", "1년 이상"), ("사례2", "3년 넘게")]
+    # 기록 말투: '종료 기록이 없습니다' → '종료일 없이 계속 처방되었습니다' (처방을 복용으로 바꾸지 않는다)
+    text, ed = G.natural_wording("사례1의 simvastatin Oral Tablet은 종료 기록이 없습니다. metoprolol 100 MG Tablet도 종료 기록이 없으며 2~3회 처방되었습니다. "
+                                 "A DRUGS는 총 10회 이상 처방되었으며 종료 기록이 없습니다.")
+    assert text == ("사례1의 simvastatin Oral Tablet은 종료일 없이 계속 처방되었습니다. metoprolol 100 MG Tablet도 종료일 없이 계속 처방되었으며 2~3회 처방되었습니다. "
+                    "A DRUGS는 총 10회 이상 처방되었으며 종료일 없이 이어졌습니다.")
+    assert [e["kind"] for e in ed] == ["wording"] * 3 and "복용" not in text
+    assert G.natural_wording("사례2의 관리 계획은 종료 기록이 없습니다.")[0] == "사례2의 관리 계획은 종료일 없이 계속 진행되었습니다."
+    out, edits = G.post_release("사례1의 simvastatin Oral Tablet은 약 2년 이상 처방되었고 종료 기록이 없습니다.", 5)
+    assert out == "사례1의 simvastatin Oral Tablet은 1년 이상 처방되었고 종료일 없이 이어졌습니다." and {e["kind"] for e in edits} == {"duration", "wording"}
 
 
 def test_front_calls_do_not_wait_for_background_calls():

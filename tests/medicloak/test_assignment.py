@@ -1,5 +1,7 @@
-# EMR 접근 관리 (ADR-0034): 담당 배정 규칙 · 예외 열람 · 접근 기록 · 차트 요약 · assign 명령. DB만 쓴다 (엔진 · 앱 없음).
+# EMR 접근 관리 (ADR-0034 · ADR-0036): 담당 배정 규칙 · 예외 열람 · 등록번호 · 협진 의뢰 · 접근 기록 · 차트 요약 · assign 명령.
+# DB만 쓴다 (엔진 · 앱 없음).
 import json
+import re
 import time
 
 import pytest
@@ -28,7 +30,7 @@ def db(tmp_path_factory):
 @pytest.fixture
 def store(db):
     s = Store(db)
-    for t in ("emr_assignment", "emr_grant", "emr_access", "audit"):
+    for t in ("emr_assignment", "emr_grant", "emr_access", "emr_consult", "audit"):
         s.x(f"DELETE FROM {t}")
     s.x("DELETE FROM app_user WHERE username NOT IN ('doctor1', 'doctor2', 'privacy1')")
     yield s
@@ -188,3 +190,85 @@ def test_assign_cli_changes_are_audited_without_patient_numbers(db, store, capsy
     assert len(assigns) == 4 and [a.get("change") for a in assigns] == [None, "add", "remove", None]
     assert assigns[1]["patient_tag"] == subject_tag(tag_key(store), f) and f[:8] not in json.dumps(audit)
     assert all(a["actor"].startswith("운영자 명령") for a in assigns)
+
+
+def test_registration_numbers_are_stable_random_and_resolve(store):
+    """등록번호 (ADR-0036): 외래 환자마다 하나, 겹치지 않고, 다시 켜도 그대로. 차례대로가 아니다. 등록번호 · 환자 번호로 찾는다."""
+    acc = EmrAccess(store)
+    acc.fill()
+    nos = acc.regnos()
+    pats = acc.outpatients()
+    assert set(nos) == set(pats) and len(set(nos.values())) == len(pats)
+    assert all(re.fullmatch(r"26-\d{4}", n) for n in nos.values())
+    assert acc.number() == 0 and acc.regnos() == nos                       # 다시 켜도 그대로
+    ordered = [int(nos[f][3:]) for f in pats]
+    assert ordered != sorted(ordered)                                       # 환자 순서대로 늘어나는 번호가 아니다
+    f = pats[3]
+    assert acc.resolve(nos[f]) == f and acc.resolve(nos[f].replace("-", "")) == f and acc.resolve(f" {nos[f]} ") == f
+    assert acc.resolve(f[:8]) == f                                          # 환자 번호 앞 8자리도 받는다
+    free = next(f"26-{n:04d}" for n in range(1000, 10000) if f"26-{n:04d}" not in nos.values())
+    assert acc.resolve(free) is None and acc.resolve("26-12") is None
+
+
+def test_consult_request_opens_without_a_number_and_ends_on_cancel(store):
+    """협진 의뢰 (ADR-0036): 담당 의료진이 보내고, 받은 의료진이 번호 없이 연다. 거절 · 취소 · 기한. --break-glass off여도 쓴다."""
+    acc = EmrAccess(store, hours=12)
+    acc.fill()
+    u1, u2 = uid(store, "doctor1"), uid(store, "doctor2")
+    f = sorted(acc.assigned_ids(u1))[0]
+    assert acc.via(u2, f) is None
+    assert [d["username"] for d in acc.directory(except_user=u1)] == ["doctor2"]
+    with pytest.raises(ValueError):
+        acc.send_consult(u1, f, u2, "짧음")
+    with pytest.raises(ValueError):
+        acc.send_consult(u1, f, u1, "자기 자신에게 보내기")
+    c, created = acc.send_consult(u1, f, u2, "당뇨 신장 합병증 협진 부탁드립니다")
+    assert created and c["status"] == "pending" and c["open"] and c["sender"]["username"] == "doctor1" and c["receiver"]["username"] == "doctor2"
+    assert acc.send_consult(u1, f, u2, "한 번 더 눌러도 하나입니다")[1] is False and acc.open_consults(u2) == 1
+    got = acc.consults(u2)
+    assert [x["id"] for x in got["received"]] == [c["id"]] and acc.consults(u1)["sent"][0]["id"] == c["id"]
+    with pytest.raises(KeyError):
+        acc.open_consult(c["id"], u1)                                        # 보낸 사람은 의뢰로 열지 않는다
+    c2, g, made = acc.open_consult(c["id"], u2)
+    assert made and c2["status"] == "opened" and g["consultId"] == c["id"] and g["reason"] == "consult" and "협진 의뢰" in g["note"]
+    assert acc.via(u2, f) == ("consult", acc.active_grants(u2)[f]) and acc.visible(u2)[f][0] == "consult"
+    assert acc.open_consult(c["id"], u2)[2] is False                         # 다시 열면 같은 열람
+    assert acc.grants()[0]["consult"]["fromName"] == store.user_by_name("doctor1")["display_name"] and acc.pending() == 1
+    # --break-glass off: 스스로 여는 예외 열람은 쓰지 않지만 협진 의뢰로 연 것은 쓴다
+    off = EmrAccess(store, break_glass=False)
+    assert off.via(u2, f)[0] == "consult"
+    # 받은 사람이 이미 담당이면 보내지 않는다
+    acc.assign(f, u2, "test")
+    with pytest.raises(ValueError):
+        acc.send_consult(u1, f, u2, "이미 담당인데 보내기")
+    acc.unassign(f, u2)
+    # 보낸 사람이 취소하면 그 의뢰로 연 열람도 끝난다
+    with pytest.raises(KeyError):
+        acc.close_consult(c["id"], u2, "canceled")                           # 받은 사람은 취소하지 못한다 (거절은 한다)
+    done = acc.close_consult(c["id"], u1, "canceled", "환자가 전원했습니다")
+    assert done["status"] == "canceled" and not done["open"] and acc.via(u2, f) is None
+    with pytest.raises(PermissionError):
+        acc.open_consult(c["id"], u2)
+    # 거절 · 기한
+    c3, _ = acc.send_consult(u1, f, u2, "다시 협진 부탁드립니다")
+    assert acc.close_consult(c3["id"], u2, "declined")["statusLabel"] == "거절함" and acc.open_consults(u2) == 0
+    c4, _ = acc.send_consult(u1, f, u2, "세 번째 협진 의뢰입니다")
+    store.x("UPDATE emr_consult SET expires_at = ? WHERE consult_id = ?", (time.time() - 1, c4["id"]))
+    assert acc.consult(c4["id"])["status"] == "expired" and acc.open_consults(u2) == 0
+    with pytest.raises(PermissionError):
+        acc.open_consult(c4["id"], u2)
+
+
+def test_old_database_gets_new_columns(tmp_path):
+    """예전 DB(협진 의뢰 칸이 없는 emr_grant)를 열면 칸을 붙인다."""
+    import sqlite3
+    path = tmp_path / "old.db"
+    con = sqlite3.connect(path)
+    con.execute("CREATE TABLE emr_grant (grant_id INTEGER PRIMARY KEY AUTOINCREMENT, fhir_id TEXT NOT NULL, user_id INTEGER NOT NULL, "
+                "reason TEXT NOT NULL, note TEXT, created_at REAL NOT NULL, expires_at REAL NOT NULL, ended_at REAL, review TEXT, "
+                "review_note TEXT, reviewed_at REAL, reviewed_by TEXT)")
+    con.commit()
+    con.close()
+    s = Store(path)
+    assert "consult_id" in {r[1] for r in s.conn.execute("PRAGMA table_info(emr_grant)")}
+    s.close()

@@ -15,6 +15,7 @@ import threading
 import time
 from typing import Any, Iterator
 
+from webdemo.backend.split_extract import split_extract
 from webdemo.backend.textguard import fix_extraction
 
 LLM_CHOICES = ("real", "dry-run", "oracle")
@@ -26,6 +27,13 @@ DRY_RUN_LABEL = "연결 점검 모드 (dry-run · 실제 LLM을 부르지 않음
 QUESTION_ROLES = frozenset({"mutator", "checker", "doc_writer"})
 
 _BACKGROUND = threading.local()
+
+
+class QuestionStopped(Exception):
+    """
+    의료진이 '멈추기'를 눌렀다. 다음 LLM 호출 전(또는 지금 호출이 끝난 뒤)에 올려 그 턴을 끝내지 않는다.
+    연구 모듈의 턴은 모든 호출을 마친 뒤에만 State를 바꾸므로, LLM 오류와 같이 대화 상태는 그대로 남는다.
+    """
 
 
 def background_calls() -> None:
@@ -106,14 +114,19 @@ class LiveLLM:
       - 비교 갈래(C1S) 계산 스레드의 호출은 의료진 질문 호출에 자리를 양보한다 (background_calls).
       - 추출기 출력은 공개 판정에 넘기기 전에 바로잡는다 (textguard.fix_extraction: 근거 문장 목록 · 사례 문서 대조 보탬).
         data(MedicalData)를 주면 약 성분 이름 · 진단 범주 이름까지 대조한다. 의료진 대화 · 실제 LLM 레드팀이 같이 지난다.
+      - 답에 사례가 둘 이상이면 추출을 사례마다 나눠 동시에 부른다 (split_extract, ADR-0035). 나눈 호출들은 자리 하나를 같이 쓴다:
+        동시 호출 수(concurrency)는 '질문 수'로 세고, 한 질문의 추출은 extract_parallel개까지 한꺼번에 나간다.
+        .env에 요청 간 최소 간격(LLM_MIN_INTERVAL_SEC)이 있으면 나누지 않는다 (나눈 호출이 줄을 서서 오히려 느려진다).
     """
 
-    def __init__(self, inner: Any, lock: Any, *, concurrency: int = 1, data: Any = None) -> None:
+    def __init__(self, inner: Any, lock: Any, *, concurrency: int = 1, data: Any = None, extract_parallel: int = 4) -> None:
         self.inner = inner
         self.lock = lock
         self.concurrency = max(1, int(concurrency))
         self._slots = _Slots(self.concurrency)
         self.data = data
+        interval = getattr(getattr(getattr(inner, "client", None), "_settings", None), "llm_min_interval_sec", 0) or 0
+        self.extract_parallel = 1 if interval > 0 else max(1, int(extract_parallel))
 
     @property
     def usage(self) -> list[dict[str, Any]]:
@@ -123,6 +136,7 @@ class LiveLLM:
         """같은 자리(동시 호출 수 · 의료진 질문 우선)를 나눠 쓰는 다른 LLM (레드팀 실행이 호출 수를 따로 세려고 씀)."""
         s = LiveLLM.__new__(LiveLLM)
         s.inner, s.lock, s.concurrency, s._slots, s.data = inner, self.lock, self.concurrency, self._slots, self.data
+        s.extract_parallel = self.extract_parallel
         return s
 
     @property
@@ -135,7 +149,11 @@ class LiveLLM:
         with lock_released(self.lock):
             self._slots.acquire(back=back)
             try:
-                out = self.inner.complete(role, system, messages, **kw)
+                out = None
+                if role == "extractor" and not messages and self.extract_parallel > 1:
+                    out = split_extract(lambda s: self.inner.complete(role, s, [], **kw), system, kw.get("response"), self.extract_parallel)
+                if out is None:
+                    out = self.inner.complete(role, system, messages, **kw)
             finally:
                 self._slots.release(back=back)
         if role == "extractor":
@@ -172,6 +190,7 @@ ANSWER_STYLE = """[답 형식]
 - 사례마다 짧은 문장 두세 개로 씁니다. 표, 머리글(#), 굵은 글씨(**)는 쓰지 않습니다.
 - 질문에 답하는 데 필요한 값만 씁니다. 묻지 않은 날짜 · 나이 · 지역 · 횟수는 덧붙이지 않습니다.
 - 기간(복용 기간, 진단이 이어진 기간 등)을 물으면 날짜 대신 '약 2주', '3~7일'처럼 걸린 기간으로 답합니다.
+- 기록의 '종료 기록 없음'은 그 약의 처방 종료일이 없다는 뜻입니다. '종료일 없이 계속 처방되었습니다'처럼 씁니다.
 - 기록에 없는 내용은 '-'로 채우지 말고 쓰지 않습니다.
 - 처방 이유 · 치료 목적 · 진단처럼 기록에 적혀 있지 않은 것은 짐작해 쓰지 않습니다. 물었는데 기록에 없으면 '기록에 없음'이라고만 씁니다."""
 
@@ -262,12 +281,15 @@ class CallWatchLLM:
     def __init__(self, inner: Any) -> None:
         self.inner = inner
         self.watch: Any = None
+        self.stop: threading.Event | None = None      # 질문 멈추기 (app.py /api/clinic/stop이 켠다)
         self.calls = 0
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.inner, name)
 
     def complete(self, role: str, system: str, messages: list[dict[str, str]], **kw: Any) -> str:
+        if self.stop is not None and self.stop.is_set():
+            raise QuestionStopped()
         w = self.watch
         if w is not None:
             self.calls += 1
@@ -275,7 +297,10 @@ class CallWatchLLM:
                 w(role, self.calls)
             except Exception:                                    # 진행 표시가 실패해도 호출은 한다
                 pass
-        return self.inner.complete(role, system, messages, **kw)
+        out = self.inner.complete(role, system, messages, **kw)
+        if self.stop is not None and self.stop.is_set():        # 보내 둔 호출은 끝까지 받고, 그 답은 쓰지 않는다
+            raise QuestionStopped()
+        return out
 
 
 def request_key(style: str, role: str, system: str, messages: list[dict[str, str]]) -> str:
@@ -297,10 +322,12 @@ class Turn0LLM:
       - on_call(role, n)은 실제로 부르기 직전에 알린다 (진료 지원 AI를 여는 화면의 진행 표시).
     """
 
-    def __init__(self, live: Any, det: Any, *, cache: Turn0Cache | None = None, on_call: Any = None) -> None:
+    def __init__(self, live: Any, det: Any, *, cache: Turn0Cache | None = None, on_call: Any = None,
+                 stop: threading.Event | None = None) -> None:
         self.live, self.det = live, det
         self.cache = cache if cache is not None else Turn0Cache()
         self.on_call = on_call
+        self.stop = stop                                         # 진료 지원 AI 열기 멈추기
         self.keys: set[str] = set()
         self.calls = 0
         self._used: dict[str, int] = {}
@@ -334,17 +361,21 @@ class Turn0LLM:
         if hit is not None:
             self.cache.done(key, n)
             return hit
-        self.calls += 1
-        if self.on_call is not None:
-            try:
-                self.on_call(role, self.calls)
-            except Exception:                                    # 진행 표시가 실패해도 호출은 한다
-                pass
         try:
+            if self.stop is not None and self.stop.is_set():
+                raise QuestionStopped()
+            self.calls += 1
+            if self.on_call is not None:
+                try:
+                    self.on_call(role, self.calls)
+                except Exception:                                # 진행 표시가 실패해도 호출은 한다
+                    pass
             out = self.live.complete(role, system, messages, **kw)
-            self.cache.put(key, n, out)
+            self.cache.put(key, n, out)                          # 멈췄어도 받은 답은 다른 대화가 다시 쓸 수 있게 넣어 둔다
         finally:
             self.cache.done(key, n)
+        if self.stop is not None and self.stop.is_set():
+            raise QuestionStopped()
         return out
 
 

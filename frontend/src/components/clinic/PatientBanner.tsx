@@ -173,6 +173,7 @@ export function PatientBanner() {
 
   const fields: [string, string][] = p
     ? [
+        ...(p.regno ? ([['등록번호', p.regno]] as [string, string][]) : []),
         ['연령 / 성별', p.ageSexLabel],
         ['주진단', p.primaryDiagnosis],
         ['동반질환', p.comorbidities.join(', ') || '없음'],

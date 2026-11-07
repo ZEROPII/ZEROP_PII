@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import collections
 import csv
+import datetime as dt
 import hashlib
+import re
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -116,17 +118,31 @@ class FhirNotFound(KeyError):
     pass
 
 
-#: 끝나지 않은 진단이 있어도 마지막 기록이 이보다 오래되면 '장기 미내원'으로 둔다 (진료 중 목록에 섞지 않는다)
+#: 끝나지 않은 진단이 있어도 마지막 내원이 이보다 오래되면 '장기 미내원'으로 둔다 (진료 중 목록에 섞지 않는다)
 DORMANT_YEARS = 3
 STATUS_KO = {"ACTIVE": "진료 중", "RESOLVED": "완치", "DORMANT": "장기 미내원"}
+#: 종료일이 없는 처방도 마지막 처방이 마지막 내원보다 이 날수 넘게 앞서면 '진행 중'으로 세지 않는다 (차트에 '종료일 없음'으로 따로)
+MED_STALE_DAYS = 365
+#: 급성 질환(감염 · 손상 · 급성 발작 등)은 종료일이 없어도 마지막 기록이 마지막 내원보다 이 날수 넘게 앞서면 '진행 중'으로 세지 않는다.
+#: 만성 질환(당뇨 · 고혈압 · 만성 신장병 …)은 진단 기록이 한 번뿐이어도 종료일이 없으면 진행 중이다 (Synthea 기록 방식).
+ACUTE_STALE_DAYS = 365
+ACUTE = re.compile(r"\b(acute|sepsis|septic|urinary tract infection|pneumonia|otitis|pharyngitis|tonsillitis|bronchitis|influenza|covid|viral|"
+                   r"streptococcal|cystitis|gastroenteritis|fracture|injury|sprain|strain|laceration|contusion|concussion|dislocation|burn|bite|"
+                   r"poisoning|overdose|convulsions)\b", re.I)
+KIND = dict(CONDITION="problems", MEDICATION="medications", PROCEDURE="procedures", PROCEDURE_HISTORY="procedures", CAREPLAN="carePlans")
+
+
+def days_before(day: str, n: int) -> str:
+    """'YYYY-MM-DD'에서 n일 앞 (글자로 비교하려고 같은 꼴로)."""
+    return (dt.date.fromisoformat(day[:10]) - dt.timedelta(days=n)).isoformat()
 
 
 def care_status(open_items: int, last: str | None, latest: str | None) -> str:
     """
-    외래 목록의 진료 상태.
-      RESOLVED 완치       기록된 진단 · 관리 계획이 모두 끝났다 (종료일 있음)
-      DORMANT  장기 미내원 끝나지 않은 것이 있지만 마지막 기록이 EMR 마지막 기록일보다 DORMANT_YEARS년 넘게 앞선다
-      ACTIVE   진료 중     끝나지 않은 진단이나 관리 계획이 있고 최근 기록이 있다
+    외래 목록의 진료 상태 (last: 마지막 내원일, latest: 가상 EMR 전체의 마지막 기록일).
+      RESOLVED 완치       진행 중인 진단 · 처방 · 관리 계획이 없다 (종료일이 있거나, 종료일 없는 오래된 처방 · 급성 질환뿐)
+      DORMANT  장기 미내원 진행 중인 것이 있지만 마지막 내원이 EMR 마지막 기록일보다 DORMANT_YEARS년 넘게 앞선다
+      ACTIVE   진료 중     진행 중인 것이 있고 최근 DORMANT_YEARS년 안에 내원했다
     날짜는 'YYYY-MM-DD' 글자로 비교한다 (기준일의 연도만 뺀다).
     """
     if not open_items:
@@ -134,6 +150,17 @@ def care_status(open_items: int, last: str | None, latest: str | None) -> str:
     if last and latest and last < f"{int(latest[:4]) - DORMANT_YEARS:04d}{latest[4:10]}":
         return "DORMANT"
     return "ACTIVE"
+
+
+def _stale(kind: str, g: dict[str, Any], last_visit: str | None) -> bool:
+    """종료일이 없어도 진행 중으로 세지 않는 것: 오래된 처방, 오래된 급성 질환."""
+    if not last_visit or not g["last"]:
+        return False
+    if kind == "medications":
+        return g["last"] < days_before(last_visit, MED_STALE_DAYS)
+    if kind == "problems":
+        return bool(ACUTE.search(g["label"])) and "chronic" not in g["label"].lower() and g["last"] < days_before(last_visit, ACUTE_STALE_DAYS)
+    return False
 
 
 class Emr:
@@ -223,26 +250,73 @@ class Emr:
             res.update(status="completed" if stop else "active", intent="plan", category=[code], period=dict(start=start, end=stop))
         return res
 
-    def summary(self, fhir_id: str) -> dict[str, Any]:
+    def record(self, pid: str) -> dict[str, Any]:
         """
-        EMR 외래 목록 한 줄: 성별 · 대표 진단 · 진료 상태 · 마지막 기록일 (화면에서 진료할 환자를 고를 때).
+        한 환자의 기록을 차트 모양으로 묶는다: 종류마다 같은 이름을 한 줄로(횟수 · 처음 · 마지막 · 종료일), 진료(encounter)마다 내원.
+        진행 중(active): 종료일 없는 기록이 있고 _stale이 아님. 종료일은 없지만 오래되어 진행 중으로 세지 않으면 noEnd.
+        """
+        rows = self.store.q("SELECT event_type, encounter_id, code_node, SUBSTR(start, 1, 10) AS d, SUBSTR(stop, 1, 10) AS e FROM emr_event "
+                            "WHERE patient_id = ? ORDER BY start, seq", (pid,))
+        groups: dict[str, dict[str, dict[str, Any]]] = collections.defaultdict(dict)
+        visits: dict[str, dict[str, Any]] = {}
+        for e in rows:
+            k = KIND.get(e["event_type"])
+            if k is None:
+                continue
+            lab = self.label(e["code_node"]) or e["code_node"]
+            g = groups[k].setdefault(lab, dict(label=lab, times=0, first=e["d"] or None, last=e["d"] or None, active=False, ended=None,
+                                               noEnd=False, open=False))
+            g["times"] += 1
+            g["last"] = max(filter(None, (g["last"], e["d"])), default=None)
+            if e["event_type"] in ("CONDITION", "MEDICATION", "CAREPLAN"):
+                if e["e"]:
+                    g["ended"] = max(filter(None, (g["ended"], e["e"])), default=None)
+                else:
+                    g["open"] = True
+            enc = e["encounter_id"] or (f"day:{e['d']}" if e["d"] else None)
+            if enc and e["d"]:
+                v = visits.setdefault(enc, dict(date=e["d"], items=[]))
+                v["date"] = min(v["date"], e["d"])
+                item = dict(kind=k, label=lab)
+                if item not in v["items"]:
+                    v["items"].append(item)
+        days = sorted({v["date"] for v in visits.values()})
+        last_visit = days[-1] if days else None
+        for k, gs in groups.items():
+            for g in gs.values():
+                is_open = g.pop("open")
+                g["active"] = is_open and not _stale(k, g, last_visit)
+                g["noEnd"] = is_open and not g["active"]
+                if is_open:
+                    g["ended"] = None                     # 종료일 없는 기록이 있으면 끝난 날을 보이지 않는다
+        return dict(groups=groups, visits=visits, days=days, lastVisit=last_visit)
+
+    def summary(self, fhir_id: str, rec: dict[str, Any] | None = None) -> dict[str, Any]:
+        """
+        EMR 외래 목록 한 줄: 성별 · 대표 진단 · 진료 상태 · 마지막 내원일 (화면에서 진료할 환자를 고를 때).
         생년 · 거주 지역은 목록에 넣지 않는다 (환자를 고르는 데 필요 없다. FHIR Patient 자원에는 그대로 있다).
-        진료 상태는 care_status: 진료 중 · 완치 · 장기 미내원.
+        진료 상태는 care_status: 진료 중 · 완치 · 장기 미내원. openItems는 차트의 '진행 중'(진단 · 처방 · 관리 계획) 수와 같다.
+        lastRecord는 마지막 내원일이다 (진료 encounter의 첫날): 차트의 최근 내원 · 내원 흐름과 같은 날을 보인다.
+        ageYear: 나이(연령대)를 센 해 = 마지막 내원 해 (장기 미내원이면 화면이 '1998년 기준'처럼 같이 보인다).
         """
         r = self.patient_row(fhir_id)
         pid = r["patient_id"]
+        rec = rec or self.record(pid)
         dx = self.store.q("SELECT code_node, COUNT(*) AS n FROM emr_event WHERE patient_id = ? AND event_type = 'CONDITION' "
                           "GROUP BY code_node ORDER BY n DESC, code_node LIMIT 3", (pid,))
-        open_n = self.store.q("SELECT COUNT(*) AS n FROM emr_event WHERE patient_id = ? AND event_type IN ('CONDITION', 'CAREPLAN') "
-                              "AND (stop IS NULL OR stop = '')", (pid,))[0]["n"]
-        last = self.store.q("SELECT MAX(SUBSTR(start, 1, 10)) AS d FROM emr_event WHERE patient_id = ? AND start <> ''", (pid,))[0]["d"]
+        open_n = sum(g["active"] for k in ("problems", "medications", "carePlans") for g in rec["groups"].get(k, {}).values())
+        last = rec["lastVisit"]
         status = care_status(open_n, last, self.latest_record())
         return dict(fhirId=r["fhir_id"], identifier=pid[:8], sex=SEX_FHIR.get(r["sex_node"], "unknown"),
                     conditions=[self.label(d["code_node"]) for d in dx], events=r["n_events"],
-                    status=status, statusLabel=STATUS_KO[status], openItems=open_n, lastRecord=last)
+                    status=status, statusLabel=STATUS_KO[status], openItems=open_n, lastRecord=last,
+                    ageYear=int(last[:4]) if last else None)
 
     def age_band(self, fhir_id: str) -> str | None:
-        """마지막 기록 때 나이의 연령대 ('40대', '10세 미만'). 진료 지원 AI 목적이 없는 외래 환자의 목록 줄에 쓴다."""
+        """
+        마지막 내원 때 나이의 연령대 ('40대', '10세 미만'). 진료 지원 AI 목적이 없는 외래 환자의 목록 줄에 쓴다.
+        진료 지원 AI의 환자 요약도 가장 최근 진료일 기준 나이라 같은 연령대가 된다. 장기 미내원이면 화면이 그 해를 같이 보인다 (ageYear).
+        """
         r = self.patient_row(fhir_id)
         e = self.store.one("SELECT age_years_at_start AS a FROM emr_event WHERE patient_id = ? AND age_years_at_start <> '' "
                            "ORDER BY start DESC, seq DESC LIMIT 1", (r["patient_id"],))
@@ -254,59 +328,34 @@ class Emr:
     def chart(self, fhir_id: str, *, limit: int = 10) -> dict[str, Any]:
         """
         차트 요약 (의료진 환자 화면 · 보안 담당자의 사유를 적은 열람). 같은 이름은 한 줄로 묶어 횟수 · 처음 · 마지막 날을 보인다.
-          problems    진단 이력: 끝나지 않은 진단 먼저, 그다음 최근 것부터
-          medications 처방: 끝나지 않은 처방 먼저
+          problems    진단 이력: 진행 중인 진단 먼저, 그다음 최근 것부터
+          medications 처방: 진행 중인 처방 먼저 (종료일이 없어도 마지막 처방이 마지막 내원보다 1년 넘게 앞서면 '종료일 없음')
           procedures  시술 (과거 시술 기록 포함) · carePlans 관리 계획
           visits      최근 내원: 진료(encounter)마다 그날 기록된 진단 · 처방 · 시술 · 관리 계획
-          yearly      해마다 내원한 날 수 (내원 흐름)
+          yearly      해마다 내원한 날 수 (마지막 내원 해까지 최근 10년)
+          visitDates  내원한 날 전체 (내원 흐름: 마지막 내원 · 최근 1년 · 전체) · refDate 가상 EMR 기준일 (합성 데이터의 마지막 기록일)
         생년 · 거주 지역은 넣지 않는다 (목록 줄과 같다). 날짜는 EMR 기록 그대로 (자기 환자 차트).
         """
-        s = self.summary(fhir_id)
         pid = self.patient_row(fhir_id)["patient_id"]
-        rows = self.store.q("SELECT event_type, encounter_id, code_node, SUBSTR(start, 1, 10) AS d, SUBSTR(stop, 1, 10) AS e FROM emr_event "
-                            "WHERE patient_id = ? ORDER BY start, seq", (pid,))
-        groups: dict[str, dict[str, dict[str, Any]]] = collections.defaultdict(dict)
-        kind = dict(CONDITION="problems", MEDICATION="medications", PROCEDURE="procedures", PROCEDURE_HISTORY="procedures", CAREPLAN="carePlans")
-        visits: dict[str, dict[str, Any]] = {}
-        for e in rows:
-            k = kind.get(e["event_type"])
-            if k is None:
-                continue
-            lab = self.label(e["code_node"]) or e["code_node"]
-            g = groups[k].setdefault(lab, dict(label=lab, times=0, first=e["d"] or None, last=e["d"] or None, active=False, ended=None))
-            g["times"] += 1
-            g["last"] = max(filter(None, (g["last"], e["d"])), default=None)
-            if e["event_type"] in ("CONDITION", "MEDICATION", "CAREPLAN"):
-                if e["e"]:
-                    g["ended"] = max(filter(None, (g["ended"], e["e"])), default=None)
-                else:
-                    g["active"] = True
-            enc = e["encounter_id"] or (f"day:{e['d']}" if e["d"] else None)
-            if enc and e["d"]:
-                v = visits.setdefault(enc, dict(date=e["d"], items=[]))
-                v["date"] = min(v["date"], e["d"])
-                item = dict(kind=k, label=lab)
-                if item not in v["items"]:
-                    v["items"].append(item)
+        rec = self.record(pid)
+        s = self.summary(fhir_id, rec)
+        groups = rec["groups"]
 
         def ordered(k: str) -> dict[str, Any]:
-            # 끝나지 않은 것 먼저, 그 안에서는 마지막 기록이 최근인 것부터 (정렬을 두 번: 뒤의 정렬이 앞의 순서를 지킨다)
-            xs = sorted(groups[k].values(), key=lambda g: g["last"] or "", reverse=True)
+            # 진행 중인 것 먼저, 그 안에서는 마지막 기록이 최근인 것부터 (정렬을 두 번: 뒤의 정렬이 앞의 순서를 지킨다)
+            xs = sorted(groups.get(k, {}).values(), key=lambda g: g["last"] or "", reverse=True)
             xs = sorted(xs, key=lambda g: not g["active"])
-            for g in xs:
-                if g["active"]:
-                    g["ended"] = None
-            return dict(items=xs[:limit], total=len(xs), active=sum(g["active"] for g in xs))
+            return dict(items=xs[:limit], total=len(xs), active=sum(g["active"] for g in xs), noEnd=sum(g["noEnd"] for g in xs))
 
-        days = sorted({v["date"] for v in visits.values()})
+        days = rec["days"]
         by_year = collections.Counter(d[:4] for d in days)
         last_y = int(days[-1][:4]) if days else 0
-        # 내원 흐름은 마지막 기록 해까지 최근 10년만 (처음 기록이 더 늦으면 그 해부터)
+        # 내원 흐름은 마지막 내원 해까지 최근 10년만 (처음 기록이 더 늦으면 그 해부터)
         yearly = [dict(year=y, visits=by_year.get(str(y), 0)) for y in range(max(int(days[0][:4]), last_y - 9), last_y + 1)] if days else []
-        recent = sorted(visits.values(), key=lambda v: v["date"], reverse=True)[:8]
+        recent = sorted(rec["visits"].values(), key=lambda v: v["date"], reverse=True)[:8]
         return dict(patient=dict(s, ageBand=self.age_band(fhir_id)), problems=ordered("problems"), medications=ordered("medications"),
                     procedures=ordered("procedures"), carePlans=ordered("carePlans"), visits=recent, yearly=yearly,
-                    visitDays=len(days), firstRecord=days[0] if days else None)
+                    visitDays=len(days), firstRecord=days[0] if days else None, visitDates=days, refDate=self.latest_record() or None)
 
 
 def bundle(resources: list[dict[str, Any]], total: int) -> dict[str, Any]:

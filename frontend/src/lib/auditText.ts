@@ -34,10 +34,17 @@ export const ACTION_KO: Record<string, string> = {
   break_glass_review: '예외 열람 검토',
   emr_reveal: 'EMR 차트 열람 (보안 담당자)',
   emr_assign: '담당 배정',
+  emr_consult: '협진 의뢰 보냄',
+  emr_consult_open: '협진 의뢰로 열람',
+  emr_consult_decline: '협진 의뢰 거절',
+  emr_consult_cancel: '협진 의뢰 취소',
+  clinic_stop: '의료진이 질문을 멈춤',
+  emr_launch_stop: '진료 지원 AI 열기를 멈춤',
 };
 
 /** EMR 접근 기록 (ADR-0034): 다룬 환자는 '지금 환자'가 아니라 그냥 환자 기호로 */
-const EMR_ACTIONS = new Set(['emr_denied', 'break_glass', 'break_glass_review', 'emr_reveal', 'emr_assign']);
+const EMR_ACTIONS = new Set(['emr_denied', 'break_glass', 'break_glass_review', 'emr_reveal', 'emr_assign', 'emr_consult', 'emr_consult_open',
+  'emr_consult_decline', 'emr_consult_cancel', 'emr_launch_stop']);
 const WHAT_KO: Record<string, string> = { chart: '차트 열기', launch: '진료 지원 AI 열기', prefetch: '첫 답 미리 준비', visits: '오늘 볼 진단', fhir: 'EMR 연동(FHIR) 조회' };
 
 const PURPOSE_KO: Record<string, string> = { PRESCRIPTION: '처방', TREATMENT_PROCEDURE: '시술·치료', COURSE_CARE: '경과·관리' };
@@ -105,6 +112,10 @@ export function detailOf(a: AuditEntry): string | null {
     const counts = Object.entries(a.counts ?? {}).map(([k, v]) => `${k} ${v}명`).join(', ');
     return join([a.reset ? '모두 지우고 다시 나눔' : a.assigned != null ? `담당 없는 환자 ${a.assigned}명 나눔` : null, counts || null]);
   }
+  if (a.action === 'emr_consult') return join([a.to ? `받는 의료진: ${a.to}` : null, a.note]);
+  if (a.action === 'emr_consult_open') return join([a.sender ? `${a.sender} 선생님의 의뢰` : null, a.hours ? `${a.hours}시간` : null]);
+  if (a.action === 'emr_consult_decline' || a.action === 'emr_consult_cancel') return a.note ?? null;
+  if (a.action === 'clinic_stop' || a.action === 'emr_launch_stop') return a.calls != null ? `대상 AI · 확인 호출 ${a.calls}번 뒤 멈춤` : null;
   if (a.action === 'emr_launch' && a.access === 'break_glass') return '예외 열람 중인 환자';
   return null;
 }

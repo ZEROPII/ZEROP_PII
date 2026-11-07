@@ -42,7 +42,7 @@ function Brief({ o }: { o: EmrAccessOverview }) {
   if (k.pendingReview > 0)
     text = (
       <>
-        담당 외 환자 예외 열람 <em className="not-italic text-iris-text">{k.pendingReview}건</em>이 검토를 기다립니다. 적은 사유가 진료에 맞는지 확인하세요.
+        담당 외 환자 열람 <em className="not-italic text-iris-text">{k.pendingReview}건</em>이 검토를 기다립니다. 협진 의뢰 · 적은 사유가 진료에 맞는지 확인하세요.
       </>
     );
   else if (k.denied7d > 0)
@@ -57,12 +57,13 @@ function Brief({ o }: { o: EmrAccessOverview }) {
         담당 의료진이 없는 외래 환자가 <em className="not-italic text-danger-text">{k.unassigned}명</em> 있습니다. 담당을 배정하세요.
       </>
     );
-  else text = <>모든 외래 환자에 담당 의료진이 있고, 검토할 예외 열람은 없습니다.</>;
+  else text = <>모든 외래 환자에 담당 의료진이 있고, 검토할 담당 외 열람은 없습니다.</>;
   const stats: [string, string, string, boolean][] = [
     ['외래 환자', `${k.outpatients}명`, '가상 EMR의 외래 환자 (유사 사례 검색 대상인 과거 기록 환자는 EMR로 열 수 없어 세지 않습니다)', false],
-    ['담당 없음', `${k.unassigned}명`, '담당 의료진이 없는 외래 환자. 예외 열람으로만 열립니다', k.unassigned > 0],
+    ['담당 없음', `${k.unassigned}명`, '담당 의료진이 없는 외래 환자. 협진 의뢰 · 예외 열람으로만 열립니다', k.unassigned > 0],
     ['24시간 차트 열람', `${k.charts24h}건`, '의료진이 차트 요약 · EMR 연동(FHIR)으로 환자 기록을 연 횟수', false],
     [`${o.windowDays}일 예외 열람`, `${k.breakGlass7d}건`, '담당이 아닌 환자를 사유를 적고 연 횟수', false],
+    [`${o.windowDays}일 협진 의뢰`, `${k.consults7d ?? 0}건`, '담당 의료진이 다른 의료진에게 보낸 협진 의뢰 수', false],
     [`${o.windowDays}일 담당 외 거부`, `${k.denied7d}건`, '담당이 아닌 환자를 열려다 막힌 횟수', k.denied7d > 0],
     [`${o.windowDays}일 보안 담당자 열람`, `${k.reveals7d}건`, '보안 담당자가 사유를 적고 차트를 연 횟수', false],
   ];
@@ -130,12 +131,25 @@ function GrantCard({ g, onReviewed, showTag = false, onSelect }: { g: EmrGrantRe
           {g.displayName}
           {g.department && <span className="ml-1 font-normal text-ink-3">{g.department}</span>}
         </span>
-        <span className="rounded-[5px] bg-caution-tint px-1.5 py-px text-[11px] font-bold text-caution-text">{g.reasonLabel}</span>
+        {g.consult ? (
+          <span className="rounded-[5px] bg-iris-tint px-1.5 py-px text-[11px] font-bold text-iris-text" title="담당 의료진이 보낸 협진 의뢰로 연 열람">
+            협진 의뢰
+          </span>
+        ) : (
+          <span className="rounded-[5px] bg-caution-tint px-1.5 py-px text-[11px] font-bold text-caution-text">{g.reasonLabel}</span>
+        )}
         <span className="num ml-auto text-[11.5px] text-ink-3" title={`연 시각 ${dateTime(g.createdAt)} · 끝나는 시각 ${dateTime(g.expiresAt)}`}>
           {dateTime(g.createdAt)} · {state}
         </span>
       </div>
-      {g.note && <p className="mt-1 text-[13px] leading-6 text-ink-2">{g.note}</p>}
+      {g.consult ? (
+        <p className="mt-1 text-[13px] leading-6 text-ink-2">
+          {g.consult.fromName}
+          {g.consult.fromDepartment ? `(${g.consult.fromDepartment})` : ''} 선생님이 보낸 의뢰: {g.consult.note}
+        </p>
+      ) : (
+        g.note && <p className="mt-1 text-[13px] leading-6 text-ink-2">{g.note}</p>
+      )}
       {g.review ? (
         <p className={`mt-1.5 text-xs leading-5 ${g.review === 'flag' ? 'text-danger-text' : 'text-ink-3'}`}>
           {g.reviewLabel}
@@ -221,6 +235,11 @@ function PatientDetail({ tag, onChanged }: { tag: string; onChanged(): void }) {
           <Status status={d.status} label={d.statusLabel} />
           {revealed && (
             <span className="rounded-[5px] bg-iris-tint px-1.5 py-px text-[11.5px] font-semibold text-iris-text">
+              {revealed.regno && (
+                <>
+                  등록번호 <span className="num">{revealed.regno}</span> ·{' '}
+                </>
+              )}
               환자 번호 <span className="font-mono">{revealed.identifier}</span>
             </span>
           )}
@@ -246,8 +265,8 @@ function PatientDetail({ tag, onChanged }: { tag: string; onChanged(): void }) {
           <ChartSummary chart={revealed.chart} wide={false} />
         </section>
       )}
-      <section aria-label="예외 열람" className="border-b border-line px-4 py-3.5">
-        <h3 className="text-[13px] font-bold text-ink">예외 열람 {view.grants.length > 0 && <span className="num font-normal text-ink-3">{view.grants.length}건</span>}</h3>
+      <section aria-label="담당 외 열람" className="border-b border-line px-4 py-3.5">
+        <h3 className="text-[13px] font-bold text-ink">담당 외 열람 (협진 의뢰 · 예외 열람) {view.grants.length > 0 && <span className="num font-normal text-ink-3">{view.grants.length}건</span>}</h3>
         {view.grants.length === 0 ? (
           <p className="mt-1.5 text-[13px] text-ink-3">담당이 아닌 의료진이 연 기록이 없습니다.</p>
         ) : (
@@ -319,7 +338,7 @@ function PatientDetail({ tag, onChanged }: { tag: string; onChanged(): void }) {
 function Assignment({ o }: { o: EmrAccessOverview }) {
   return (
     <div className="px-5 py-8">
-      <EmptyState message="왼쪽에서 환자를 고르면 담당 · 예외 열람 · 접근 기록이 여기에 나옵니다. 차트는 사유를 적어야 열립니다." />
+      <EmptyState message="왼쪽에서 환자를 고르면 담당 · 협진 의뢰 · 예외 열람 · 접근 기록이 여기에 나옵니다. 차트는 사유를 적어야 열립니다." />
       <section aria-label="담당 배정" className="mx-auto mt-2 max-w-[340px] rounded-control border border-line px-4 py-3">
         <h3 className="text-[13px] font-bold text-ink">담당 배정</h3>
         <ul className="mt-1.5 space-y-1 text-[13px]">
@@ -332,7 +351,7 @@ function Assignment({ o }: { o: EmrAccessOverview }) {
           ))}
         </ul>
         <p className="mt-2.5 text-xs leading-5 text-ink-3">
-          예외 열람 {o.breakGlass ? `켬 (사유를 적고 ${o.grantHours}시간)` : '끔 (담당 환자만)'}. 담당을 바꾸려면 서버에서{' '}
+          예외 열람 {o.breakGlass ? `켬 (등록번호와 사유를 적고 ${o.grantHours}시간)` : '끔 (담당 환자와 협진 의뢰만)'} · 협진 의뢰 켬. 담당을 바꾸려면 서버에서{' '}
           <code className="font-mono text-[11.5px] text-ink-2">python -m medicloak assign</code>을 씁니다.
         </p>
       </section>
@@ -392,7 +411,7 @@ export function EmrAccessPage() {
             {(
               [
                 ['patients', '외래 환자', o.patients.length],
-                ['grants', '예외 열람', o.grants.length],
+                ['grants', '담당 외 열람', o.grants.length],
               ] as const
             ).map(([id, label, n]) => (
               <button

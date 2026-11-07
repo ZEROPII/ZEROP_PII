@@ -589,6 +589,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--no-rule-extract", action="store_true")
     ap.add_argument("--extractor-model", default=None)
     ap.add_argument("--rewriter-model", default=None)
+    ap.add_argument("--extract-parallel", type=int, default=1,
+                    help="답에 사례가 둘 이상이면 추출을 사례마다 나눠 이만큼 동시에 부른다 (서버 기본 4와 견줄 때. 기본 1 = 한 번에, ADR-0035)")
     ap.add_argument("--env-file", default=None)
     ap.add_argument("--timeout", type=float, default=180.0, help="LLM 요청 timeout 초 (.env 값보다 작으면 이 값)")
     ap.add_argument("--out", default=None)
@@ -642,7 +644,12 @@ def main(argv: list[str] | None = None) -> int:
     for f in ("llm_usage.jsonl", "턴시간.jsonl", "llm_errors.jsonl"):
         (out / f).write_text("", encoding="utf-8")
     clock = Clock(out / "llm_usage.jsonl", out / "턴시간.jsonl", out / "llm_errors.jsonl")
-    llm = StyleLLM(TimingLLM(inner, clock), a.answer_style == "on")
+    timed = TimingLLM(inner, clock)
+    if a.extract_parallel > 1:
+        from webdemo.backend.split_extract import SplitExtractLLM
+        timed = SplitExtractLLM(timed, a.extract_parallel)          # 나눈 호출도 하나씩 llm_usage에 남는다
+    measurement["extract_parallel"] = a.extract_parallel
+    llm = StyleLLM(timed, a.answer_style == "on")
     print(f"[측정] 준비 중 (기준 집단 · 문서) → {out}")
     ctx, split = build_context(cfg, llm, out, data=data)
     uninstall = install_timers(ctx, clock)

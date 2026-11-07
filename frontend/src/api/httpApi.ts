@@ -37,7 +37,12 @@ export function createHttpApi(baseUrl: string): ClinicalCaseApi {
     if (!response.ok) {
       // 본문에 의료 데이터가 들어 있을 수 있으므로 상태 코드에 맞춘 고정 문구만 보여 준다.
       const flag = response.headers.get('X-MediCloak-State') ?? undefined;
-      const msg = flag === 'no-conversation' ? '내 담당 환자 목록에서 환자를 열어 주세요.' : STATUS_MESSAGE[response.status];
+      const msg =
+        flag === 'no-conversation'
+          ? '내 담당 환자 목록에서 환자를 열어 주세요.'
+          : flag === 'stopped'
+            ? '질문을 멈췄습니다. 질문은 입력칸에 다시 넣었습니다.'
+            : STATUS_MESSAGE[response.status];
       throw new ApiError(msg ?? `요청이 실패했습니다 (HTTP ${response.status}).`, response.status, flag);
     }
     return (await response.json()) as T;

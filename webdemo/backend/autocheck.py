@@ -1,6 +1,6 @@
 # 설정이 바뀌면 레드팀 점검을 자동으로 돌리고, 직전 점검과 비교한다 (ADR-0028)
 #
-# 설정(settings): 판정 규칙 판 · 대상 AI 답 형식 · 모델(대상 AI와 역할별 모델) · 규칙 추출. 지문(fingerprint)은 그 해시다.
+# 설정(settings): 판정 규칙 판 · 대상 AI 답 형식 · 모델(대상 AI와 역할별 모델) · 규칙 추출 · 추출 나누기. 지문(fingerprint)은 그 해시다.
 #   서버가 켜질 때 지금 지문을 실제 LLM 점검 기록과 견준다.
 #     같은 지문의 점검이 있다 (끝남 · 멈춤 · 오류 · 도는 중)  → 돌리지 않는다. 멈춘 점검을 다시 돌려 호출을 쓰지 않는다.
 #     없다 (처음 · 설정이 바뀜 · 서버를 다시 켜느라 끊긴 점검만 있음) → '유형마다 1명' 점검을 뒤에서 시작한다.
@@ -28,7 +28,7 @@ from webdemo.backend.review import RELEASE_VERSION
 ACTOR = "자동 점검"
 AUTO_PER_TYPE = 1
 AUTO_FUZZER = "feedback"
-SETTING_KO = dict(release="판정 규칙 판", answer_style="대상 AI 답 형식", model="모델", rule_extract="규칙 추출")
+SETTING_KO = dict(release="판정 규칙 판", answer_style="대상 AI 답 형식", model="모델", rule_extract="규칙 추출", extract="추출 나누기")
 LEVEL_KO = dict(warn="경고", caution="주의", ok="이상 없음", none="첫 기준 점검")
 TRIGGER_KO = dict(change="설정 바뀜", daily="정기", manual="직접 실행")
 NOISE_NOTE = "질의 환자 수가 적은 점검이라 작은 차이는 우연일 수 있습니다. 경고가 나오면 규모를 키워 다시 확인하세요."
@@ -47,8 +47,10 @@ def valid_daily(value: str | None) -> str | None:
 
 
 def settings_of(eng: Any) -> dict[str, str]:
+    par = int(getattr(getattr(eng, "live_llm", None), "extract_parallel", 1) or 1)
     return dict(release=RELEASE_VERSION, answer_style="on" if getattr(eng, "answer_style", True) else "off",
-                model=str(getattr(eng, "live_label", "") or ""), rule_extract="on" if getattr(eng, "live_rule_extract", True) else "off")
+                model=str(getattr(eng, "live_label", "") or ""), rule_extract="on" if getattr(eng, "live_rule_extract", True) else "off",
+                extract=f"split-{par}" if par > 1 else "single")
 
 
 def fingerprint(settings: dict[str, str]) -> str:
@@ -72,6 +74,8 @@ def _setting_text(key: str, value: str | None) -> str:
         return value.replace("medicloak-release-", "")
     if key in ("answer_style", "rule_extract"):
         return "켬" if value == "on" else "끔"
+    if key == "extract":
+        return f"사례마다 {value[6:]}개까지 동시에" if value.startswith("split-") else "한 번에"
     return value
 
 

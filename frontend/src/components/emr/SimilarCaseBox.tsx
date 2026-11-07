@@ -1,4 +1,4 @@
-import { AlertCircle, ArrowLeft, ChevronRight, Loader2, RotateCw, Sparkles } from 'lucide-react';
+import { AlertCircle, ArrowLeft, ChevronRight, Loader2, RotateCw, Sparkles, Square } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { emrApi } from '../../api/emrApi';
@@ -6,6 +6,7 @@ import { ApiError } from '../../api/types';
 import { openFailure, type OpenFailure } from '../../lib/openFailure';
 import { useWorkspace } from '../../state/WorkspaceContext';
 import type { LaunchProgress, VisitChoice, WorklistPurpose } from '../../types/domain';
+import { RunningChevrons, StageTrack } from '../common/StageTrack';
 import { useToast } from '../layout/Toast';
 
 const BASIS_HINT = '진료 지원 AI는 이 목적에 맞는 가장 최근 진료를 기준으로 환자 요약(나이 · 성별 · 주진단 · 동반질환 · 고려 중인 처치)을 만듭니다';
@@ -14,7 +15,7 @@ const BASIS_HINT = '진료 지원 AI는 이 목적에 맞는 가장 최근 진�
  * 차트에서 진료 지원 AI로 넘어가는 자리: 진료 목적과 오늘 볼 진단을 고르고 비슷한 과거 사례를 찾는다.
  * 고르고 1초쯤 머물면 서버가 첫 답을 뒤에서 미리 만들어 둔다 (ADR-0029). 다른 환자의 대화가 열려 있으면 바꾸기 전에 묻는다.
  */
-export function SimilarCaseBox({ fhirId, identifier, purposes }: { fhirId: string; identifier: string; purposes: WorklistPurpose[] }) {
+export function SimilarCaseBox({ fhirId, identifier, purposes }: { fhirId: string; /** 화면에 보이는 환자 번호 (등록번호) */ identifier: string; purposes: WorklistPurpose[] }) {
   const navigate = useNavigate();
   const toast = useToast();
   const { state, actions } = useWorkspace();
@@ -28,6 +29,7 @@ export function SimilarCaseBox({ fhirId, identifier, purposes }: { fhirId: strin
   const [failed, setFailed] = useState<OpenFailure | null>(null);
   const [confirm, setConfirm] = useState(false);
   const [progress, setProgress] = useState<LaunchProgress | null>(null);
+  const [stopping, setStopping] = useState(false);
 
   // 환자가 바뀌면 처음부터: 지금 연 대화의 환자면 그 목적 · 그 진단을 골라 둔다 ('돌아가기'가 되게)
   useEffect(() => {
@@ -56,6 +58,7 @@ export function SimilarCaseBox({ fhirId, identifier, purposes }: { fhirId: strin
   useEffect(() => {
     if (!busy) {
       setProgress(null);
+      setStopping(false);
       return;
     }
     let stop = false;
@@ -113,17 +116,32 @@ export function SimilarCaseBox({ fhirId, identifier, purposes }: { fhirId: strin
     setBusy(true);
     const started = Date.now();
     try {
-      const r = await emrApi.launch(fhirId, sel.purpose, visitEvent);
+      await emrApi.launch(fhirId, sel.purpose, visitEvent);
       actions.resetAndReload();
-      toast(`환자 ${identifier}로 진료 지원 AI를 열었습니다${r.seconds != null ? ` (${Math.round(r.seconds)}초)` : ''}.`);
+      toast(`${identifier} 환자로 진료 지원 AI를 열었습니다.`);
       navigate('/');
     } catch (e) {
+      if (e instanceof ApiError && e.state === 'stopped') {
+        toast('진료 지원 AI 열기를 멈췄습니다. 열려 있던 대화는 그대로입니다.');
+        return;
+      }
       const status = e instanceof ApiError ? (e.status ?? 0) : 0;
       setFailed(openFailure(status, e instanceof Error ? e.message : '진료 지원 AI를 열지 못했습니다.', (Date.now() - started) / 1000));
       // 앞단이 끊었어도 서버는 그 사이 환자를 열었을 수 있다: 지금 보는 환자 띠를 다시 받는다
       if (!status || status >= 500) actions.resetAndReload();
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function stop() {
+    if (stopping) return;
+    setStopping(true);
+    try {
+      const r = await emrApi.stopLaunch();
+      if (r.status === 'idle') setStopping(false);
+    } catch {
+      setStopping(false);
     }
   }
 
@@ -239,15 +257,21 @@ export function SimilarCaseBox({ fhirId, identifier, purposes }: { fhirId: strin
                 </div>
               </div>
             )}
-            <button type="button" className="btn-primary h-10 w-full" disabled={busy || !sel || confirm} onClick={onOpen}>
+            <button
+              type="button"
+              className={`btn-primary h-10 w-full ${busy ? 'cursor-progress disabled:opacity-100' : ''}`}
+              disabled={busy || !sel || confirm}
+              aria-busy={busy}
+              onClick={onOpen}
+            >
               {busy ? (
-                <Loader2 className="h-4 w-4 animate-spin" aria-hidden />
+                <RunningChevrons />
               ) : selIsCurrent ? (
                 <ArrowLeft className="h-4 w-4" aria-hidden />
               ) : (
                 <ChevronRight className="h-4 w-4" aria-hidden />
               )}
-              {busy ? '진료 지원 AI를 여는 중' : !sel ? '진료 목적을 고르세요' : selIsCurrent ? '열린 진료 지원 AI로 돌아가기' : `${sel.purposeLabel} 참고로 유사 사례 찾기`}
+              {busy ? (stopping ? '멈추는 중' : '진료 지원 AI를 여는 중') : !sel ? '진료 목적을 고르세요' : selIsCurrent ? '열린 진료 지원 AI로 돌아가기' : `${sel.purposeLabel} 참고로 유사 사례 찾기`}
             </button>
             {failed && !busy && (
               <div role="alert" className="mt-2.5 rounded-control border border-danger bg-danger-tint px-3 py-2.5">
@@ -271,12 +295,14 @@ export function SimilarCaseBox({ fhirId, identifier, purposes }: { fhirId: strin
               </div>
             )}
             {busy && (
-              <div role="status" aria-live="polite" className="mt-2.5">
-                <div className="h-1 overflow-hidden rounded-full bg-surface-2">
-                  <div className="h-full animate-pulse rounded-full bg-iris" style={{ width: `${Math.min(92, 18 + (progress?.calls ?? 0) * 12)}%` }} />
+              <div role="status" aria-live="polite" className="mt-3">
+                <StageTrack step={progress?.active ? progress.step : undefined} first="사례 찾기" stopping={stopping || progress?.stopping} />
+                <div className="mt-2 flex justify-end">
+                  <button type="button" className="btn-ghost btn-sm h-7 gap-1.5 text-ink-2" onClick={() => void stop()} disabled={stopping}>
+                    {stopping ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden /> : <Square className="h-3 w-3 fill-current" aria-hidden />}
+                    {stopping ? '멈추는 중' : '멈추기'}
+                  </button>
                 </div>
-                <p className="mt-1.5 text-xs leading-5 text-ink-2">{progress?.label ?? '비슷한 과거 사례를 찾고 있습니다'}</p>
-                <p className="num text-[11px] text-ink-3">{Math.round(progress?.elapsed ?? 0)}초 지남</p>
               </div>
             )}
             <p className="mt-2 text-xs leading-5 text-ink-3">

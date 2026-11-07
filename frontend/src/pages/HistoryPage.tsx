@@ -36,9 +36,9 @@ function PastConversations() {
           <li key={x.id} className="flex flex-wrap items-baseline gap-x-3 gap-y-0.5 border-b border-line px-4 py-3 last:border-b-0">
             <span className="num w-[7.5em] shrink-0 text-xs text-ink-3">{when(x.startedAt)}</span>
             <span className="min-w-0 flex-1 text-[13px] text-ink">
-              {x.patientId && (
-                <span className="mr-2 font-mono font-semibold" title="진료한 환자의 EMR 환자 번호">
-                  {x.patientId}
+              {(x.regno || x.patientId) && (
+                <span className={`mr-2 font-semibold ${x.regno ? 'num' : 'font-mono'}`} title={x.regno ? '진료한 환자의 등록번호' : '진료한 환자의 EMR 환자 번호'}>
+                  {x.regno ?? x.patientId}
                 </span>
               )}
               {x.patient}

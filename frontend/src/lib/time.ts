@@ -34,3 +34,23 @@ export function timeLeft(untilSec: number, now = Date.now() / 1000): string {
   if (!h) return `${m}분 남음`;
   return m ? `${h}시간 ${m}분 남음` : `${h}시간 남음`;
 }
+
+/** 'YYYY-MM-DD'가 오늘부터 얼마나 지났는지: '한 달 안' · '3개월 전' · '1년 전' · '28년 전' (달은 30.44일로 센다) */
+export function sinceDay(day: string, now = Date.now()): string {
+  const t = Date.parse(`${day.slice(0, 10)}T00:00:00`);
+  if (Number.isNaN(t)) return '';
+  const days = Math.max(0, (now - t) / 86400000);
+  const months = Math.floor(days / 30.44);
+  if (months < 1) return '한 달 안';
+  if (months < 12) return `${months}개월 전`;
+  return `${Math.floor(months / 12)}년 전`;
+}
+
+/** 지난 1년(365일) 동안 내원한 날 수 */
+export function daysWithinYear(dates: string[], now = Date.now()): number {
+  const from = now - 365 * 86400000;
+  return dates.filter((d) => {
+    const t = Date.parse(`${d.slice(0, 10)}T00:00:00`);
+    return !Number.isNaN(t) && t >= from && t <= now;
+  }).length;
+}

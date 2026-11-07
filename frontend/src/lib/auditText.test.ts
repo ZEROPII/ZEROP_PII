@@ -66,6 +66,17 @@ describe('EMR 접근 기록 글 (ADR-0034)', () => {
     expect(detailOf(entry({ action: 'emr_reveal', reason: '예외 열람 검토', note: '협진 사유와 차트 대조' }))).toBe('사유: 예외 열람 검토 · 협진 사유와 차트 대조');
   });
 
+  it('협진 의뢰 · 멈춤 (ADR-0035 · ADR-0036)', () => {
+    const sent = entry({ action: 'emr_consult', session: null, trial: null, to: '박준호 (의료진 · doctor2)', note: '약 조정 협진 부탁드립니다', patient_tag: 'P-0a1b2c' });
+    expect(ACTION_KO[sent.action]).toBe('협진 의뢰 보냄');
+    expect(detailOf(sent)).toBe('받는 의료진: 박준호 (의료진 · doctor2) · 약 조정 협진 부탁드립니다');
+    expect(subjectsOf(sent)).toBe('환자 P-0a1b2c');
+    expect(detailOf(entry({ action: 'emr_consult_open', sender: '김서연', hours: 12 }))).toBe('김서연 선생님의 의뢰 · 12시간');
+    expect(detailOf(entry({ action: 'emr_consult_cancel', note: '환자가 전원했습니다' }))).toBe('환자가 전원했습니다');
+    expect(ACTION_KO.clinic_stop).toBe('의료진이 질문을 멈춤');
+    expect(detailOf(entry({ action: 'clinic_stop', calls: 2 }))).toBe('대상 AI · 확인 호출 2번 뒤 멈춤');
+  });
+
   it('담당 배정: 규칙으로 나눈 수 · 명령으로 바꾼 의료진', () => {
     expect(detailOf(entry({ action: 'emr_assign', assigned: 115, counts: { doctor1: 58, doctor2: 57 } }))).toBe('담당 없는 환자 115명 나눔 · doctor1 58명, doctor2 57명');
     expect(detailOf(entry({ action: 'emr_assign', reset: true, assigned: 115, counts: { doctor1: 39 } }))).toBe('모두 지우고 다시 나눔 · doctor1 39명');

@@ -470,6 +470,10 @@ export interface AuditEntry {
   change?: 'add' | 'remove';
   clinician?: string;
   reset?: boolean;
+  /** 협진 의뢰 (ADR-0036): 받는 의료진 · 보낸 의료진 이름 · 의뢰 번호 */
+  to?: string;
+  sender?: string;
+  consult?: number;
 }
 
 /** EMR 접근 기록 한 건 (GET /api/monitor/emr/patients/{기호}) */
@@ -511,11 +515,13 @@ export interface EmrGrantRecord {
   username: string;
   displayName: string;
   department: string | null;
+  /** 협진 의뢰로 연 열람이면 보낸 의료진 · 의뢰 내용 (ADR-0036) */
+  consult?: { fromName: string | null; fromDepartment: string | null; note: string | null } | null;
 }
 
 /** GET /api/monitor/emr: 외래 환자마다 기호 · 상태 · 담당 · 접근 (번호 · 진단 · 나이 없음) */
 export interface EmrAccessOverview {
-  kpi: { outpatients: number; unassigned: number; pendingReview: number; charts24h: number; denied7d: number; breakGlass7d: number; reveals7d: number };
+  kpi: { outpatients: number; unassigned: number; pendingReview: number; charts24h: number; denied7d: number; breakGlass7d: number; reveals7d: number; consults7d?: number };
   patients: {
     tag: string;
     status: 'ACTIVE' | 'RESOLVED' | 'DORMANT';
@@ -543,9 +549,10 @@ export interface EmrAccessPatient {
   grants: EmrGrantRecord[];
 }
 
-/** 사유를 적은 차트 열람: 환자 번호 · 차트 요약 */
+/** 사유를 적은 차트 열람: 환자 번호 · 등록번호 · 차트 요약 */
 export interface EmrRevealResult extends EmrAccessPatient {
   identifier: string;
+  regno?: string | null;
   chart: EmrChart;
 }
 

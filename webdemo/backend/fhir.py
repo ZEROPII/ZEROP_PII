@@ -82,8 +82,8 @@ def fhir_router(emr_of, guard: Any = None) -> APIRouter:
             return _outcome(404, f"외래 환자 목록에 없는 환자입니다: Patient/{pid}")
         except NotAssigned as exc:
             return _outcome(403, str(exc))
-        if via and via[0] == "break_glass":
-            # 예외 열람은 차트 요약까지만: 생년 · 거주 지역은 담당 환자에게만 보인다
+        if via and via[0] in ("break_glass", "consult"):
+            # 예외 열람 · 협진 의뢰 열람은 차트 요약까지만: 생년 · 거주 지역은 담당 환자에게만 보인다
             res.pop("birthDate", None)
             res.pop("address", None)
         return _fhir(res)
