@@ -7,7 +7,8 @@
 #     이 컴퓨터에서 켜기   .env의 실제 LLM으로 서버를 켠다. 연결 정보가 없으면 시작 화면에서 받아 .env에 쓴다 (권한 600)
 #     키 없이 둘러보기     결정적 응답기(--llm oracle)로 켠다
 #     병원 서버에 연결     이 컴퓨터에서는 서버를 켜지 않고 그 주소를 창으로 연다 (--server)
-#   명령줄에 --server · --llm을 주면 저장한 방식보다 앞선다. --setup이면 시작 화면부터 다시.
+#   명령줄에 --server · --llm을 주면 저장한 방식보다 앞선다. --setup이면 시작 화면부터 다시 (묶은 앱: open -a MediCloak --args --setup).
+#   메뉴의 '처음 설정 다시 하기'는 다음에 켤 때 시작 화면부터 열게 남긴다 (.env에 연결 정보가 다 있어도).
 #
 #   같은 데이터 폴더로 두 번 켜면 두 번째 창은 서버를 새로 켜지 않고 켜져 있는 서버에 붙는다 (잠금 파일).
 #   묶은 앱(PyInstaller)은 화면 출력을 데이터 폴더의 logs/medicloak-app.log에 적는다. 비밀번호와 API 키는 적지 않는다.
@@ -132,11 +133,6 @@ def load_config(home: Path) -> dict[str, Any]:
 def save_config(home: Path, cfg: dict[str, Any]) -> None:
     home.mkdir(parents=True, exist_ok=True)
     (home / CONFIG_FILE).write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-
-
-def clear_config(home: Path) -> None:
-    with contextlib.suppress(FileNotFoundError):
-        (home / CONFIG_FILE).unlink()
 
 
 def open_path(path: Path) -> None:
@@ -414,6 +410,8 @@ class DesktopApp:
             self.show_setup()
         elif a.llm:
             self.start_local(a.llm)
+        elif self.config.get("setup"):                     # 메뉴의 '처음 설정 다시 하기' (.env가 다 있어도 처음 설정부터)
+            self.show_setup()
         elif self.config.get("mode") == "server" and self.config.get("server"):
             self.open_remote(self.config["server"], save=False)
         elif self.config.get("llm") == "oracle":
@@ -546,8 +544,7 @@ class DesktopApp:
         self.show_setup()
 
     def menu_setup_again(self) -> None:
-        clear_config(self.home)
-        self.config = {}
+        self.save(setup=True)
         msg = "다음에 켤 때 처음 설정 화면이 나옵니다. 저장한 LLM 연결 정보는 지우지 않습니다."
         with contextlib.suppress(Exception):
             self.window.create_confirmation_dialog("처음 설정 다시 하기", msg)

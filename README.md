@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/FastAPI-서버-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI">
   <img src="https://img.shields.io/badge/React-18-0b7a75?style=flat-square&logo=react&logoColor=white" alt="React 18">
   <img src="https://img.shields.io/badge/HL7_FHIR-R4-0b7a75?style=flat-square" alt="FHIR R4">
-  <img src="https://img.shields.io/badge/tests-pytest_1011_·_vitest_98-16a374?style=flat-square" alt="pytest 1011 passed, vitest 98 passed">
+  <img src="https://img.shields.io/badge/tests-pytest_1012_·_vitest_98-16a374?style=flat-square" alt="pytest 1012 passed, vitest 98 passed">
   <a href="docs/adr/README.md"><img src="https://img.shields.io/badge/ADR-39건-5b5bf0?style=flat-square" alt="ADR 39건"></a>
 </p>
 
@@ -220,7 +220,7 @@ python scripts/build_desktop.py --zip # 묶은 앱: dist/desktop/MediCloak.app (
 **테스트**
 
 ```bash
-python -m pytest -q                   # 1011 passed, 3 skipped (LLM 호출은 가짜 HTTP 세션으로 대체)
+python -m pytest -q                   # 1012 passed, 3 skipped (LLM 호출은 가짜 HTTP 세션으로 대체)
 cd frontend && npm test               # vitest 98 passed
 ```
 
@@ -245,7 +245,7 @@ ZEROP_PII/
 ├─ data/medical/           # 의료 온톨로지 노드 · 사건연결표 · 표현-노드 매핑표 · Seed Registry
 ├─ core/                   # .env 설정 · LLM 호출 (모든 모듈 공통)
 ├─ scripts/                # 측정 · RAG 재측정 · 결과 다시 세기 · ADR 도구
-├─ tests/                  # pytest 1,014개 (LLM 경로는 가짜 HTTP 세션으로 시험)
+├─ tests/                  # pytest 1,015개 (LLM 경로는 가짜 HTTP 세션으로 시험)
 └─ docs/                   # ADR 39건 · 의료 시나리오 · 평가 통합 문서 · README 그림
 ```
 

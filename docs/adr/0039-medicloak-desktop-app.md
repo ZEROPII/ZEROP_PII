@@ -32,7 +32,7 @@ sources: [medicloak/desktop.py, medicloak/desktop_start.html, medicloak/paths.py
 ### 2. 시작 화면 (`desktop_start.html`)
 
 - 인터넷 없이 열리게 글꼴 · 그림을 밖에서 받지 않는 한 장짜리 화면이다. 처음 설정 · 준비 중 · 처음 쓸 계정 · 켜지 못함 네 가지를 보인다.
-- 처음 설정에서 연결 방식을 고른다. 고른 것은 데이터 폴더의 `desktop.json`에 남고, 메뉴의 '처음 설정 다시 하기'로 지운다.
+- 처음 설정에서 연결 방식을 고른다. 고른 것은 데이터 폴더의 `desktop.json`에 남는다. 메뉴의 '처음 설정 다시 하기'를 누르면 다음에 켤 때 `.env`에 연결 정보가 다 있어도 처음 설정부터 연다. 묶은 앱은 `open -a MediCloak --args --setup`으로도 연다.
   - 이 컴퓨터에서 켜기: API 주소 · 모델 · 키를 받아 `.env`에 쓰고(권한 600, 다른 줄은 그대로), `check-llm`과 같은 짧은 요청을 한 번 보내 확인한다. 실패하면 까닭을 보이고 '확인 없이 시작'도 둔다. 저장한 키는 화면에 다시 보이지 않는다.
   - 키 없이 둘러보기: 결정적 응답기(`--llm oracle`)로 켠다.
   - 병원 서버에 연결: 주소의 `/api/health`가 MediCloak이면 그 주소를 창으로 연다. 이 컴퓨터에서는 서버를 켜지 않는다 (`--server`).
@@ -79,7 +79,7 @@ sources: [medicloak/desktop.py, medicloak/desktop_start.html, medicloak/paths.py
 
 ## 결과와 영향
 
-- 시험: `tests/medicloak/test_desktop.py` 17건 (폴더 · 주소 · `.env` 쓰기 · 잠금 · 서버 스레드 · 가짜 창으로 시작 화면 흐름 · 처음 쓸 계정 · 병원 서버 · 두 번째 창 · 켜지 못함 · 기록 · 명령줄 · 묶은 앱 시작점 · 웹 manifest).
+- 시험: `tests/medicloak/test_desktop.py` 18건 (폴더 · 주소 · `.env` 쓰기 · 잠금 · 서버 스레드 · 가짜 창으로 시작 화면 흐름 · 처음 쓸 계정 · 병원 서버 · 두 번째 창 · 처음 설정 다시 하기 · 켜지 못함 · 기록 · 명령줄 · 묶은 앱 시작점 · 웹 manifest).
 - 개발 환경에서 확인한 것:
   - 실제 pywebview(Qt, 화면 없이): 시작 화면 → 처음 쓸 계정 → 로그인 → 내 담당 환자.
   - Linux 묶음(창 없이, 결정적 응답기): 로그인 → 유사 사례 찾기 → 질문 → 답 → 의료 용어 찾기. 외부 요청은 없었다. 묶음 크기는 130MB.

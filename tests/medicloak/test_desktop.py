@@ -364,3 +364,20 @@ def test_web_manifest_and_icons():
     assert 'rel="manifest"' in html and "cdn.jsdelivr.net" not in html                  # 글꼴도 앱 안에서 (인터넷 없이 열린다)
     for f in ("MediCloak.icns", "MediCloak.ico"):
         assert (paths.ROOT / "packaging" / "icons" / f).stat().st_size > 10_000
+
+
+def test_menu_setup_again_opens_setup_next_time_even_with_llm_settings(tmp_path):
+    desktop.write_env(tmp_path / ".env", dict(LLM_API_BASE="https://llm.example.org", LLM_MODEL="m", LLM_API_KEY="k"))
+    desktop.save_config(tmp_path, dict(mode="local", llm="oracle"))
+    first = desktop.DesktopApp(_args(tmp_path), None, home=tmp_path)
+    first.window = _Window(dict(js_api=None))
+    first.menu_setup_again()
+    assert desktop.load_config(tmp_path) == dict(setup=True) and any("dialog:" in s for s in first.window.scripts)
+    wv = _Webview()
+    app = desktop.DesktopApp(_args(tmp_path), wv, home=tmp_path, prepare=_fake_prepare())
+    t = _run(app)
+    assert _until(lambda: wv.window.shown("setup")) and app.server is None           # .env가 다 있어도 처음 설정부터
+    assert wv.window.api.choose_oracle() == dict(ok=True) and _until(lambda: wv.window.urls)
+    assert desktop.load_config(tmp_path) == dict(mode="local", llm="oracle")           # 고르면 표시는 지워진다
+    wv.window.destroy()
+    t.join(15)
