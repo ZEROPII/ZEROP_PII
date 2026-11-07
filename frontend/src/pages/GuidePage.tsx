@@ -1,5 +1,6 @@
 import { Lock, MailQuestion, MessageSquareReply, ShieldCheck } from 'lucide-react';
 import type { ReactNode } from 'react';
+import { useAuth } from '../state/AuthContext';
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -20,6 +21,7 @@ const WORDS: [string, string][] = [
 
 /** 의료진용 보호 안내: 숫자 없이, 무엇이 왜 가려지고 필요하면 어떻게 요청하는지. 기준값은 보안 담당자 '보호 정책'에 있다. */
 export function GuidePage() {
+  const product = useAuth().status === 'user';
   return (
     <div className="scroll-thin h-full overflow-y-auto">
       <article className="mx-auto max-w-2xl space-y-6 px-4 py-6 md:px-6 md:py-8">
@@ -97,6 +99,12 @@ export function GuidePage() {
             질문과 답, 세부 정보 요청과 답장은 감사 기록에 남고 개인정보 보호 담당자가 확인할 수 있습니다. 보호 담당자가 가린 원래 값을 열어 볼 때도 사유를
             남겨야 하며, 그 열람도 기록됩니다.
           </p>
+          {product && (
+            <p>
+              내 담당 환자의 차트를 연 일도 환자마다 접근 기록에 남습니다. 담당이 아닌 환자는 목록에 나오지 않으며, 협진이나 당직처럼 꼭 봐야 할 때만
+              '담당 외 환자 열기'에서 사유를 적고 정해진 시간 동안 엽니다. 그 열람은 보호 담당자가 나중에 검토합니다.
+            </p>
+          )}
         </Section>
 
         <Section title="화면에서 쓰는 말">

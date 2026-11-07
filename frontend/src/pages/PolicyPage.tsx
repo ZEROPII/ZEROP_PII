@@ -33,6 +33,21 @@ const TERMS: [string, string][] = [
   ['레드팀 점검', '공격 질문을 자동으로 보내 방어 규칙을 시험하는 일.'],
 ];
 
+/** EMR 접근 관리 (ADR-0034) 한 줄씩 */
+function emrAccessRows(x: NonNullable<MonitorPolicy['emrAccess']>): [string, string][] {
+  const team = x.clinicians.map((c) => `${c.displayName} ${c.assigned}명`).join(', ');
+  return [
+    ['EMR 담당 배정', `의료진은 담당 외래 환자만 목록 · 차트 · 진료 지원 AI로 엶 (${team || '의료진 계정 없음'}${x.unassigned ? `, 담당 없음 ${x.unassigned}명` : ''}). 바꾸기: python -m medicloak assign`],
+    [
+      '담당 외 예외 열람',
+      x.breakGlass
+        ? `켬: 환자 번호 · 사유(협진 · 당직/응급 · 기타) · 설명을 적으면 ${x.grantHours}시간 열림. 감사 기록에 남고 EMR 접근 화면에서 사후 검토${x.pendingReview ? ` (검토 대기 ${x.pendingReview}건)` : ''}`
+        : '끔 (--break-glass off): 담당 환자만 열 수 있음',
+    ],
+    ['EMR 접근 기록', '차트 열람 · 진료 지원 AI 열기 · 거부 · 예외 열람 · 보안 담당자 차트 열람을 환자마다 남김. 보안 담당자 화면은 환자를 기호로만 보이고 차트는 사유를 적어야 열림'],
+  ];
+}
+
 /** 의료진 대화 보강 (ADR-0032) 한 줄씩 */
 function protectionRows(x: NonNullable<MonitorPolicy['protections']>): [string, string][] {
   const out: [string, string][] = [];
@@ -101,6 +116,7 @@ export function PolicyPage() {
                   ] as [string, string][])
                 : []),
               ...(p.protections ? protectionRows(p.protections) : []),
+              ...(p.emrAccess ? emrAccessRows(p.emrAccess) : []),
               ['검토 반영', '규칙(이 대화에서 사례 · 단서는 늘 가림), 세부 정보 요청 승인 공개 (사유 · 감사 기록)'],
               ['검토 보조', '세부 정보 요청마다 검토 초안: 추천은 규칙(후보 수 · 조회 목적), 요약 · 답장 문장은 실제 LLM. 보내는 것은 담당자'],
               ...(p.autoRedteam

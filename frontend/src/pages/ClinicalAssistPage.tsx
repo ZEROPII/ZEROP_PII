@@ -123,12 +123,12 @@ function NoPatientOpen() {
         <span className="mx-auto grid h-11 w-11 place-items-center rounded-full bg-surface-2 text-ink-2">
           <ClipboardList className="h-5 w-5" aria-hidden />
         </span>
-        <h2 className="mt-4 text-[15px] font-bold text-ink">열린 환자가 없습니다</h2>
+        <h2 className="mt-4 text-[15px] font-bold text-ink">진료 지원 AI에 연 환자가 없습니다</h2>
         <p className="mt-2 text-[13px] leading-6 text-ink-2">
-          외래 진료 목록에서 환자와 진료 목적을 고르면, 진료 지원 AI가 비슷한 과거 사례를 찾아 이 화면에 보여 줍니다.
+          내 담당 환자에서 환자를 고르고 차트의 '유사 사례 찾기'를 누르면, 진료 지원 AI가 비슷한 과거 사례를 찾아 이 화면에 보여 줍니다.
         </p>
         <NavLink to="/emr" className="btn-primary mt-5 inline-flex h-10 px-4">
-          외래 진료 목록 열기
+          내 담당 환자 보기
         </NavLink>
       </div>
     </div>

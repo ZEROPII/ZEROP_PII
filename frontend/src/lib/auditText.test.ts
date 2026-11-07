@@ -52,3 +52,23 @@ describe('질문 미리 세기 기록 (ADR-0032)', () => {
     expect(detailOf(entry({ action: 'preflight_limited', case: '사례1' }))).toBe('사례 1 · 짧은 시간에 미리 확인을 많이 써서 판정 없이 돌려줌');
   });
 });
+
+describe('EMR 접근 기록 글 (ADR-0034)', () => {
+  it('담당 외 거부 · 예외 열람 · 검토 · 보안 담당자 차트 열람: 다룬 환자는 그냥 환자 기호', () => {
+    const denied = entry({ action: 'emr_denied', session: null, trial: null, what: 'launch', patient_tag: 'P-0a1b2c' });
+    expect(ACTION_KO[denied.action]).toBe('담당 외 환자라 막음');
+    expect(detailOf(denied)).toBe('막은 요청: 진료 지원 AI 열기');
+    expect(subjectsOf(denied)).toBe('환자 P-0a1b2c');
+    expect(detailOf(entry({ action: 'break_glass', reason: '협진', note: '호흡기내과 협진 의뢰 확인', hours: 12 }))).toBe('사유: 협진 · 호흡기내과 협진 의뢰 확인 · 12시간');
+    expect(detailOf(entry({ action: 'break_glass_review', review: 'flag', review_label: '확인 필요 (열람 끝냄)', note: '협진 기록 없음', grant: 3 }))).toBe(
+      '확인 필요 (열람 끝냄) · 협진 기록 없음 · 예외 열람 3번',
+    );
+    expect(detailOf(entry({ action: 'emr_reveal', reason: '예외 열람 검토', note: '협진 사유와 차트 대조' }))).toBe('사유: 예외 열람 검토 · 협진 사유와 차트 대조');
+  });
+
+  it('담당 배정: 규칙으로 나눈 수 · 명령으로 바꾼 의료진', () => {
+    expect(detailOf(entry({ action: 'emr_assign', assigned: 115, counts: { doctor1: 58, doctor2: 57 } }))).toBe('담당 없는 환자 115명 나눔 · doctor1 58명, doctor2 57명');
+    expect(detailOf(entry({ action: 'emr_assign', reset: true, assigned: 115, counts: { doctor1: 39 } }))).toBe('모두 지우고 다시 나눔 · doctor1 39명');
+    expect(detailOf(entry({ action: 'emr_assign', change: 'add', clinician: '박준호 (doctor2)', patient_tag: 'P-0a1b2c' }))).toBe('박준호 (doctor2) · 담당으로 더함');
+  });
+});

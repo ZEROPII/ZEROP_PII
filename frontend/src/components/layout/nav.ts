@@ -1,4 +1,4 @@
-import { BarChart3, BookOpen, ClipboardList, History, ListChecks, MessagesSquare, Radar, ShieldCheck, Stethoscope, type LucideIcon } from 'lucide-react';
+import { BarChart3, BookOpen, FolderLock, History, ListChecks, MessagesSquare, Radar, ShieldCheck, Stethoscope, Users, type LucideIcon } from 'lucide-react';
 
 export type Role = 'clinician' | 'security';
 
@@ -18,7 +18,7 @@ export interface NavItem {
  */
 export const NAV: Record<Role, NavItem[]> = {
   clinician: [
-    { to: '/emr', label: '외래 목록', title: '외래 진료 목록', icon: ClipboardList, productOnly: true },
+    { to: '/emr', label: '내 환자', title: '내 담당 환자', icon: Users, productOnly: true },
     { to: '/', label: '사례 조회', title: '유사 사례 조회', icon: Stethoscope, end: true },
     { to: '/history', label: '조회 기록', title: '조회 기록', icon: History },
     { to: '/guide', label: '보호 안내', title: '개인정보 보호 안내', icon: ShieldCheck },
@@ -27,6 +27,7 @@ export const NAV: Record<Role, NavItem[]> = {
     { to: '/monitor', label: '관제', title: '실시간 관제', icon: Radar },
     { to: '/watch', label: '의료진 대화', title: '의료진 대화 위험 분석', icon: MessagesSquare },
     { to: '/report', label: '리포트', title: '레드팀 점검 리포트', icon: BarChart3 },
+    { to: '/emr-access', label: 'EMR 접근', title: 'EMR 접근 관리', icon: FolderLock, productOnly: true },
     { to: '/audit', label: '감사 기록', title: '감사 기록', icon: ListChecks },
     { to: '/terms', label: '용어', title: '의료 용어 사전', icon: BookOpen },
     { to: '/policy', label: '보호 정책', title: '보호 정책', icon: ShieldCheck },
@@ -34,12 +35,13 @@ export const NAV: Record<Role, NavItem[]> = {
 };
 
 export const ROLE_HOME: Record<Role, string> = { clinician: '/', security: '/monitor' };
-/** 운영 모드에서 로그인 직후 · 다른 역할 주소로 왔을 때 (의료진은 EMR 외래 목록부터) */
+/** 운영 모드에서 로그인 직후 · 다른 역할 주소로 왔을 때 (의료진은 내 담당 환자부터) */
 export const PRODUCT_HOME: Record<Role, string> = { clinician: '/emr', security: '/monitor' };
 export const ROLE_LABEL: Record<Role, string> = { clinician: '의료진', security: '보안 담당자' };
 
 export function roleOfPath(path: string): Role | null {
-  if (path === '/' || path.startsWith('/history') || path.startsWith('/guide') || path.startsWith('/emr')) return 'clinician';
-  if (['/monitor', '/watch', '/report', '/audit', '/terms', '/policy'].some((p) => path.startsWith(p))) return 'security';
+  // '/emr-access'(보안 담당자)가 '/emr'(의료진)로 시작하므로 보안 담당자 경로를 먼저 본다
+  if (['/monitor', '/watch', '/report', '/emr-access', '/audit', '/terms', '/policy'].some((p) => path.startsWith(p))) return 'security';
+  if (path === '/' || path.startsWith('/history') || path.startsWith('/guide') || path === '/emr' || path.startsWith('/emr/')) return 'clinician';
   return null;
 }

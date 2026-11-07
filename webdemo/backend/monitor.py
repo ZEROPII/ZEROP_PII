@@ -27,8 +27,6 @@ from __future__ import annotations
 
 import collections
 import copy
-import hashlib
-import hmac
 import itertools
 import re
 import secrets
@@ -38,6 +36,7 @@ import time
 from typing import Any, Callable, Iterable
 
 from webdemo.backend import assist as A
+from webdemo.backend.access import subject_tag, tag_key
 from webdemo.backend.auth import actor_label
 from webdemo.backend.clinic import RELEASE_PARTIAL_KO, Conflict
 from webdemo.backend.engine import ARM_KO, Engine, Session
@@ -112,19 +111,14 @@ class Monitor:
     # ── 환자 기호 ──
     def _key(self) -> bytes:
         if self._tag_key is None:
-            k = self.store.get_meta("subject_tag_key") if self.store is not None else None
-            if not k:
-                k = secrets.token_hex(16)
-                if self.store is not None:
-                    self.store.set_meta("subject_tag_key", k)
-            self._tag_key = k.encode()
+            self._tag_key = tag_key(self.store) if self.store is not None else secrets.token_hex(16).encode()
         return self._tag_key
 
     def tag(self, number: str | None) -> str | None:
         """환자 번호(앞 8자리)의 기호 ('P-3f9a1c'). 같은 번호는 늘 같은 기호, 기호만으로는 번호를 알 수 없다."""
         if not number:
             return None
-        return "P-" + hmac.new(self._key(), str(number)[:8].encode(), hashlib.sha256).hexdigest()[:6]
+        return subject_tag(self._key(), number)
 
     @staticmethod
     def _numbers(s: Any) -> tuple[str | None, dict[str, str]]:

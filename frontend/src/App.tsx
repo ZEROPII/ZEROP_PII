@@ -3,6 +3,7 @@ import { AppLayout } from './components/layout/AppLayout';
 import { ToastProvider } from './components/layout/Toast';
 import { AuditPage } from './pages/AuditPage';
 import { ClinicalAssistPage } from './pages/ClinicalAssistPage';
+import { EmrAccessPage } from './pages/EmrAccessPage';
 import { EmrPage } from './pages/EmrPage';
 import { GuidePage } from './pages/GuidePage';
 import { HistoryPage } from './pages/HistoryPage';
@@ -24,12 +25,14 @@ export default function App() {
               {/* 의료진 (EMR 진료 지원 AI) */}
               <Route index element={<ClinicalAssistPage />} />
               <Route path="emr" element={<EmrPage />} />
+              <Route path="emr/:fhirId" element={<EmrPage />} />
               <Route path="history" element={<HistoryPage />} />
               <Route path="guide" element={<GuidePage />} />
               {/* 보안 담당자 (MediCloak 관제) */}
               <Route path="monitor" element={<MonitorPage />} />
               <Route path="watch" element={<WatchPage />} />
               <Route path="report" element={<ReportPage />} />
+              <Route path="emr-access" element={<EmrAccessPage />} />
               <Route path="audit" element={<AuditPage />} />
               <Route path="terms" element={<TerminologyPage />} />
               <Route path="policy" element={<PolicyPage />} />

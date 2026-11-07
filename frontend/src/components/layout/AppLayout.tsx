@@ -25,7 +25,7 @@ function storedRole(): Role {
 /** 보안 담당자 화면 틀 (MediCloak 관제): 왼쪽 메뉴 레일과 위 머리줄 */
 function SecurityShell({ role, product, onOpenPalette }: { role: Role; product: boolean; onOpenPalette(): void }) {
   const { pathname } = useLocation();
-  const items = NAV.security;
+  const items = NAV.security.filter((i) => product || !i.productOnly);
   const current = items.find((i) => (i.end ? pathname === i.to : pathname.startsWith(i.to))) ?? items[0];
   return (
     <div className="flex h-dvh flex-col bg-page text-ink md:flex-row">
@@ -120,7 +120,7 @@ export function AppLayout() {
     }
   }, [role, fixed]);
 
-  // 막 로그인했으면 그 역할의 처음 화면으로 (의료진은 EMR 외래 목록부터)
+  // 막 로그인했으면 그 역할의 처음 화면으로 (의료진은 내 담당 환자부터)
   useEffect(() => {
     if (prevStatus.current === 'anon' && auth.status === 'user' && auth.user) navigate(PRODUCT_HOME[auth.user.role], { replace: true });
     prevStatus.current = auth.status;

@@ -29,7 +29,16 @@ export const ACTION_KO: Record<string, string> = {
   redteam_compare: '레드팀 직전 점검과 비교',
   watch_preflight: '보안 담당자 질문 미리 세기',
   preflight_limited: '보내기 전 확인 한도 넘음',
+  emr_denied: '담당 외 환자라 막음',
+  break_glass: '담당 외 환자 예외 열람',
+  break_glass_review: '예외 열람 검토',
+  emr_reveal: 'EMR 차트 열람 (보안 담당자)',
+  emr_assign: '담당 배정',
 };
+
+/** EMR 접근 기록 (ADR-0034): 다룬 환자는 '지금 환자'가 아니라 그냥 환자 기호로 */
+const EMR_ACTIONS = new Set(['emr_denied', 'break_glass', 'break_glass_review', 'emr_reveal', 'emr_assign']);
+const WHAT_KO: Record<string, string> = { chart: '차트 열기', launch: '진료 지원 AI 열기', prefetch: '첫 답 미리 준비', visits: '오늘 볼 진단', fhir: 'EMR 연동(FHIR) 조회' };
 
 const PURPOSE_KO: Record<string, string> = { PRESCRIPTION: '처방', TREATMENT_PROCEDURE: '시술·치료', COURSE_CARE: '경과·관리' };
 const LEVEL_KO: Record<string, string> = { warn: '경고', caution: '주의', ok: '이상 없음', none: '첫 기준 점검' };
@@ -87,11 +96,22 @@ export function detailOf(a: AuditEntry): string | null {
       c.consider ? `사유 확인 ${c.consider}` : null, a.writer === 'llm' ? 'AI 초안' : '정해진 문장']);
   }
   if (a.action.startsWith('login') || a.action === 'logout') return a.client ? `접속 주소 ${a.client}` : null;
+  if (a.action === 'emr_denied') return a.what ? `막은 요청: ${WHAT_KO[a.what] ?? a.what}` : null;
+  if (a.action === 'break_glass') return join([a.reason ? `사유: ${a.reason}` : null, a.note, a.hours ? `${a.hours}시간` : null]);
+  if (a.action === 'break_glass_review') return join([a.review_label ?? a.review, a.note, a.grant != null ? `예외 열람 ${a.grant}번` : null]);
+  if (a.action === 'emr_reveal') return join([a.reason ? `사유: ${a.reason}` : null, a.note]);
+  if (a.action === 'emr_assign') {
+    if (a.change) return join([a.clinician, a.change === 'add' ? '담당으로 더함' : '담당에서 뺌']);
+    const counts = Object.entries(a.counts ?? {}).map(([k, v]) => `${k} ${v}명`).join(', ');
+    return join([a.reset ? '모두 지우고 다시 나눔' : a.assigned != null ? `담당 없는 환자 ${a.assigned}명 나눔` : null, counts || null]);
+  }
+  if (a.action === 'emr_launch' && a.access === 'break_glass') return '예외 열람 중인 환자';
   return null;
 }
 
 /** 다룬 환자: 지금 환자 기호와 사례(과거 환자)마다 기호. 기호가 없는 기록(로그인 등)은 null */
 export function subjectsOf(a: AuditEntry): string | null {
   const past = (a.subjects ?? []).filter((x) => x.tag).map((x) => `${caseLabel(x.case)} ${x.tag}`);
-  return join([a.patient_tag ? `지금 환자 ${a.patient_tag}` : null, past.length ? `과거 환자 ${past.join(', ')}` : null]);
+  const label = EMR_ACTIONS.has(a.action) ? '환자' : '지금 환자';
+  return join([a.patient_tag ? `${label} ${a.patient_tag}` : null, past.length ? `과거 환자 ${past.join(', ')}` : null]);
 }

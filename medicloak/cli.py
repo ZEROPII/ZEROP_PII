@@ -4,6 +4,7 @@
 #   python -m medicloak serve [--llm real]    서버를 켠다 (명령을 생략하면 serve). DB가 없으면 init부터 한다
 #   python -m medicloak check-llm             .env를 읽어 실제 LLM에 짧은 요청을 한 번 보낸다 (키 값은 출력하지 않음)
 #   python -m medicloak users …               계정 목록 · 추가 · 비밀번호 바꾸기
+#   python -m medicloak assign …              외래 환자 담당 의료진 보기 · 더하기 · 빼기 · 규칙으로 다시 나누기 (ADR-0034)
 #
 # 기본 위치: runs/medicloak/ (medicloak.db · initial_accounts.txt · emr_snapshot/ · engine/). runs/는 커밋하지 않는다.
 
@@ -61,8 +62,19 @@ def init(db: Path, *, reset: bool = False, initial_password: str | None = None, 
             _print_accounts(made, out_file)
         elif not quiet:
             print(f"[medicloak] 계정이 이미 있습니다 ({store.count('app_user')}개). 목록: python -m medicloak users")
+        _fill_assignments(store)
     finally:
         store.close()
+
+
+def _fill_assignments(store) -> None:
+    """담당이 없는 외래 환자를 규칙으로 나눈다 (서버를 켤 때도 같은 일을 한다). 나눈 것이 있으면 감사 기록에 남긴다."""
+    from webdemo.backend.access import AUTO_ACTOR, EmrAccess, write_audit
+    got = EmrAccess(store).fill()
+    if got["assigned"]:
+        write_audit(store, "emr_assign", AUTO_ACTOR, assigned=got["assigned"], counts=got["counts"])
+        print(f"[medicloak] 담당 배정: 외래 환자 {got['assigned']}명을 나눴습니다 ("
+              + " · ".join(f"{k} {v}명" for k, v in got["counts"].items()) + "). 바꾸려면 python -m medicloak assign")
 
 
 def serve(a: argparse.Namespace) -> None:
@@ -123,7 +135,9 @@ def serve(a: argparse.Namespace) -> None:
           + " · 민감도 등급 " + (f"켬 (후보 {a.strict_k}명 · 검색 제외 {pr['sensitivity']['excludedPatients']}명)" if eng.sensitivity else "끔"))
     auto = a.auto_redteam if a.llm == "real" else "off"                 # 결정적 응답기 · 연결 점검 모드는 점검할 실제 LLM이 없다
     product = Product(store=store, compare=not a.no_compare, keep=a.keep, cookie_secure=a.cookie_secure,
-                      auto_redteam=auto, auto_daily=daily if a.llm == "real" else None, prefetch=a.prefetch == "on")
+                      auto_redteam=auto, auto_daily=daily if a.llm == "real" else None, prefetch=a.prefetch == "on",
+                      break_glass=a.break_glass == "on")
+    print("[medicloak] EMR 접근 (ADR-0034): 담당 환자만 · 담당 외 예외 열람 " + ("켬 (사유를 적고 12시간)" if product.break_glass else "끔"))
     app = create_app(eng, simulations=False, product=product)          # 운영 모드: 환자는 EMR에서 열 때 정해진다
     if not (DIST / "index.html").exists():
         print("[medicloak] 화면 파일(frontend/dist)이 없습니다. --build 를 붙여 한 번 빌드하세요. 지금은 API만 켭니다.", file=sys.stderr)
@@ -152,6 +166,60 @@ def users(a: argparse.Namespace) -> None:
             print(f"비밀번호를 바꿨습니다: {a.username} (로그인해 있던 세션은 모두 끊었습니다)")
     except ValueError as exc:
         raise SystemExit(str(exc))
+    finally:
+        store.close()
+
+
+def _operator() -> str:
+    try:
+        return f"운영자 명령 ({getpass.getuser()})"
+    except Exception:
+        return "운영자 명령"
+
+
+def assign(a: argparse.Namespace) -> None:
+    """담당 배정 보기 · 바꾸기. 바꾼 일은 감사 기록에 남는다 (환자는 번호 대신 기호로)."""
+    from webdemo.backend.access import EmrAccess, subject_tag, tag_key, write_audit
+    from webdemo.backend import emr as E
+    store = _store(Path(a.db))
+    try:
+        if not E.is_loaded(store):
+            raise SystemExit("EMR 데이터가 없습니다. 먼저 python -m medicloak init 을 실행하세요.")
+        acc = EmrAccess(store)
+        cmd = a.assign_cmd or "list"
+        if cmd == "list":
+            team = acc.team()
+            if a.patient:
+                fid = acc.resolve(a.patient)
+                if fid is None:
+                    raise SystemExit(f"외래 환자가 아닙니다: {a.patient}")
+                names = ", ".join(f"{t['displayName']}({t['username']})" for t in team.get(fid, [])) or "없음"
+                print(f"{fid[:8]}  담당: {names}")
+                return
+            for c in acc.counts():
+                print(f"{c['username']:<12} {c['displayName']:<8} {c['department'] or '':<10} 담당 {c['assigned']:>3}명" + ("" if c["active"] else "  (중지한 계정)"))
+            un = sum(1 for f in acc.outpatients() if f not in team)
+            print(f"외래 환자 {len(acc.outpatients())}명 · 담당 없음 {un}명")
+            return
+        actor = _operator()
+        if cmd == "auto":
+            got = acc.fill(reset=a.reset, by=actor)
+            write_audit(store, "emr_assign", actor, assigned=got["assigned"], counts=got["counts"], reset=bool(a.reset))
+            print(("모두 지우고 다시 나눴습니다: " if a.reset else "담당이 없는 환자를 나눴습니다: ")
+                  + f"{got['assigned']}명 (" + " · ".join(f"{k} {v}명" for k, v in got["counts"].items()) + ")")
+            return
+        fid = acc.resolve(a.patient)
+        if fid is None:
+            raise SystemExit(f"외래 환자가 아닙니다: {a.patient} (환자 번호 8자리)")
+        u = store.user_by_name(a.username)
+        if u is None or u["role"] != "clinician":
+            raise SystemExit(f"의료진 계정이 아닙니다: {a.username}")
+        changed = acc.assign(fid, u["user_id"], actor) if cmd == "add" else acc.unassign(fid, u["user_id"])
+        if changed:
+            write_audit(store, "emr_assign", actor, change=cmd, clinician=f"{u['display_name']} ({u['username']})",
+                        patient_tag=subject_tag(tag_key(store), fid))
+        verb = "담당으로 더했습니다" if cmd == "add" else "담당에서 뺐습니다"
+        print(f"{fid[:8]}: {u['display_name']}({a.username}) {verb}" if changed else f"{fid[:8]}: 바뀐 것이 없습니다 (이미 {'담당' if cmd == 'add' else '담당이 아님'})")
     finally:
         store.close()
 
@@ -195,6 +263,19 @@ def main(argv: list[str] | None = None) -> None:
     q.add_argument("username")
     q.add_argument("--password-stdin", action="store_true")
 
+    p = sub.add_parser("assign", help="외래 환자 담당 의료진 (보기 · 더하기 · 빼기 · 다시 나누기)")
+    asg = p.add_subparsers(dest="assign_cmd")
+    q = asg.add_parser("list", help="계정마다 담당 환자 수 (--patient로 한 환자의 담당)")
+    q.add_argument("--patient", default=None, help="환자 번호 (앞 8자리)")
+    q = asg.add_parser("add", help="환자에게 담당 의료진을 더한다")
+    q.add_argument("patient", help="환자 번호 (앞 8자리)")
+    q.add_argument("username", help="의료진 아이디")
+    q = asg.add_parser("remove", help="환자의 담당에서 의료진을 뺀다")
+    q.add_argument("patient")
+    q.add_argument("username")
+    q = asg.add_parser("auto", help="담당이 없는 환자를 규칙으로 나눈다 (--reset: 모두 지우고 다시)")
+    q.add_argument("--reset", action="store_true", help="지금 배정을 모두 지우고 처음부터 나눈다")
+
     _serve_args(ap, top=True)
     a = ap.parse_args(argv)
     if a.cmd == "init":
@@ -204,6 +285,10 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(0 if check_llm(a.env_file, send=not a.no_send) else 1)
     elif a.cmd == "users":
         users(a)
+    elif a.cmd == "assign":
+        if a.assign_cmd is None:
+            a.patient = None
+        assign(a)
     else:
         serve(_defaults(a))
 
@@ -252,6 +337,9 @@ def _serve_args(p: argparse.ArgumentParser, top: bool = False) -> None:
                    help="on: 정신 건강 · 물질 사용 · 생식 · HIV 값은 후보가 --strict-k명 이상일 때만 내고, 미성년 시기 물질 사용 장애 "
                         "과거 환자는 유사 사례 검색에서 뺀다 (기본). off: 예전 동작")
     p.add_argument("--strict-k", type=int, **(kw or dict(default=10)), help="민감 값을 내보낼 수 있는 최소 후보 수 (기본 10)")
+    p.add_argument("--break-glass", choices=("on", "off"), **(kw or dict(default="on")),
+                   help="on: 의료진이 담당이 아닌 외래 환자를 사유를 적고 12시간 열 수 있다 (감사 기록 · 보안 담당자 검토, 기본). "
+                        "off: 담당 환자만 (ADR-0034)")
 
 
 def _defaults(a: argparse.Namespace) -> argparse.Namespace:
@@ -259,7 +347,7 @@ def _defaults(a: argparse.Namespace) -> argparse.Namespace:
                      no_compare=False, keep=12, cookie_secure=False, no_rule_extract=False, answer_style="on",
                      extractor_model=None, rewriter_model=None, auto_redteam="change", auto_redteam_daily=None,
                      prefetch="on", visit="recent", ledger="on", ledger_window_days=90.0, input_gate="on", answer_budget=45.0,
-                     sensitivity="on", strict_k=10).items():
+                     sensitivity="on", strict_k=10, break_glass="on").items():
         if not hasattr(a, k):
             setattr(a, k, v)
     return a

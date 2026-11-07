@@ -1,7 +1,7 @@
 # Zero PII 의사결정 요약 (AI · 새 팀원용)
 
 > 이 파일은 `python scripts/adr.py index`가 `docs/adr/*.md`에서 만든다. 직접 고치지 않는다.
-> ADR 33건 (유효 31 · 대체·폐기 2), 마지막 결정일 2026-11-06.
+> ADR 34건 (유효 32 · 대체·폐기 2), 마지막 결정일 2026-11-07.
 
 ## 읽는 법
 
@@ -1217,6 +1217,64 @@ PR 템플릿에 "이 PR이 바꾸는 결정과 ADR 번호" 칸을 둔다.
   - `tests/test_rag_remeasure.py`: 가짜 HTTP 위 실제 LLM 경로로 R2 → R4 → 사후 계산 → 원본 대조 → R6를 끝까지 한 번 돈다.
   - `tests/medicloak/test_review_hardening.py`: 날짜 값 바로잡기.
 
+### ADR-0034. 의료진은 담당 외래 환자만 열고, 담당이 아닌 환자는 사유를 적은 예외 열람으로만 연다 (EMR 접근 관리)
+
+- 승인 · 2026-11-07 · 결정 양승준 · S5 · 시스템·화면
+- 근거: `webdemo/backend/access.py`, `webdemo/backend/app.py`, `webdemo/backend/fhir.py`, `webdemo/backend/emr.py`, `webdemo/backend/store.py`, `webdemo/backend/monitor.py`, `medicloak/cli.py`, `frontend/src/pages/EmrPage.tsx`, `frontend/src/pages/EmrAccessPage.tsx`, `frontend/src/components/clinic/PatientBanner.tsx`, `tests/medicloak/test_assignment.py`, `tests/medicloak/test_medicloak.py`, `medicloak/README.md`
+
+**결정**
+
+### 1. 담당 배정 (`webdemo/backend/access.py`)
+
+- 외래 환자(QUERY_POOL 115명)마다 담당 의료진을 둔다 (`emr_assignment`). 한 환자에 여러 명을 둘 수 있다.
+- 처음에는 규칙으로 나눈다. 환자 번호 순서대로, 지금 담당 환자가 가장 적은 의료진 계정에 하나씩 준다 (같으면 먼저 만든 계정). 처음 계정 둘이면 58명 · 57명이다.
+- `init`과 서버를 켤 때, 담당이 없는 외래 환자만 같은 규칙으로 채운다. 이미 담당이 있는 환자는 옮기지 않는다.
+- 바꾸기는 명령으로만 한다: `python -m medicloak assign [list | add <번호> <아이디> | remove <번호> <아이디> | auto [--reset]]`. 바꾼 일은 감사 기록(`emr_assign`)에 남고, 환자는 번호 대신 기호로 남는다.
+
+### 2. 의료진은 담당 환자만 연다
+
+- `/api/emr/worklist`는 로그인한 의료진의 담당 환자와 예외 열람 중인 환자만 돌려준다. 줄마다 `access`(assigned · break_glass)가 붙는다.
+- 같은 검사를 차트 요약(`/api/emr/chart`, 새로 만듦) · 오늘 볼 진단(`/api/emr/visits`) · 진료 지원 AI 열기(`/api/emr/launch`) · 첫 답 미리 준비(`/api/emr/prefetch`) · FHIR(`/fhir/Patient`, `/fhir/{자원}?patient=`)에 건다.
+- 외래 환자가 아니면 지금처럼 404다. 외래 환자인데 담당이 아니면 403이다 (머리글 `X-MediCloak-State: not-assigned`, FHIR는 OperationOutcome `forbidden`).
+- 거부는 접근 기록과 감사 기록(`emr_denied`)에 남긴다. 같은 의료진 · 환자 · 요청의 거부를 60초 안에 또 받으면 한 번으로 센다.
+- 진료 지원 AI 목적(연구 계획의 trial)이 없는 외래 환자 1명도 목록에 넣는다. 목적 없이 차트만 볼 수 있다.
+
+### 3. 담당 외 환자 열기 (예외 열람, break-glass)
+
+- 환자 번호(앞 8자리) · 사유 분류(협진 · 당직/응급 · 기타) · 직접 쓴 설명(5자 이상)을 모두 적어야 열린다. 미리 골라 둔 사유는 없다 (ADR-0030과 같은 규칙).
+- 연 뒤 12시간 동안 담당 환자처럼 목록 · 차트 · 진료 지원 AI를 쓴다. FHIR Patient의 생년 · 거주 지역은 빼고 보인다.
+- 연 일은 감사 기록(`break_glass`)과 접근 기록에 남고, 보안 담당자 EMR 접근 화면에 '검토 대기'로 올라온다.
+- 검토는 두 가지다: 적절함(`ok`)과 확인 필요(`flag`). 확인 필요는 까닭을 적어야 하고, 열람을 바로 끝낸다. 검토도 감사 기록(`break_glass_review`)에 남는다.
+- 같은 환자를 이미 열어 두었으면 새로 만들지 않는다. 담당 환자를 예외 열람으로 열려고 하면 409다.
+- `serve --break-glass off`면 새로 열 수 없고, 열어 둔 것도 쓰지 않는다 (담당 환자만).
+
+### 4. 접근 기록 (`emr_access`)
+
+- 다음을 환자마다 남긴다: 차트 열람(1분 안에 다시 열면 한 번), EMR 연동(FHIR) 조회(10분에 한 번), 진료 지원 AI 열기, 거부, 예외 열람, 보안 담당자 차트 열람.
+- 감사 기록에는 보안에 중요한 일(거부 · 예외 열람 · 검토 · 보안 담당자 열람 · 배정 변경)만 같이 남긴다.
+
+### 5. 보안 담당자 EMR 접근 화면 (`/emr-access`)
+
+- 외래 환자마다 기호(P-xxxxxx) · 진료 상태 · 담당 · 마지막 접근 · 7일 접근 수 · 예외 열람 수만 보인다 (`GET /api/monitor/emr`). 진단 · 나이 · 성별 · 환자 번호는 보내지 않는다.
+- 차트는 사유(분류 + 5자 이상 설명)를 적어야 열린다 (`POST /api/monitor/emr/patients/{기호}/reveal`). 그때 환자 번호와 차트 요약이 보이고, 감사 기록(`emr_reveal`)에 남는다. 의료진 대화 원문 열람(ADR-0030)과 같은 규칙이다.
+- 환자 기호의 열쇠와 식은 관제 화면 · 감사 기록과 같다 (`access.subject_tag`). 명령줄도 같은 열쇠를 쓴다.
+- 배정은 이 화면에서 보기만 한다.
+
+### 6. 의료진 화면 흐름
+
+- 로그인하면 '내 담당 환자'(`/emr`)가 열린다. 왼쪽 목록(상태 탭 · 찾기 · 담당 외 환자 열기) → 가운데 차트 요약(진단 이력 · 처방 · 시술 · 관리 계획 · 최근 내원 · 내원 흐름) → 오른쪽 '유사 사례 찾기' 순서다. 유사 사례 찾기는 진료 목적 · 오늘 볼 진단 · 첫 답 미리 준비 · 열기를 지금까지와 같이 한다.
+- 환자를 고르면 주소가 `/emr/{환자 id}`로 바뀐다. 좁은 화면에서는 목록과 차트를 한 화면씩 보인다.
+- 위 환자 띠는 '지금 보는 환자'로 이름을 바꾼다. 운영 모드에서는 진료 지원 AI 대화가 열려 있을 때만 보이고, 내 담당 환자 화면에서는 숨긴다. 띠의 '차트'를 누르면 그 환자의 차트로 돌아간다.
+- 데모 모드(`python -m webdemo`, 로그인 · EMR 없음)는 띠 이름 말고는 바꾸지 않는다.
+
+**결과와 영향**
+
+- DB에 표 셋이 늘었다: `emr_assignment` · `emr_grant` · `emr_access`. `CREATE TABLE IF NOT EXISTS`라 기존 DB를 열면 그대로 붙고, 서버를 켤 때 담당을 채운다.
+- 검사는 여는 때 한다. 담당이 바뀌어도 이미 열린 진료 지원 AI 대화는 이어진다.
+- 새로 만든 의료진 계정은 담당이 없다. 운영자가 `assign add` 또는 `assign auto --reset`으로 준다.
+- 테스트: `tests/medicloak/test_assignment.py` 8건(규칙 · 번호 찾기 · 예외 열람 · 접근 기록 · 기호 · 차트 요약 · 명령). `tests/medicloak/test_medicloak.py`에 담당 · 예외 열람 · 보안 담당자 화면 흐름 1건을 더했다. 기존 테스트의 열기 도우미는 그 환자를 담당으로 먼저 더한다. 앞단 vitest에 감사 기록 글과 남은 시간 표시를 더했다.
+- 연구 하네스(`medical/`) · 고정본(`medical/bundle/`)은 바꾸지 않았다.
+
 ## 대체 · 폐기된 결정
 
 - ADR-0002. 억제 기준을 k ≤ 3으로 둔다 (2026-09-23, 대체됨 → ADR-0007)
@@ -1336,3 +1394,8 @@ Synthea 추가 생성 요청과 생성본의 묶음 검사. 합성데이터 담�
 - R4 · R6 실제 LLM 실행(Mac, 토큰 비용)과 R5 사람 검수.
 - 검증기의 진단 · 시술 동의어는 문서 표기와 표준 이름뿐이다. SNOMED 동의어 표가 생기면 더한다.
 - R7(실사용 부하)은 R4 결과를 보고 정한다.
+
+**ADR-0034**
+
+- 배정을 진료 일정(예약 · 접수)과 잇는 일.
+- 예외 열람 검토 기한과 알림.

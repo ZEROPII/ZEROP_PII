@@ -32,6 +32,8 @@ export interface PatientContext {
   /** 기준 진료의 진단 사건 번호, 의사가 오늘 진단을 골랐는지 */
   visitEvent?: string;
   visitChosen?: boolean;
+  /** 운영 모드: EMR에서 연 환자 (차트로 돌아가는 링크) */
+  fhirId?: string | null;
   /** AI(대상 AI 지시문)에 실제로 보내는 환자 요약 줄 */
   aiSummary?: { label: string; value: string }[];
   /** 유사 사례 검색에 쓰는 이 환자 기록: 기준일까지의 진단 · 약 · 시술 코드 수 */
@@ -399,6 +401,63 @@ export interface WorklistPatient {
   openItems: number;
   /** 가상 EMR에 남은 마지막 기록일 */
   lastRecord: string | null;
+  /** 이 의료진에게 열린 까닭: 담당 환자 · 담당 외 예외 열람 (ADR-0034). 로그인 없는 서버는 없음 */
+  access?: 'assigned' | 'break_glass';
+  /** 예외 열람이면 사유 · 끝나는 시각 */
+  grant?: EmrGrant | null;
+}
+
+/** 담당 외 환자 예외 열람 (의료진에게 보이는 것) */
+export interface EmrGrant {
+  id: number;
+  reason: string;
+  reasonLabel: string;
+  note: string | null;
+  createdAt: number;
+  /** 이 시각(초)까지 열 수 있다 */
+  expiresAt: number;
+}
+
+/** GET /api/emr/me: 담당 환자 수와 예외 열람 설정 */
+export interface EmrMe {
+  assigned: number | null;
+  active?: number;
+  breakGlass: { on: boolean; hours?: number; noteMin?: number; reasons?: { id: string; label: string }[] };
+}
+
+/** 차트 요약의 한 줄: 같은 이름은 묶어 횟수 · 처음 · 마지막 날 */
+export interface ChartItem {
+  label: string;
+  times: number;
+  first: string | null;
+  last: string | null;
+  /** 끝나지 않은 진단 · 처방 · 관리 계획 */
+  active: boolean;
+  ended: string | null;
+}
+
+export interface ChartGroup {
+  items: ChartItem[];
+  total: number;
+  active: number;
+}
+
+/** GET /api/emr/chart: 차트 요약 (생년 · 거주 지역 없음) */
+export interface EmrChart {
+  patient: Omit<WorklistPatient, 'purposes' | 'featured' | 'access' | 'grant'>;
+  problems: ChartGroup;
+  medications: ChartGroup;
+  procedures: ChartGroup;
+  carePlans: ChartGroup;
+  /** 최근 내원: 진료마다 그날 기록된 것 (최근 것부터) */
+  visits: { date: string; items: { kind: 'problems' | 'medications' | 'procedures' | 'carePlans'; label: string }[] }[];
+  /** 해마다 내원한 날 수 (최근 10년) */
+  yearly: { year: number; visits: number }[];
+  visitDays: number;
+  firstRecord: string | null;
+  /** 진료 지원 AI 목적 (목록 줄과 같음). 의료진 차트만 */
+  purposes?: WorklistPurpose[];
+  access?: { via: 'assigned' | 'break_glass'; grant: EmrGrant | null };
 }
 
 /** 진료 지원 AI를 여는 동안의 진행 (GET /api/emr/launch/progress) */

@@ -53,7 +53,8 @@ src/
     clueGraph.ts           단서 그래프 만들기와 힘 배치 (난수 없음)
   components/
     layout/   AppLayout(역할별 틀), ClinicianShell(EMR 머리줄), TopBar · CommandPalette(관제), ProtectionBadge
-    clinic/   PatientBanner(환자 띠), EmrCaseList, ClinicalChat, ClinicalMessage, ClinicValue(범위 · 비공개), CaseNotePanel
+    clinic/   PatientBanner('지금 보는 환자' 띠), EmrCaseList, ClinicalChat, ClinicalMessage, ClinicValue(범위 · 비공개), CaseNotePanel
+    emr/      ChartSummary(차트 요약), SimilarCaseBox(유사 사례 찾기 · 진료 지원 AI 열기), BreakGlassDialog(담당 외 환자 열기)
     chat/     ChatMessage, PrivacyHighlight, PrivacyExplanation (관제 쪽 숫자 있는 대화), ChatInput
     graph/    ClueGraph
     monitor/  QueueTable, SessionDetail(메시지 · 단서 그래프 · 질문 흐름), RevealDialog
@@ -122,5 +123,6 @@ Mock이 알아듣는 질문 (키워드 규칙, `mockData.ts`의 `QI_PATTERNS`·`
 - 의료진 화면 API는 후보 수 · 기준값을 null로 보낸다(타입 `number | null`). 의료진 화면은 원래 숫자를 그리지 않았다.
 - 보안 담당자 '의료진 대화'(`/watch`)는 대화를 골라 `createHttpApi('/api/watch/{대화}')`로 같은 계약을 숫자와 함께 받는다(안쪽 `WorkspaceProvider`). 의료진 화면 상태(`WorkspaceProvider`)는 의료진 틀 안에서만 만든다.
 - 보호 정책(`/policy`)은 `/api/monitor/policy`에서 받는다.
-- 외래 진료 목록(`/emr`, 운영 모드 의료진만): `src/api/emrApi.ts`가 `/api/emr/worklist` · `/api/emr/launch`와 FHIR(`/fhir/Condition?patient=` 등)를 부른다. 개발 서버도 `/fhir`를 8000번으로 넘긴다(`vite.config.ts`).
+- 내 담당 환자(`/emr`, `/emr/{환자 id}`, 운영 모드 의료진만): `src/api/emrApi.ts`가 `/api/emr/worklist` · `/api/emr/chart` · `/api/emr/break-glass` · `/api/emr/launch`를 부른다. 왼쪽 목록 → 가운데 차트 요약 → 오른쪽 유사 사례 찾기 순서이고, 이 화면에서는 '지금 보는 환자' 띠를 숨긴다(ADR-0034). FHIR(`/fhir/…`)는 EMR 연동 API로 남아 있고, 개발 서버도 `/fhir`를 8000번으로 넘긴다(`vite.config.ts`).
+- EMR 접근(`/emr-access`, 운영 모드 보안 담당자만): `/api/monitor/emr`로 환자 기호 · 담당 · 접근 기록 · 예외 열람을 받고, 차트는 `RevealDialog`로 사유를 적어 연다.
 5. 백엔드 쪽 대응 관계: `PrivacyAction`은 `medical/defense.py`의 allow · generalize · suppress, `ProtectionPolicy.minK/suppressK`는 `generalize_threshold/suppress_threshold`, `arm`은 C0 · C1 · C1S.

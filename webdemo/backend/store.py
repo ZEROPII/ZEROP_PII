@@ -5,6 +5,8 @@
 #   기록       conversation(의료진 대화 스냅숏) · turn_record(턴 기록, 원 응답 포함 · 서버 안에서만)
 #              thread_message(의료진 ↔ 보안 담당자) · audit(감사 기록)
 #   공개 원장  disclosure_ledger: 과거 환자마다 의료진 대화가 내보낸 단서(노드)와 대화 · 계정 · 시각 (ledger.py, ADR-0032)
+#   EMR 접근   emr_assignment(외래 환자 ↔ 담당 의료진) · emr_grant(담당 외 예외 열람, 사유 · 기한 · 검토) ·
+#              emr_access(차트 열람 · 거부 등 접근 기록) (access.py, ADR-0034)
 #
 # 쓰기는 연결 하나를 잠금으로 줄 세운다. 데모 · 시범 운영 규모(동시 사용자 수십 명)에서 충분하다.
 # 원 응답과 가린 원래 값은 turn_record · conversation.security_json에만 있고, 이 값은 보안 담당자 API에서도
@@ -74,6 +76,23 @@ CREATE TABLE IF NOT EXISTS disclosure_ledger (
   kind TEXT, turn INTEGER, attribute TEXT, node_id TEXT, event_label TEXT
 );
 CREATE INDEX IF NOT EXISTS disclosure_ledger_patient ON disclosure_ledger (patient_id, at);
+CREATE TABLE IF NOT EXISTS emr_assignment (
+  fhir_id TEXT NOT NULL, user_id INTEGER NOT NULL REFERENCES app_user(user_id), assigned_at REAL, assigned_by TEXT,
+  PRIMARY KEY (fhir_id, user_id)
+);
+CREATE INDEX IF NOT EXISTS emr_assignment_user ON emr_assignment (user_id);
+CREATE TABLE IF NOT EXISTS emr_grant (
+  grant_id INTEGER PRIMARY KEY AUTOINCREMENT, fhir_id TEXT NOT NULL, user_id INTEGER NOT NULL REFERENCES app_user(user_id),
+  reason TEXT NOT NULL, note TEXT, created_at REAL NOT NULL, expires_at REAL NOT NULL, ended_at REAL,
+  review TEXT, review_note TEXT, reviewed_at REAL, reviewed_by TEXT
+);
+CREATE INDEX IF NOT EXISTS emr_grant_user ON emr_grant (user_id, expires_at);
+CREATE TABLE IF NOT EXISTS emr_access (
+  access_id INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL, user_id INTEGER, fhir_id TEXT NOT NULL, action TEXT NOT NULL,
+  via TEXT, grant_id INTEGER, detail TEXT
+);
+CREATE INDEX IF NOT EXISTS emr_access_patient ON emr_access (fhir_id, at);
+CREATE INDEX IF NOT EXISTS emr_access_user ON emr_access (user_id, fhir_id, action, at);
 """
 
 

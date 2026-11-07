@@ -241,6 +241,73 @@ class Emr:
                     conditions=[self.label(d["code_node"]) for d in dx], events=r["n_events"],
                     status=status, statusLabel=STATUS_KO[status], openItems=open_n, lastRecord=last)
 
+    def age_band(self, fhir_id: str) -> str | None:
+        """마지막 기록 때 나이의 연령대 ('40대', '10세 미만'). 진료 지원 AI 목적이 없는 외래 환자의 목록 줄에 쓴다."""
+        r = self.patient_row(fhir_id)
+        e = self.store.one("SELECT age_years_at_start AS a FROM emr_event WHERE patient_id = ? AND age_years_at_start <> '' "
+                           "ORDER BY start DESC, seq DESC LIMIT 1", (r["patient_id"],))
+        if e is None or not str(e["a"]).isdigit():
+            return None
+        age = int(e["a"])
+        return "10세 미만" if age < 10 else f"{age // 10 * 10}대"
+
+    def chart(self, fhir_id: str, *, limit: int = 10) -> dict[str, Any]:
+        """
+        차트 요약 (의료진 환자 화면 · 보안 담당자의 사유를 적은 열람). 같은 이름은 한 줄로 묶어 횟수 · 처음 · 마지막 날을 보인다.
+          problems    진단 이력: 끝나지 않은 진단 먼저, 그다음 최근 것부터
+          medications 처방: 끝나지 않은 처방 먼저
+          procedures  시술 (과거 시술 기록 포함) · carePlans 관리 계획
+          visits      최근 내원: 진료(encounter)마다 그날 기록된 진단 · 처방 · 시술 · 관리 계획
+          yearly      해마다 내원한 날 수 (내원 흐름)
+        생년 · 거주 지역은 넣지 않는다 (목록 줄과 같다). 날짜는 EMR 기록 그대로 (자기 환자 차트).
+        """
+        s = self.summary(fhir_id)
+        pid = self.patient_row(fhir_id)["patient_id"]
+        rows = self.store.q("SELECT event_type, encounter_id, code_node, SUBSTR(start, 1, 10) AS d, SUBSTR(stop, 1, 10) AS e FROM emr_event "
+                            "WHERE patient_id = ? ORDER BY start, seq", (pid,))
+        groups: dict[str, dict[str, dict[str, Any]]] = collections.defaultdict(dict)
+        kind = dict(CONDITION="problems", MEDICATION="medications", PROCEDURE="procedures", PROCEDURE_HISTORY="procedures", CAREPLAN="carePlans")
+        visits: dict[str, dict[str, Any]] = {}
+        for e in rows:
+            k = kind.get(e["event_type"])
+            if k is None:
+                continue
+            lab = self.label(e["code_node"]) or e["code_node"]
+            g = groups[k].setdefault(lab, dict(label=lab, times=0, first=e["d"] or None, last=e["d"] or None, active=False, ended=None))
+            g["times"] += 1
+            g["last"] = max(filter(None, (g["last"], e["d"])), default=None)
+            if e["event_type"] in ("CONDITION", "MEDICATION", "CAREPLAN"):
+                if e["e"]:
+                    g["ended"] = max(filter(None, (g["ended"], e["e"])), default=None)
+                else:
+                    g["active"] = True
+            enc = e["encounter_id"] or (f"day:{e['d']}" if e["d"] else None)
+            if enc and e["d"]:
+                v = visits.setdefault(enc, dict(date=e["d"], items=[]))
+                v["date"] = min(v["date"], e["d"])
+                item = dict(kind=k, label=lab)
+                if item not in v["items"]:
+                    v["items"].append(item)
+
+        def ordered(k: str) -> dict[str, Any]:
+            # 끝나지 않은 것 먼저, 그 안에서는 마지막 기록이 최근인 것부터 (정렬을 두 번: 뒤의 정렬이 앞의 순서를 지킨다)
+            xs = sorted(groups[k].values(), key=lambda g: g["last"] or "", reverse=True)
+            xs = sorted(xs, key=lambda g: not g["active"])
+            for g in xs:
+                if g["active"]:
+                    g["ended"] = None
+            return dict(items=xs[:limit], total=len(xs), active=sum(g["active"] for g in xs))
+
+        days = sorted({v["date"] for v in visits.values()})
+        by_year = collections.Counter(d[:4] for d in days)
+        last_y = int(days[-1][:4]) if days else 0
+        # 내원 흐름은 마지막 기록 해까지 최근 10년만 (처음 기록이 더 늦으면 그 해부터)
+        yearly = [dict(year=y, visits=by_year.get(str(y), 0)) for y in range(max(int(days[0][:4]), last_y - 9), last_y + 1)] if days else []
+        recent = sorted(visits.values(), key=lambda v: v["date"], reverse=True)[:8]
+        return dict(patient=dict(s, ageBand=self.age_band(fhir_id)), problems=ordered("problems"), medications=ordered("medications"),
+                    procedures=ordered("procedures"), carePlans=ordered("carePlans"), visits=recent, yearly=yearly,
+                    visitDays=len(days), firstRecord=days[0] if days else None)
+
 
 def bundle(resources: list[dict[str, Any]], total: int) -> dict[str, Any]:
     return dict(resourceType="Bundle", type="searchset", total=total, entry=[dict(resource=x, search=dict(mode="match")) for x in resources])

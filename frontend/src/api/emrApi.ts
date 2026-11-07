@@ -1,9 +1,21 @@
-// 가상 EMR API (python -m medicloak): 외래 진료 목록 · 진료 지원 AI 열기 · FHIR R4 읽기.
-// 의료진 계정만 쓴다. FHIR로는 외래 환자만 열리고, 유사 사례(과거 기록) 환자는 404다.
+// 가상 EMR API (python -m medicloak): 내 담당 환자 목록 · 차트 요약 · 담당 외 환자 열기 · 진료 지원 AI 열기 · FHIR R4 읽기.
+// 의료진 계정만 쓴다. 담당 환자와 예외 열람 중인 환자만 열리고(아니면 403), 유사 사례(과거 기록) 환자는 404다 (ADR-0034).
 
-import type { LaunchProgress, VisitChoice, WorklistPatient } from '../types/domain';
+import type { EmrChart, EmrGrant, EmrMe, LaunchProgress, VisitChoice, WorklistPatient } from '../types/domain';
 import { ApiError } from './types';
 import { API_BASE, FHIR_BASE, notifyUnauthorized } from './session';
+
+const EMR_OFF = 'EMR 연동은 MediCloak 운영 서버(python -m medicloak)에서만 쓸 수 있습니다.';
+
+/** 서버가 돌려준 안내 문장 (detail). 이 API의 안내에는 환자 기록이 들어 있지 않다 */
+async function detailOf(res: Response): Promise<string | null> {
+  try {
+    const b = (await res.json()) as { detail?: unknown };
+    return typeof b?.detail === 'string' ? b.detail : null;
+  } catch {
+    return null;
+  }
+}
 
 async function get<T>(url: string, signal?: AbortSignal): Promise<T> {
   let res: Response;
@@ -14,8 +26,11 @@ async function get<T>(url: string, signal?: AbortSignal): Promise<T> {
     throw new ApiError('서버에 연결할 수 없습니다.');
   }
   if (res.status === 401) notifyUnauthorized();
-  if (res.status === 404 && url.includes('/emr/')) throw new ApiError('EMR 연동은 MediCloak 운영 서버(python -m medicloak)에서만 쓸 수 있습니다.', 404);
-  if (!res.ok) throw new ApiError(`요청이 실패했습니다 (HTTP ${res.status}).`, res.status);
+  if (!res.ok) {
+    const detail = url.includes('/emr/') ? await detailOf(res) : null;
+    if (res.status === 404 && url.includes('/emr/') && (!detail || detail.includes('운영 모드'))) throw new ApiError(EMR_OFF, 404);
+    throw new ApiError(detail ?? `요청이 실패했습니다 (HTTP ${res.status}).`, res.status, res.headers.get('X-MediCloak-State') ?? undefined);
+  }
   return (await res.json()) as T;
 }
 
@@ -47,7 +62,29 @@ export interface FhirBundle {
 }
 
 export const emrApi = {
+  /** 내 담당 환자 (+ 예외 열람 중인 환자) */
   worklist: (signal?: AbortSignal) => get<WorklistPatient[]>(`${API_BASE}/emr/worklist`, signal),
+  /** 담당 환자 수 · 예외 열람 설정 */
+  me: (signal?: AbortSignal) => get<EmrMe>(`${API_BASE}/emr/me`, signal),
+  /** 차트 요약 (열면 접근 기록에 남는다) */
+  chart: (fhirId: string, signal?: AbortSignal) => get<EmrChart>(`${API_BASE}/emr/chart?fhirId=${encodeURIComponent(fhirId)}`, signal),
+  /** 담당 외 환자 열기: 환자 번호(앞 8자리) · 사유 분류 · 직접 쓴 설명 */
+  breakGlass: async (patient: string, reason: string, note: string): Promise<{ fhirId: string; identifier: string; created: boolean; grant: EmrGrant }> => {
+    let res: Response;
+    try {
+      res = await fetch(`${API_BASE}/emr/break-glass`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { Accept: 'application/json', 'Content-Type': 'application/json' },
+        body: JSON.stringify({ patient, reason, note }),
+      });
+    } catch {
+      throw new ApiError('서버에 연결할 수 없습니다.');
+    }
+    if (res.status === 401) notifyUnauthorized();
+    if (!res.ok) throw new ApiError((await detailOf(res)) ?? `담당 외 환자를 열지 못했습니다 (HTTP ${res.status}).`, res.status);
+    return (await res.json()) as { fhirId: string; identifier: string; created: boolean; grant: EmrGrant };
+  },
   /** 오늘 볼 진단으로 고를 수 있는 것 (진료 목적마다, 최근 것부터) */
   visits: (fhirId: string, signal?: AbortSignal) =>
     get<{ purposes: Record<string, VisitChoice[]> }>(`${API_BASE}/emr/visits?fhirId=${encodeURIComponent(fhirId)}`, signal),
@@ -69,10 +106,7 @@ export const emrApi = {
     }
     if (res.status === 401) notifyUnauthorized();
     if (!res.ok) {
-      const detail = await res
-        .json()
-        .then((b: { detail?: unknown }) => (typeof b?.detail === 'string' ? b.detail : null))
-        .catch(() => null);
+      const detail = await detailOf(res);
       throw new ApiError(
         res.status === 404 ? '이 환자는 고른 진료 목적으로 진료 지원 AI를 열 수 없습니다.' : (detail ?? `진료 지원 AI를 열지 못했습니다 (HTTP ${res.status}).`),
         res.status,
