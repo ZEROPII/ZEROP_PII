@@ -10,7 +10,7 @@ jira: [ZP-12]
 tags: [reproducibility, llm, run-config]
 supersedes: []
 superseded_by: []
-sources: [README.md, medical/config.py, ext:개발의사결정_요약보고서_v1.0#Stage1-2-8]
+sources: [docs/research_harness.md, medical/config.py, ext:개발의사결정_요약보고서_v1.0#Stage1-2-8]
 ---
 # ADR-0001. 실험 조건을 고정하고 실행마다 설정을 기록한다
 

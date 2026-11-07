@@ -43,7 +43,7 @@
       "supersedes": [],
       "superseded_by": [],
       "sources": [
-        "README.md",
+        "docs/research_harness.md",
         "medical/config.py",
         "ext:개발의사결정_요약보고서_v1.0#Stage1-2-8"
       ],
@@ -312,7 +312,7 @@
       "superseded_by": [],
       "sources": [
         "orchestrator/",
-        "README.md",
+        "docs/research_harness.md",
         "ext:개발의사결정_요약보고서_v1.0#Stage11"
       ],
       "file": "docs/adr/0008-commit-only-released-response.md",
@@ -349,7 +349,7 @@
       "supersedes": [],
       "superseded_by": [],
       "sources": [
-        "README.md",
+        "docs/research_harness.md",
         "orchestrator/shared_raw.py"
       ],
       "file": "docs/adr/0009-paired-branches-share-raw-response.md",

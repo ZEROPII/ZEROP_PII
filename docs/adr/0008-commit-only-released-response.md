@@ -10,7 +10,7 @@ jira: [ZP-21]
 tags: [privacy-state, defender, information-boundary]
 supersedes: []
 superseded_by: []
-sources: [orchestrator/, README.md, ext:개발의사결정_요약보고서_v1.0#Stage11]
+sources: [orchestrator/, docs/research_harness.md, ext:개발의사결정_요약보고서_v1.0#Stage11]
 ---
 # ADR-0008. 실제로 공개한 응답의 단서만 State에 반영한다
 
