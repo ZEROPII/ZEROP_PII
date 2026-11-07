@@ -17,7 +17,7 @@ describe('예외 열람 시간 표시', () => {
   });
 });
 
-describe('내원 흐름 날짜', () => {
+describe('내원 날짜', () => {
   const now = new Date(2026, 10, 7, 12).getTime();
   it('지난 기간은 달 · 해로 (한 달이 안 되면 한 달 안)', () => {
     expect(sinceDay('2026-10-20', now)).toBe('한 달 안');

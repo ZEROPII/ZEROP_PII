@@ -724,7 +724,7 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
     @r.get("/emr/chart")
     def emr_chart(request: Request, fhirId: str = Query(..., min_length=1, max_length=64)) -> dict[str, Any]:
         """
-        환자 차트 요약 (진단 이력 · 처방 · 시술 · 관리 계획 · 최근 내원 · 내원 흐름)과 진료 지원 AI 목적.
+        환자 차트 요약 (내원 이력 · 진단 이력 · 처방 · 시술 · 관리 계획)과 진료 지원 AI 목적.
         담당 환자 · 예외 열람 중인 환자만. 열면 접근 기록에 남긴다 (같은 환자를 1분 안에 다시 열면 한 번으로).
         """
         outpatient_or_404(fhirId)

@@ -189,7 +189,7 @@ function ChartHeader({
     ['대표 진단', p.conditions.slice(0, 3).join(', ') || '없음'],
     [p.status === 'DORMANT' ? '마지막 내원 때 진행 중' : '진행 중', `진단 ${chart.problems.active} · 처방 ${chart.medications.active} · 관리 계획 ${chart.carePlans.active}`],
     ['마지막 내원', last ? `${last} (${sinceDay(last)})` : '–'],
-    ['내원', `${chart.visitDays}일${chart.firstRecord ? ` (${chart.firstRecord.slice(0, 4)}년부터)` : ''}`],
+    ['내원', `${chart.visitDays}회${chart.firstRecord ? ` (${chart.firstRecord.slice(0, 4)}년부터)` : ''}`],
   ];
   return (
     <header className="border-b border-line bg-emr-banner px-4 py-3 md:px-5">
@@ -466,7 +466,7 @@ export function EmrPage() {
             <div className="max-w-[360px]">
               <Stethoscope className="mx-auto h-7 w-7 text-ink-3" aria-hidden />
               <p className="mt-3 text-[14px] font-semibold text-ink">환자를 고르면 차트 요약이 나옵니다</p>
-              <p className="mt-1.5 text-[13px] leading-6 text-ink-2">진단 이력, 처방, 시술, 관리 계획, 최근 내원을 본 뒤 필요하면 같은 화면에서 유사 사례를 찾습니다.</p>
+              <p className="mt-1.5 text-[13px] leading-6 text-ink-2">내원 이력, 진단 이력, 처방, 시술, 관리 계획을 본 뒤 필요하면 같은 화면에서 유사 사례를 찾습니다.</p>
               <p className="mt-4 flex items-start justify-center gap-1.5 text-left text-xs leading-5 text-ink-3">
                 <Info className="mt-[3px] h-3.5 w-3.5 shrink-0" aria-hidden />
                 <span>비슷한 과거 사례는 이 목록에서 찾지 않습니다. 진료 지원 AI는 병원의 과거 기록 환자에서 찾고, 그 기록은 MediCloak을 거쳐서만 보입니다.</span>

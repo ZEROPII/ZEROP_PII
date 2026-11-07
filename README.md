@@ -8,8 +8,8 @@
   <img src="https://img.shields.io/badge/FastAPI-서버-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI">
   <img src="https://img.shields.io/badge/React-18-0b7a75?style=flat-square&logo=react&logoColor=white" alt="React 18">
   <img src="https://img.shields.io/badge/HL7_FHIR-R4-0b7a75?style=flat-square" alt="FHIR R4">
-  <img src="https://img.shields.io/badge/tests-pytest_994_·_vitest_96-16a374?style=flat-square" alt="pytest 994 passed, vitest 96 passed">
-  <a href="docs/adr/README.md"><img src="https://img.shields.io/badge/ADR-37건-5b5bf0?style=flat-square" alt="ADR 37건"></a>
+  <img src="https://img.shields.io/badge/tests-pytest_994_·_vitest_98-16a374?style=flat-square" alt="pytest 994 passed, vitest 98 passed">
+  <a href="docs/adr/README.md"><img src="https://img.shields.io/badge/ADR-38건-5b5bf0?style=flat-square" alt="ADR 38건"></a>
 </p>
 
 <p align="center">
@@ -105,7 +105,7 @@ MediCloak은 답에 나온 표현을 글자 그대로 비교하지 않고, 팀�
 
 **의료진** · 진료 지원 AI
 
-- **[내 담당 환자 · 차트 요약](docs/images/screen-emr.png)**: 로그인하면 자기 담당 외래 환자만 등록번호(`26-4821`)와 함께 보입니다. 환자를 고르면 내원 흐름(마지막 내원 · 최근 1년 · 해마다 내원한 날), 진단 이력, 처방, 시술, 관리 계획, 최근 내원을 정리한 차트가 나오고, 같은 화면에서 진료 목적(처방, 시술·치료, 경과·관리)을 골라 유사 사례를 찾습니다. 차트와 유사 사례 찾기는 따로 스크롤됩니다. 목록에는 생년과 거주 지역을 표시하지 않습니다.
+- **[내 담당 환자 · 차트 요약](docs/images/screen-emr.png)**: 로그인하면 자기 담당 외래 환자만 등록번호(`26-4821`)와 함께 보입니다. 환자를 고르면 내원 이력(해마다 한 줄에 내원 수 · 달력 띠 · 그해 새 진단과 첫 시술, 누르면 그해 내원이 날짜마다 펼쳐짐), 진단 이력, 처방, 시술, 관리 계획을 정리한 차트가 나오고, 같은 화면에서 진료 목적(처방, 시술·치료, 경과·관리)을 골라 유사 사례를 찾습니다. 차트와 유사 사례 찾기는 따로 스크롤됩니다. 목록에는 생년과 거주 지역을 표시하지 않습니다.
 - **[협진 의뢰 · 담당 외 환자 열기](docs/images/screen-consult.png)**: 담당 의료진이 차트에서 협진 의뢰를 보내면, 받은 의료진은 목록 맨 위에서 번호를 적지 않고 12시간 동안 엽니다. 의뢰 없이 당직 · 응급으로 꼭 봐야 하면 등록번호와 사유를 적고 엽니다. 둘 다 감사 기록에 남고 보안 담당자가 검토합니다.
 - **[유사 사례 조회](docs/images/screen-clinic.png)**: 사례별 대화, 검색된 사례 전체에 대한 질문, 답에 실제로 나온 값만 모은 사례 노트, 보내기 전 확인, 세부 정보 요청. 답의 '비공개' · '범위' 표시를 누르면 어느 사례의 무엇을 왜 바꿨는지 그 자리에 설명이 뜨고, 답 아래에는 사례마다 바뀐 항목이 한 줄씩 보입니다. 답을 기다리는 동안 지금 단계(답 쓰기 → 보호 기준 확인 → 필요하면 고쳐 쓰기)가 보이고, 멈추기로 질문을 거둘 수 있습니다.
 
@@ -207,7 +207,7 @@ python -m medicloak serve --build     # 화면 빌드 후 서버 실행, http://
 
 ```bash
 python -m pytest -q                   # 994 passed, 3 skipped (LLM 호출은 가짜 HTTP 세션으로 대체)
-cd frontend && npm test               # vitest 96 passed
+cd frontend && npm test               # vitest 98 passed
 ```
 
 ---
@@ -231,7 +231,7 @@ ZEROP_PII/
 ├─ core/                   # .env 설정 · LLM 호출 (모든 모듈 공통)
 ├─ scripts/                # 측정 · RAG 재측정 · 결과 다시 세기 · ADR 도구
 ├─ tests/                  # pytest 979개 (LLM 경로는 가짜 HTTP 세션으로 시험)
-└─ docs/                   # ADR 37건 · 의료 시나리오 · 평가 통합 문서 · README 그림
+└─ docs/                   # ADR 38건 · 의료 시나리오 · 평가 통합 문서 · README 그림
 ```
 
 SynthPAI(일반 게시글) 단계의 모듈(`target_llm/` · `qi_extractor/` · `normalizer/` · `attack/` · `ontology/` · `adapters/` · `orchestrator/` · `validation/` · `api_server/` · `analysis/` · `evaluation_v1/` · `risk_defender_synthpai/`)은 그대로 두었습니다. 의료 데이터로 전환하기 전의 실험을 재현할 때 사용하며, 설명은 [docs/research_harness.md](docs/research_harness.md)에 있습니다. 평가 프로토타입(`eval/`과 루트의 `eval_baseline.py` · `log_schema.py` · `run_demo.py`)은 [docs/evaluation.md](docs/evaluation.md)에 설명되어 있습니다.
@@ -240,7 +240,7 @@ SynthPAI(일반 게시글) 단계의 모듈(`target_llm/` · `qi_extractor/` · 
 
 - [medicloak/README.md](medicloak/README.md): 운영 모드의 옵션, 화면 흐름, API, 보안 동작, 운영 가이드
 - [docs/medical.md](docs/medical.md): 의료 시나리오 실험 코드와 기준 집단 사전 점검
-- [docs/adr/](docs/adr/README.md): 설계 결정 기록 37건
+- [docs/adr/](docs/adr/README.md): 설계 결정 기록 38건
 - [docs/evaluation.md](docs/evaluation.md): 평가 통합 문서(evaluation_proto · eval-metrics)
 - [docs/rag_remeasure/](docs/rag_remeasure/README.md): RAG 기준 재측정 도구와 원본 대조 검증기
 - [docs/README.md](docs/README.md): 나머지 문서 안내

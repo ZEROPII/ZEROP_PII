@@ -406,7 +406,7 @@ export interface WorklistPatient {
   statusLabel: string;
   /** 진행 중인 진단 · 처방 · 관리 계획 수 (차트의 '진행 중'과 같다) */
   openItems: number;
-  /** 마지막 내원일 (차트의 최근 내원과 같은 날) */
+  /** 마지막 내원일 (차트 내원 이력의 마지막 날과 같은 날) */
   lastRecord: string | null;
   /** 이 의료진에게 열린 까닭: 담당 환자 · 협진 의뢰 · 담당 외 예외 열람 (ADR-0034 · ADR-0036). 로그인 없는 서버는 없음 */
   access?: EmrAccessVia;
@@ -494,9 +494,12 @@ export interface EmrChart {
   medications: ChartGroup;
   procedures: ChartGroup;
   carePlans: ChartGroup;
-  /** 최근 내원: 진료마다 그날 기록된 것 (최근 것부터) */
-  visits: { date: string; items: { kind: 'problems' | 'medications' | 'procedures' | 'carePlans'; label: string }[] }[];
-  /** 해마다 내원한 날 수 (마지막 내원 해까지 최근 10년) */
+  /**
+   * 내원: 날마다 그날 기록된 것 (최근 것부터, 같은 날 진료는 합침). first: 이 환자 기록에 처음 나온 이름 (새 진단 · 첫 시술 · 첫 처방).
+   * 하루 항목이 많으면 줄이고 more에 남은 수. 아주 오래된 내원은 빠질 수 있다 (날짜는 visitDates에 모두 있음)
+   */
+  visits: { date: string; items: { kind: 'problems' | 'medications' | 'procedures' | 'carePlans'; label: string; first?: boolean }[]; more?: number }[];
+  /** 해마다 내원한 날 수 (마지막 내원 해까지 최근 10년). 지금 화면은 visitDates로 센다 */
   yearly: { year: number; visits: number }[];
   visitDays: number;
   firstRecord: string | null;

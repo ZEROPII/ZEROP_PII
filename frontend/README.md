@@ -54,7 +54,7 @@ src/
   components/
     layout/   AppLayout(역할별 틀), ClinicianShell(EMR 머리줄), TopBar · CommandPalette(관제), ProtectionBadge
     clinic/   PatientBanner('지금 보는 환자' 띠), EmrCaseList, ClinicalChat, ClinicalMessage, ClinicValue(범위 · 비공개), CaseNotePanel
-    emr/      ChartSummary(차트 요약 · 내원 흐름), SimilarCaseBox(유사 사례 찾기 · 진료 지원 AI 열기 · 멈추기), ConsultDialog(협진 의뢰 보내기), BreakGlassDialog(담당 외 환자 열기, 등록번호)
+    emr/      ChartSummary(차트 요약), VisitHistory(내원 이력: 해마다 · 펼치면 날짜마다), SimilarCaseBox(유사 사례 찾기 · 진료 지원 AI 열기 · 멈추기), ConsultDialog(협진 의뢰 보내기), BreakGlassDialog(담당 외 환자 열기, 등록번호)
     chat/     ChatMessage, PrivacyHighlight, PrivacyExplanation (관제 쪽 숫자 있는 대화), ChatInput
     graph/    ClueGraph
     monitor/  QueueTable, SessionDetail(메시지 · 단서 그래프 · 질문 흐름), RevealDialog
