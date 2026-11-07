@@ -1,0 +1,7 @@
+extractor calls 251 [(('raw', False, True), 156), (('raw', True, False), 80), (('verify', '?', False), 9), (('verify', '?', True), 6)]
+34 fails turn0? Counter({True: 24, False: 10})
+34 failures -> (n attempts, n truncated): Counter({(3, 3): 34})
+all failed raw extraction turns (arm,turn,n,trunc): Counter({('C0', 't0', 3, 3): 24, ('C1', 't0', 3, 3): 24, ('C0', 't>=1', 3, 3): 18, ('C1', 't>=1', 3, 3): 10})
+parse fail & not truncated: 0
+parse ok & truncated: 0
+target truncated in 34 failing turns Counter({False: 25, True: 9})

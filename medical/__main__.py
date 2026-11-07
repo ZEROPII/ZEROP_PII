@@ -4,7 +4,7 @@
 #   python -m medical run --dry-run [--out …] [--limit 6]             가짜 LLM으로 배선 확인 (토큰 0, 숫자는 의미 없음)
 #   python -m medical run [--arms C0,C1,C1S] [--limit N] [--trials-per-cell 2] [--docs template|llm] [--docs-from 경로/RAG문서.jsonl]
 #                         [--model 모델] [--model-ROLE 모델] [--mode efficiency|exploration] [--budget 10]
-#   python -m medical report <실행 폴더>                              집계표 (LLM 0)
+#   python -m medical report <실행 폴더> [--out 폴더]                 집계표 + 진단표(추출 유효율·경계·지연·토큰) (LLM 0)
 #
 # 실제 실행은 .env(LLM_API_KEY 등)를 읽는다. 키 값은 어디에도 출력·기록하지 않는다.
 
@@ -52,6 +52,7 @@ def main(argv: list[str] | None = None) -> int:
         rn.add_argument(f"--model-{r.replace('_', '-')}", dest=f"model_{r}", default=None)
     rp = sub.add_parser("report")
     rp.add_argument("run_dir")
+    rp.add_argument("--out", default=None, help="집계 결과 폴더 (기본: 실행 폴더). 기존 실행 폴더를 건드리지 않으려면 지정")
     a = ap.parse_args(argv)
 
     if a.cmd == "audit":
@@ -66,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if a.cmd == "report":
         from medical.report import report, to_markdown
-        print(to_markdown(report(Path(a.run_dir))))
+        print(to_markdown(report(Path(a.run_dir), Path(a.out) if a.out else None)))
         return 0
 
     from medical.experiment import run_experiment

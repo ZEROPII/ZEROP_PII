@@ -11,7 +11,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import platform
 import random
+import subprocess
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -23,7 +25,7 @@ from medical.config import ROOT, MedicalConfig, MedicalPaths
 from medical.data import QUERY_POOL, STORE, MedicalData, split_cohort, write_split
 from medical.defense import MedicalDefender
 from medical.documents import load_documents, make_document, save_documents, facts_prompt_block
-from medical.llm import RoleLLM
+from medical.llm import MAX_TOKENS, TTFT_NOTE, TTFT_STATUS, RoleLLM
 from medical.prompts import PROMPTS, REWRITER_VERSION, prompt_hashes
 from medical.retrieval import QTYPES, code_sets, query_binding
 from medical.session import Context, dumps, run_trial_group
@@ -46,6 +48,35 @@ def plan_trials(data: MedicalData, split: dict[str, str], cfg: MedicalConfig, li
                 plan.append((p, qt, role))
     out = [(f"T{i:04d}", p, qt, role) for i, (p, qt, role) in enumerate(plan, 1)]
     return out[:limit] if limit else out
+
+
+def _git(*args: str, strip: bool = True) -> str | None:
+    try:
+        r = subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, timeout=20)
+        out = r.stdout.decode("utf-8", "replace")
+        return (out.strip() if strip else out.rstrip("\r\n")) if r.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def _git_commit() -> str:
+    """실행한 코드의 git 커밋 해시 (저장소가 아니면 unknown)."""
+    return _git("rev-parse", "HEAD") or "unknown"
+
+
+def git_state() -> dict[str, Any]:
+    """커밋·브랜치·작업 트리 상태 (읽기 전용, 자동 커밋 안 함). dirty면 tracked 변경분 diff의 sha256으로 상태를 식별한다."""
+    porcelain = _git("-c", "core.quotepath=false", "status", "--porcelain", "--untracked-files=no", "--", "medical", "core", strip=False)
+    diff = None
+    try:
+        diff = subprocess.run(["git", "-C", str(ROOT), "diff", "HEAD", "--", "medical", "core"], capture_output=True, timeout=20).stdout
+    except Exception:
+        pass
+    changed = [ln[3:] for ln in (porcelain or "").splitlines() if ln.strip()]
+    return dict(git_commit=_git_commit(), git_branch=_git("rev-parse", "--abbrev-ref", "HEAD") or "unknown",
+                git_dirty=bool(changed) if porcelain is not None else None, git_changed_files=changed,
+                git_diff_sha256=hashlib.sha256(diff).hexdigest() if changed and diff is not None else None,
+                git_scope="medical/, core/ (tracked files only)")
 
 
 def build_context(cfg: MedicalConfig, llm: RoleLLM, out: Path, *, paths: MedicalPaths | None = None,
@@ -81,7 +112,14 @@ def build_context(cfg: MedicalConfig, llm: RoleLLM, out: Path, *, paths: Medical
                 code={str(f.relative_to(ROOT)): _sha(f) for f in code_files}, prompts=prompt_hashes(),
                 cohort=dict(store=len(store), query_pool=sum(1 for s in split.values() if s == QUERY_POOL)),
                 documents=dict(modes={m: sum(1 for d in docs.values() if d["mode"] == m) for m in {d["mode"] for d in docs.values()}}),
-                started_at=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
+                started_at=time.strftime("%Y-%m-%dT%H:%M:%S%z"), machine=platform.platform(), **git_state(),
+                run_summary=dict(models=dict(cfg.models) or "(.env LLM_MODEL)", arms=list(cfg.arms), mode=cfg.mode, budget_B=cfg.budget_B,
+                                 trials_per_cell=cfg.trials_per_cell, max_extract_retries=cfg.max_extract_retries,
+                                 max_tokens=dict(MAX_TOKENS), llm_class=type(llm).__name__),
+                timing=dict(definition="v3_deployed_path: C0 = target + release, C1/C1S = target + extract + release; "
+                                       "C0 원 응답 추출은 sec_measure_extract (합계 제외)",
+                            clock="time.perf_counter (벽시계 경과, HTTP 재시도·대기 포함)", turn0="make_prefix에서 1회 실측, 갈래 간 공유",
+                            ttft_status=TTFT_STATUS, ttft_note=TTFT_NOTE))
     (out / "run_meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
     return ctx, split
 
@@ -89,9 +127,21 @@ def build_context(cfg: MedicalConfig, llm: RoleLLM, out: Path, *, paths: Medical
 def run_experiment(cfg: MedicalConfig, llm: RoleLLM, out: Path, *, limit: int | None = None, docs_from: Path | None = None,
                    store_limit: int | None = None, data: MedicalData | None = None,
                    progress: Callable[[str], None] = print) -> dict[str, Any]:
+    for f in ("턴기록.jsonl", "trial요약.json", "llm_usage.jsonl", "run_meta.json"):
+        if (out / f).exists():
+            raise FileExistsError(f"{out}에 이미 실행 결과({f})가 있습니다. 기존 결과를 덮어쓰지 않도록 새 --out 폴더를 지정하십시오.")
     out.mkdir(parents=True, exist_ok=True)
     ctx, split = build_context(cfg, llm, out, docs_from=docs_from, store_limit=store_limit, data=data)
-    plan = plan_trials(ctx.data, split, cfg, limit)
+    full_plan = plan_trials(ctx.data, split, cfg, None)
+    plan = full_plan[:limit] if limit else full_plan
+    # trial 선정 기록: plan_trials는 유형 3 × 역할 2 = 6칸 × trials_per_cell명이며 --limit은 그 목록을 자를 뿐 늘리지 않는다
+    meta_path = out / "run_meta.json"
+    meta = json.loads(meta_path.read_text(encoding="utf-8"))
+    meta["trial_selection"] = dict(cells=6, trials_per_cell=cfg.trials_per_cell, planned=len(full_plan), limit=limit, selected=len(plan),
+                                   trial_ids=[t[0] for t in plan], arms=list(cfg.arms), turn_budget=cfg.budget_B,
+                                   note="selected = min(limit, Σ칸 min(trials_per_cell, 해당 유형 적격 환자 수))")
+    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+    progress(f"trial 선정: 계획 {len(full_plan)} (6칸 × {cfg.trials_per_cell}), limit={limit} → 실행 {len(plan)}")
     doc_patient = {d["doc_id"]: p for p, d in ctx.docs.items()}
     trials: list[dict[str, Any]] = []
     with open(out / "턴기록.jsonl", "w", encoding="utf-8") as tf:

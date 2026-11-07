@@ -19,6 +19,7 @@ from __future__ import annotations
 import collections
 import json
 import random
+import time
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -29,7 +30,7 @@ from medical.bundle.normalize_bridge import Normalizer
 from medical.config import MedicalConfig
 from medical.data import MedicalData
 from medical.defense import MedicalDefender, format_changes
-from medical.llm import RoleLLM
+from medical.llm import TTFT_STATUS, RoleLLM, set_tag
 from medical.prompts import PROMPTS, REFUSAL_TEXT
 from medical.retrieval import code_sets, fill_case_query, query_binding, retrieve
 from medical.tracking import Case, CaseView, commit_view, known_cases_json, parse_json, view_of
@@ -78,17 +79,60 @@ class Prefix:
     obs0: list[dict[str, Any]]
     extract_ok0: bool
     extract_tries0: int
+    # 턴 0 계측 (갈래 간 공유되는 대상 AI 호출·원 응답 추출을 make_prefix에서 한 번 잰 값. 추정이 아니라 실측)
+    extract_calls0: list[dict[str, Any]] = field(default_factory=list)
+    sec_target0: float | None = None
+    sec_extract0: float | None = None
+
+
+FAIL_TRUNCATED, FAIL_JSON, FAIL_OTHER = "TRUNCATED", "JSON_PARSE_ERROR", "OTHER"
+
+
+def _failure_reason(parse_ok: bool, truncated: Any) -> tuple[str | None, list[str]]:
+    """(주 원인, 동반 증상). 성공 판정(parse_json 결과)은 바꾸지 않고 원인만 붙인다.
+    잘림 + 파싱 실패 → 주 원인 TRUNCATED, 동반 JSON_PARSE_ERROR. 잘림 여부를 알 수 없으면 OTHER."""
+    if parse_ok:
+        return None, []
+    if truncated is True:
+        return FAIL_TRUNCATED, [FAIL_JSON]
+    if truncated is False:
+        return FAIL_JSON, []
+    return FAIL_OTHER, [FAIL_JSON]
+
+
+def extract_diag(ctx: Context, query: str, response: str, known: str, docs: list[dict[str, Any]], *,
+                 purpose: str = "raw") -> tuple[list[dict[str, Any]], bool, int, list[dict[str, Any]]]:
+    """extract와 같은 판정 + 시도별 진단 기록 (call_id로 llm_usage.jsonl과 연결)."""
+    obs, n, calls = None, 0, []
+    for _ in range(ctx.cfg.max_extract_retries + 1):
+        n += 1
+        set_tag(ctx.llm, purpose=purpose, attempt=n)
+        text = ctx.llm.complete("extractor", PROMPTS["extractor"].format(cases=known, query=query, response=response), [],
+                                docs=docs, response=response)
+        obs = parse_json(text, "array")
+        u = ctx.llm.usage[-1] if getattr(ctx.llm, "usage", None) else {}
+        reason, co = _failure_reason(obs is not None, u.get("truncated"))
+        calls.append(dict(call_id=u.get("call_id"), purpose=purpose, attempt=n, retry_count=n - 1, output_tokens=u.get("output_tokens"),
+                          max_tokens=u.get("max_tokens"), truncated=u.get("truncated"), stop_reason=u.get("stop_reason"),
+                          latency_ms=u.get("latency_ms"), model=u.get("model"), parse_ok=obs is not None,
+                          failure_reason=reason, co_symptoms=co))
+        if obs is not None:
+            break
+    set_tag(ctx.llm, purpose=None, attempt=None)
+    return [o for o in (obs or []) if isinstance(o, dict)], obs is not None, n, calls
 
 
 def extract(ctx: Context, query: str, response: str, known: str, docs: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool, int]:
-    obs, n = None, 0
-    for _ in range(ctx.cfg.max_extract_retries + 1):
-        n += 1
-        obs = parse_json(ctx.llm.complete("extractor", PROMPTS["extractor"].format(cases=known, query=query, response=response), [],
-                                          docs=docs, response=response), "array")
-        if obs is not None:
-            break
-    return [o for o in (obs or []) if isinstance(o, dict)], obs is not None, n
+    obs, ok, n, _ = extract_diag(ctx, query, response, known, docs)
+    return obs, ok, n
+
+
+def _extraction_failure(calls: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """추출 블록 전체가 실패했을 때 요약: 마지막 시도의 원인(최종 판정을 만든 시도)과 시도별 원인."""
+    if not calls or calls[-1]["parse_ok"]:
+        return None
+    return dict(primary=calls[-1]["failure_reason"], attempt_reasons=[c["failure_reason"] for c in calls],
+                truncated_attempts=sum(1 for c in calls if c["truncated"] is True), attempts=len(calls))
 
 
 def make_prefix(ctx: Context, tid: str, qpid: str, qtype: str, role: str) -> Prefix:
@@ -102,12 +146,18 @@ def make_prefix(ctx: Context, tid: str, qpid: str, qtype: str, role: str) -> Pre
     docs = [ctx.docs[p] for p, _ in ret]
     system = PROMPTS["target_system"].format(n=len(docs), cases="\n\n".join(f"[사례{i}]\n{d['text']}" for i, d in enumerate(docs, 1)))
     op0 = rng.choice(["M1", "M3"])
+    set_tag(ctx.llm, trial_id=tid, arm="SHARED", turn=0, purpose="realize", attempt=None, release_attempt=None)
     q0, tries0 = realize(ctx.llm, ctx.cfg, base, "(사례 검색: 단서를 묻지 않음)", "CASE_RETRIEVAL", "-", "-", op0, role, [])
     fallback = q0 is None
     q0 = q0 or base
+    set_tag(ctx.llm, purpose="raw")
+    t_begin = time.perf_counter()
     raw0 = ctx.llm.complete("target", system, [{"role": "user", "content": q0}], docs=docs)
-    obs0, ok0, n0 = extract(ctx, q0, raw0, "[]", docs)
-    return Prefix(tid, qpid, qtype, role, b, cq["case_query_id"], base, docs, ret, system, op0, q0, tries0, fallback, raw0, obs0, ok0, n0)
+    t_target = time.perf_counter()
+    obs0, ok0, n0, calls0 = extract_diag(ctx, q0, raw0, "[]", docs)
+    t_extract = time.perf_counter()
+    return Prefix(tid, qpid, qtype, role, b, cq["case_query_id"], base, docs, ret, system, op0, q0, tries0, fallback, raw0, obs0, ok0, n0,
+                  extract_calls0=calls0, sec_target0=t_target - t_begin, sec_extract0=t_extract - t_target)
 
 
 @dataclass
@@ -153,9 +203,10 @@ class ArmRun:
         return []          # C1S: 빈 State. (C0은 게이트를 거치지 않는다)
 
     def _verify(self, query: str, text: str) -> tuple[bool, CaseView | None, list[dict[str, Any]], int]:
-        obs, ok, n = extract(self.ctx, query, text, known_cases_json(self.cases, self.order), self.p.docs)
+        obs, ok, n, calls = extract_diag(self.ctx, query, text, known_cases_json(self.cases, self.order), self.p.docs, purpose="verify")
+        self._verify_calls = calls          # 기록 전용 (release가 시도 기록에 붙인다)
         if not ok:
-            return False, None, [dict(reason="EXTRACTION_FAILED")], n
+            return False, None, [dict(reason="EXTRACTION_FAILED", failure=_extraction_failure(calls))], n
         v = view_of(obs, text, query, self.ctx.nz)
         checks, passed = [], True
         for ref in v.case_refs:
@@ -185,7 +236,8 @@ class ArmRun:
         util = round(sum(x.utility for x in decisions) / len(decisions), 4)
         attempts, n_ext = [], 0
         candidates = [("REWRITTEN", None)] * self.ctx.cfg.max_rewrite_retries + [("REWRITTEN_FALLBACK", "deterministic")]
-        for mode, kind in candidates:
+        for j, (mode, kind) in enumerate(candidates, 1):
+            set_tag(self.ctx.llm, purpose="rewrite", release_attempt=j)
             if kind is None:
                 text = self.ctx.llm.complete("rewriter", PROMPTS["rewriter"].format(changes=format_changes(changes), response=raw), [],
                                              plan=changes, response=raw).strip()
@@ -193,8 +245,9 @@ class ArmRun:
                 from medical.defense import apply_changes_deterministic
                 text = apply_changes_deterministic(raw, changes)
             ok, v, checks, n = self._verify(query, text)
+            set_tag(self.ctx.llm, release_attempt=None)
             n_ext += n
-            attempts.append(dict(mode=mode, text=text, ok=ok, checks=checks))
+            attempts.append(dict(mode=mode, text=text, ok=ok, checks=checks, extraction_calls=self._verify_calls))
             if ok and v is not None:
                 return Release(text, v, mode, plan_dicts, changes, attempts, util, n_ext)
         return Release(REFUSAL_TEXT, _empty_view(), "REFUSAL", plan_dicts, changes, attempts, 0.0 if decisions else None, n_ext)
@@ -203,10 +256,23 @@ class ArmRun:
 
     def _turn(self, turn: int, query: str, raw: str | None, raw_obs: list[dict[str, Any]] | None, raw_ok: bool | None,
               n_raw_ext: int, meta: dict[str, Any]) -> dict[str, Any]:
+        set_tag(self.ctx.llm, trial_id=self.p.trial_id, arm=self.arm, turn=turn, purpose=None, attempt=None, release_attempt=None)
         if raw is None:
+            set_tag(self.ctx.llm, purpose="raw")
+            t_begin = time.perf_counter()
             raw = self.ctx.llm.complete("target", self.p.system, self.msgs + [{"role": "user", "content": query}], docs=self.p.docs)
-            raw_obs, raw_ok, n_raw_ext = extract(self.ctx, query, raw, known_cases_json(self.cases, self.order), self.p.docs)
+            t_target = time.perf_counter()
+            raw_obs, raw_ok, n_raw_ext, raw_calls = extract_diag(self.ctx, query, raw, known_cases_json(self.cases, self.order), self.p.docs)
+            t_extract = time.perf_counter()
+            s_target, s_extract, shared = t_target - t_begin, t_extract - t_target, False
+        else:
+            # 턴 0: 대상 AI 호출·원 응답 추출은 make_prefix에서 한 번 실행·계측했다 (갈래 간 같은 값을 공유)
+            s_target, s_extract, shared, raw_calls = self.p.sec_target0, self.p.sec_extract0, True, self.p.extract_calls0
+        t_rel = time.perf_counter()
         rel = self.release(query, raw, raw_obs or [], bool(raw_ok))
+        s_release = time.perf_counter() - t_rel
+        set_tag(self.ctx.llm, purpose=None)
+        timing = self._timing(s_target, s_extract, s_release, shared)
         self.msgs += [{"role": "user", "content": query}, {"role": "assistant", "content": rel.text}]
         self.sent.append(query)
         commit_view(rel.view, self.cases, self.order)
@@ -225,9 +291,27 @@ class ArmRun:
         rec = dict(meta, trial_id=self.p.trial_id, arm=self.arm, turn=turn, query_text=query, raw_response_text=raw,
                    response_text=rel.text, release_mode=rel.mode, release_plans=rel.plans, release_changes=rel.changes,
                    release_attempts=rel.attempts, turn_utility=rel.utility, extraction_ok=bool(raw_ok), extraction_tries=n_raw_ext,
-                   release_extraction_tries=rel.extraction_tries, raw_observations=raw_obs, cases=cases_out)
+                   release_extraction_tries=rel.extraction_tries, raw_observations=raw_obs, cases=cases_out,
+                   extraction_calls=raw_calls, extraction_failure=_extraction_failure(raw_calls), **timing)
         self.log(rec)
         return rec
+
+    def _timing(self, s_target: float | None, s_extract: float | None, s_release: float, shared: bool) -> dict[str, Any]:
+        """배포 경로(deployed path) 응답 시간 (개발자 추가요청 v3 §2-1). 시계: time.perf_counter (벽시계 경과, 재시도·대기 포함).
+        C0      : sec_answer = sec_target + sec_release.  원 응답 추출은 평가용 → sec_measure_extract (합계 제외)
+        C1·C1S  : sec_answer = sec_target + sec_extract + sec_release.  sec_release = 방어 판정·재작성·확인 추출 (원 응답 추출 미포함)
+        세 구간은 겹치지 않는다. 합계는 반올림 전 값으로 낸다. 측정값이 없으면 None으로 두고 추정하지 않는다."""
+        r = lambda x: round(x, 3) if x is not None else None
+        if self.arm == "C0":
+            deployed, measure = (s_target, s_release), s_extract
+            sec_extract, path = None, "target+release"
+        else:
+            deployed, measure = (s_target, s_extract, s_release), None
+            sec_extract, path = s_extract, "target+extract+release"
+        answer = None if any(x is None for x in deployed) else sum(deployed)
+        return dict(sec_target=r(s_target), sec_extract=r(sec_extract), sec_release=r(s_release), sec_measure_extract=r(measure),
+                    sec_answer=r(answer), sec_ttft=None, ttft_status=TTFT_STATUS, timing_def="v3_deployed_path", answer_path=path,
+                    timing_shared_prefix=shared)
 
     def _finish(self, outcome: str, turns: int, n_attempts: int, n_invalid: int) -> dict[str, Any]:
         self.trial.update(outcome=outcome, turns=turns, mutation_attempts=n_attempts, invalid_mutations=n_invalid,
@@ -269,6 +353,8 @@ class ArmRun:
                 op = rng.choice(applicable_ops(seed, cfg.operators))
                 evtxt = {f"{A}:{g}": v for g, v in self.cases[A].events.items()}
                 filled = fill_seed(seed, key, state, self.ctx.data.N, f"{A} 환자", evtxt)
+                # 기록용: 변형·검사 호출은 다음 턴 번호로 남긴다 (무효 변형이면 그 턴은 생기지 않음)
+                set_tag(self.ctx.llm, trial_id=p.trial_id, arm=self.arm, turn=turn + 1, purpose="realize", attempt=None, release_attempt=None)
                 q, tries = realize(self.ctx.llm, cfg, filled, seed["target_qi"], seed["attack_objective"], seed["scenario_id"],
                                    f"{A} 환자", op, p.role, self.sent)
                 n_attempts += len(tries)

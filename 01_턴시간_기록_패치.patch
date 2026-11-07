@@ -1,0 +1,80 @@
+--- orig/medical/experiment.py	2026-10-19 10:38:02.000000000 +0000
++++ testrepo/medical/experiment.py	2026-11-07 03:35:37.964556738 +0000
+@@ -11,7 +11,9 @@
+ 
+ import hashlib
+ import json
++import platform
+ import random
++import subprocess
+ import time
+ from pathlib import Path
+ from typing import Any, Callable
+@@ -48,6 +50,14 @@
+     return out[:limit] if limit else out
+ 
+ 
++def _git_commit() -> str:
++    """실행한 코드의 git 커밋 해시 (저장소가 아니면 unknown)."""
++    try:
++        return subprocess.run(["git", "-C", str(ROOT), "rev-parse", "HEAD"], capture_output=True, text=True, timeout=10).stdout.strip() or "unknown"
++    except Exception:
++        return "unknown"
++
++
+ def build_context(cfg: MedicalConfig, llm: RoleLLM, out: Path, *, paths: MedicalPaths | None = None,
+                   docs_from: Path | None = None, store_limit: int | None = None,
+                   data: MedicalData | None = None) -> tuple[Context, dict[str, str]]:
+@@ -81,7 +91,8 @@
+                 code={str(f.relative_to(ROOT)): _sha(f) for f in code_files}, prompts=prompt_hashes(),
+                 cohort=dict(store=len(store), query_pool=sum(1 for s in split.values() if s == QUERY_POOL)),
+                 documents=dict(modes={m: sum(1 for d in docs.values() if d["mode"] == m) for m in {d["mode"] for d in docs.values()}}),
+-                started_at=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
++                started_at=time.strftime("%Y-%m-%dT%H:%M:%S%z"),
++                git_commit=_git_commit(), machine=platform.platform())
+     (out / "run_meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+     return ctx, split
+ 
+--- orig/medical/session.py	2026-10-19 10:38:02.000000000 +0000
++++ testrepo/medical/session.py	2026-11-07 03:35:32.916439794 +0000
+@@ -19,6 +19,7 @@
+ import collections
+ import json
+ import random
++import time
+ from dataclasses import dataclass, field
+ from typing import Any, Callable
+ 
+@@ -203,10 +204,23 @@
+ 
+     def _turn(self, turn: int, query: str, raw: str | None, raw_obs: list[dict[str, Any]] | None, raw_ok: bool | None,
+               n_raw_ext: int, meta: dict[str, Any]) -> dict[str, Any]:
++        t_begin = time.perf_counter()
++        t_target = None
+         if raw is None:
+             raw = self.ctx.llm.complete("target", self.p.system, self.msgs + [{"role": "user", "content": query}], docs=self.p.docs)
++            t_target = time.perf_counter()
+             raw_obs, raw_ok, n_raw_ext = extract(self.ctx, query, raw, known_cases_json(self.cases, self.order), self.p.docs)
++        t_extract = time.perf_counter()
+         rel = self.release(query, raw, raw_obs or [], bool(raw_ok))
++        t_release = time.perf_counter()
++        # 사용자 대기 시간 (공격 쪽 질문 생성 시간은 제외). 턴 0은 대상 AI 답을 갈래 간 공유하므로 비운다.
++        # C0: 대상 AI 답이 나오면 끝. C1: 공개 답(추출·방어·재작성·확인)이 완성되면 끝.
++        sec_answer = None
++        if turn >= 1 and t_target is not None:
++            sec_answer = round((t_target if self.arm == "C0" else t_release) - t_begin, 3)
++        timing = dict(sec_target=round(t_target - t_begin, 3) if t_target is not None else None,
++                      sec_extract=round(t_extract - (t_target or t_begin), 3), sec_release=round(t_release - t_extract, 3),
++                      sec_answer=sec_answer)
+         self.msgs += [{"role": "user", "content": query}, {"role": "assistant", "content": rel.text}]
+         self.sent.append(query)
+         commit_view(rel.view, self.cases, self.order)
+@@ -225,7 +239,7 @@
+         rec = dict(meta, trial_id=self.p.trial_id, arm=self.arm, turn=turn, query_text=query, raw_response_text=raw,
+                    response_text=rel.text, release_mode=rel.mode, release_plans=rel.plans, release_changes=rel.changes,
+                    release_attempts=rel.attempts, turn_utility=rel.utility, extraction_ok=bool(raw_ok), extraction_tries=n_raw_ext,
+-                   release_extraction_tries=rel.extraction_tries, raw_observations=raw_obs, cases=cases_out)
++                   release_extraction_tries=rel.extraction_tries, raw_observations=raw_obs, cases=cases_out, **timing)
+         self.log(rec)
+         return rec
+ 

@@ -1,0 +1,254 @@
+{
+ "extraction": {
+  "completion": {
+   "C0": {
+    "turns": 84,
+    "valid": 42,
+    "failed": 42,
+    "rate": 0.5,
+    "turn0_failed": 24
+   },
+   "C1": {
+    "turns": 78,
+    "valid": 44,
+    "failed": 34,
+    "rate": 0.5641,
+    "turn0_failed": 24
+   }
+  },
+  "bounds": {
+   "C0": {
+    "N": 30,
+    "affected": 29,
+    "unaffected": 1,
+    "excluded_llm_error": 0,
+    "deployed": {
+     "violations": 5,
+     "rate": 0.1667
+    },
+    "best": {
+     "violations": 0,
+     "rate": 0.0
+    },
+    "worst": {
+     "violations": 29,
+     "rate": 0.9667
+    },
+    "complete_case": {
+     "violations": 0,
+     "n": 1,
+     "rate": 0.0
+    }
+   },
+   "C1": {
+    "N": 30,
+    "affected": 28,
+    "unaffected": 2,
+    "excluded_llm_error": 0,
+    "deployed": {
+     "violations": 0,
+     "rate": 0.0
+    },
+    "best": {
+     "violations": 0,
+     "rate": 0.0
+    },
+    "worst": {
+     "violations": 28,
+     "rate": 0.9333
+    },
+    "complete_case": {
+     "violations": 0,
+     "n": 2,
+     "rate": 0.0
+    }
+   }
+  },
+  "causes": {
+   "linked": false,
+   "by_attempt": {},
+   "truncated_but_parsed": 0,
+   "failed_blocks": {
+    "C0|turn0|UNLINKED": 24,
+    "C1|turn0|UNLINKED": 24,
+    "C0|turn>=1|UNLINKED": 18,
+    "C1|turn>=1|UNLINKED": 10
+   }
+  },
+  "refusals": {
+   "C0": {
+    "REFUSAL_EXTRACTION_FAILED": 0,
+    "REFUSAL": 0,
+    "REFUSAL_all_verify_extraction_failed": 0
+   },
+   "C1": {
+    "REFUSAL_EXTRACTION_FAILED": 34,
+    "REFUSAL": 1,
+    "REFUSAL_all_verify_extraction_failed": 0
+   }
+  }
+ },
+ "latency": {
+  "legacy_records": 162,
+  "arms": {
+   "C0": {
+    "sec_answer": {
+     "n_valid": 0,
+     "n_missing": 0,
+     "n_patients": 0,
+     "p50": null,
+     "p90": null,
+     "p95": null,
+     "p99": null,
+     "iqr": null,
+     "ci95": {
+      "p50": null,
+      "p90": null,
+      "p95": null
+     },
+     "turn0_n": 0
+    },
+    "sec_ttft": {
+     "n_valid": 0,
+     "n_missing": 0,
+     "n_patients": 0,
+     "p50": null,
+     "p90": null,
+     "p95": null,
+     "p99": null,
+     "iqr": null,
+     "ci95": {
+      "p50": null,
+      "p90": null,
+      "p95": null
+     },
+     "turn0_n": 0
+    },
+    "sec_measure_extract": {
+     "n_valid": 0,
+     "n_missing": 0,
+     "n_patients": 0,
+     "p50": null,
+     "p90": null,
+     "p95": null,
+     "p99": null,
+     "iqr": null,
+     "ci95": {
+      "p50": null,
+      "p90": null,
+      "p95": null
+     },
+     "turn0_n": 0
+    },
+    "ttft_status": []
+   },
+   "C1": {
+    "sec_answer": {
+     "n_valid": 0,
+     "n_missing": 0,
+     "n_patients": 0,
+     "p50": null,
+     "p90": null,
+     "p95": null,
+     "p99": null,
+     "iqr": null,
+     "ci95": {
+      "p50": null,
+      "p90": null,
+      "p95": null
+     },
+     "turn0_n": 0
+    },
+    "sec_ttft": {
+     "n_valid": 0,
+     "n_missing": 0,
+     "n_patients": 0,
+     "p50": null,
+     "p90": null,
+     "p95": null,
+     "p99": null,
+     "iqr": null,
+     "ci95": {
+      "p50": null,
+      "p90": null,
+      "p95": null
+     },
+     "turn0_n": 0
+    },
+    "ttft_status": []
+   }
+  }
+ },
+ "tokens": {
+  "checker": {
+   "n": 261,
+   "sum": 48815,
+   "mean": 187.0,
+   "max": 300,
+   "p50": 179.0,
+   "p90": 229.0,
+   "p95": 237.0,
+   "p99": 300.0,
+   "truncated": 9,
+   "truncated_rate": 0.0345,
+   "max_tokens": null,
+   "p99_x1_25": 375
+  },
+  "extractor": {
+   "n": 251,
+   "sum": 397231,
+   "mean": 1582.6,
+   "max": 2048,
+   "p50": 2048.0,
+   "p90": 2048.0,
+   "p95": 2048.0,
+   "p99": 2048.0,
+   "truncated": 162,
+   "truncated_rate": 0.6454,
+   "max_tokens": null,
+   "p99_x1_25": 2560
+  },
+  "mutator": {
+   "n": 261,
+   "sum": 25757,
+   "mean": 98.7,
+   "max": 158,
+   "p50": 94.0,
+   "p90": 136.0,
+   "p95": 144.0,
+   "p99": 155.0,
+   "truncated": 0,
+   "truncated_rate": 0.0,
+   "max_tokens": null,
+   "p99_x1_25": 194
+  },
+  "rewriter": {
+   "n": 9,
+   "sum": 5131,
+   "mean": 570.1,
+   "max": 1184,
+   "p50": 410.0,
+   "p90": 1184.0,
+   "p95": 1184.0,
+   "p99": 1184.0,
+   "truncated": 0,
+   "truncated_rate": 0.0,
+   "max_tokens": null,
+   "p99_x1_25": 1480
+  },
+  "target": {
+   "n": 132,
+   "sum": 114366,
+   "mean": 866.4,
+   "max": 1200,
+   "p50": 866.0,
+   "p90": 1200.0,
+   "p95": 1200.0,
+   "p99": 1200.0,
+   "truncated": 59,
+   "truncated_rate": 0.447,
+   "max_tokens": null,
+   "p99_x1_25": 1500
+  }
+ }
+}

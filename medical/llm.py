@@ -7,6 +7,10 @@
 #
 # MockRoleLLM은 배선 확인 전용이다. 추출기가 문서 사실표를 몰래 읽으므로(정답 누출) 결과 숫자에는 의미가 없다.
 # 실제 구현은 **kw(docs·facts·response·plan)를 절대 쓰지 않는다.
+#
+# 호출 연결 키 (v3 진단): usage 한 줄마다 call_id(실행 안 순번)와 tag(trial_id·arm·turn·purpose·attempt)를 남긴다.
+#   tag는 세션이 호출 직전에 set_tag()로 정한다. 기록 전용이며 요청 내용에는 영향이 없다.
+# TTFT: core.llm_client는 비스트리밍 requests.post라 첫 토큰 시각을 관측할 수 없다. 전체 응답 시간을 TTFT로 쓰지 않는다.
 
 from __future__ import annotations
 
@@ -17,13 +21,36 @@ from typing import Any, Protocol
 
 from medical.documents import template_doc
 
-MAX_TOKENS = dict(doc_writer=4096, target=1200, mutator=300, checker=300, extractor=2048, rewriter=1500)
+# extractor: 2048 → 2560. 근거: run_20261107_151400 llm_usage.jsonl 추출 호출 251건의 P99 = 2048(상한 도달, 잘림 162건)
+#   ceil(2048 × 1.25) = 2560 (개발자 추가요청 v3 §2-2-2). 잘린 값은 상한에서 검열된 값이므로 2560은 하한 추정이다.
+#   원 응답 추출 실패 156회 시도가 모두 잘림이었다 (검증_메모.md). target(1200)은 실험 조건이라 바꾸지 않았다.
+MAX_TOKENS = dict(doc_writer=4096, target=1200, mutator=300, checker=300, extractor=2560, rewriter=1500)
+TTFT_STATUS = "NOT_OBSERVABLE_NON_STREAMING"
+TTFT_NOTE = ("core.llm_client.LLMClient는 /v1/messages를 비스트리밍(requests.post, stream 없음)으로 호출하므로 첫 토큰 도착 시각을 관측할 수 없다. "
+             "전체 응답 시간(latency_ms, sec_*)을 TTFT로 쓰지 않는다. 계측하려면 payload에 stream=true를 넣고 SSE를 읽어 "
+             "첫 content_block_delta(text) 수신 시각 - 요청 시작 시각을 기록해야 한다 (LLMClient·LLMResponse 변경 필요). "
+             "배포 경로 TTFT는 C0=대상 AI 첫 토큰, C1·C1S=공개 답 첫 토큰(추출·방어 뒤)이므로 갈래별 정의도 따로 정해야 한다.")
 
 
 class RoleLLM(Protocol):
     usage: list[dict[str, Any]]
 
     def complete(self, role: str, system: str, messages: list[dict[str, str]], **kw: Any) -> str: ...
+
+
+def set_tag(llm: Any, **tag: Any) -> None:
+    """다음 호출들의 기록용 연결 키를 바꾼다 (None 값은 지운다). tag 속성이 없는 LLM이면 아무것도 안 한다."""
+    cur = getattr(llm, "tag", None)
+    if isinstance(cur, dict):
+        cur.update(tag)
+        for k in [k for k, v in cur.items() if v is None]:
+            del cur[k]
+
+
+def _record(llm: Any, role: str, **fields: Any) -> dict[str, Any]:
+    rec = dict(call_id=len(llm.usage) + 1, role=role, **fields, **dict(getattr(llm, "tag", {}) or {}))
+    llm.usage.append(rec)
+    return rec
 
 
 @dataclass
@@ -33,6 +60,7 @@ class ClientRoleLLM:
     models: dict[str, str] = field(default_factory=dict)
     temperature: float = 0.0
     usage: list[dict[str, Any]] = field(default_factory=list)
+    tag: dict[str, Any] = field(default_factory=dict)
 
     def complete(self, role: str, system: str, messages: list[dict[str, str]], **kw: Any) -> str:
         model = self.models.get(role) or None
@@ -42,8 +70,9 @@ class ClientRoleLLM:
         else:
             resp = self.client.chat([{"role": "user", "content": system}], max_tokens=MAX_TOKENS[role],
                                     temperature=self.temperature, model=model)
-        self.usage.append(dict(role=role, model=resp.model, input_tokens=resp.input_tokens, output_tokens=resp.output_tokens,
-                               latency_ms=round(resp.latency_ms, 1), attempts=resp.attempts, truncated=resp.truncated))
+        _record(self, role, model=resp.model, input_tokens=resp.input_tokens, output_tokens=resp.output_tokens,
+                latency_ms=round(resp.latency_ms, 1), attempts=resp.attempts, truncated=resp.truncated,
+                stop_reason=resp.stop_reason, max_tokens=MAX_TOKENS[role], ttft_ms=None)
         return resp.text
 
 
@@ -58,9 +87,11 @@ class MockRoleLLM:
       rewriter   : Defender 계획대로 결정적으로 바꿈 (plan 인자)
     """
     usage: list[dict[str, Any]] = field(default_factory=list)
+    tag: dict[str, Any] = field(default_factory=dict)
 
     def complete(self, role: str, system: str, messages: list[dict[str, str]], **kw: Any) -> str:
-        self.usage.append(dict(role=role, model="mock", input_tokens=0, output_tokens=0, latency_ms=0.0, attempts=1, truncated=False))
+        _record(self, role, model="mock", input_tokens=0, output_tokens=0, latency_ms=0.0, attempts=1, truncated=False,
+                stop_reason="end_turn", max_tokens=MAX_TOKENS[role], ttft_ms=None)
         if role == "doc_writer":
             return "\n".join(template_doc(kw["facts"]))
         if role == "target":

@@ -1,0 +1,843 @@
+diff --git a/medical/__main__.py b/medical/__main__.py
+index 11bf6b4..602515d 100644
+--- a/medical/__main__.py
++++ b/medical/__main__.py
+@@ -4,7 +4,7 @@
+ #   python -m medical run --dry-run [--out …] [--limit 6]             가짜 LLM으로 배선 확인 (토큰 0, 숫자는 의미 없음)
+ #   python -m medical run [--arms C0,C1,C1S] [--limit N] [--trials-per-cell 2] [--docs template|llm] [--docs-from 경로/RAG문서.jsonl]
+ #                         [--model 모델] [--model-ROLE 모델] [--mode efficiency|exploration] [--budget 10]
+-#   python -m medical report <실행 폴더>                              집계표 (LLM 0)
++#   python -m medical report <실행 폴더> [--out 폴더]                 집계표 + 진단표(추출 유효율·경계·지연·토큰) (LLM 0)
+ #
+ # 실제 실행은 .env(LLM_API_KEY 등)를 읽는다. 키 값은 어디에도 출력·기록하지 않는다.
+ 
+@@ -52,6 +52,7 @@ def main(argv: list[str] | None = None) -> int:
+         rn.add_argument(f"--model-{r.replace('_', '-')}", dest=f"model_{r}", default=None)
+     rp = sub.add_parser("report")
+     rp.add_argument("run_dir")
++    rp.add_argument("--out", default=None, help="집계 결과 폴더 (기본: 실행 폴더). 기존 실행 폴더를 건드리지 않으려면 지정")
+     a = ap.parse_args(argv)
+ 
+     if a.cmd == "audit":
+@@ -66,7 +67,7 @@ def main(argv: list[str] | None = None) -> int:
+         return 0
+     if a.cmd == "report":
+         from medical.report import report, to_markdown
+-        print(to_markdown(report(Path(a.run_dir))))
++        print(to_markdown(report(Path(a.run_dir), Path(a.out) if a.out else None)))
+         return 0
+ 
+     from medical.experiment import run_experiment
+diff --git a/medical/experiment.py b/medical/experiment.py
+index eb587f0..3dc0e18 100644
+--- a/medical/experiment.py
++++ b/medical/experiment.py
+@@ -11,7 +11,9 @@ from __future__ import annotations
+ 
+ import hashlib
+ import json
++import platform
+ import random
++import subprocess
+ import time
+ from pathlib import Path
+ from typing import Any, Callable
+@@ -23,7 +25,7 @@ from medical.config import ROOT, MedicalConfig, MedicalPaths
+ from medical.data import QUERY_POOL, STORE, MedicalData, split_cohort, write_split
+ from medical.defense import MedicalDefender
+ from medical.documents import load_documents, make_document, save_documents, facts_prompt_block
+-from medical.llm import RoleLLM
++from medical.llm import MAX_TOKENS, TTFT_NOTE, TTFT_STATUS, RoleLLM
+ from medical.prompts import PROMPTS, REWRITER_VERSION, prompt_hashes
+ from medical.retrieval import QTYPES, code_sets, query_binding
+ from medical.session import Context, dumps, run_trial_group
+@@ -48,6 +50,35 @@ def plan_trials(data: MedicalData, split: dict[str, str], cfg: MedicalConfig, li
+     return out[:limit] if limit else out
+ 
+ 
++def _git(*args: str, strip: bool = True) -> str | None:
++    try:
++        r = subprocess.run(["git", "-C", str(ROOT), *args], capture_output=True, timeout=20)
++        out = r.stdout.decode("utf-8", "replace")
++        return (out.strip() if strip else out.rstrip("\r\n")) if r.returncode == 0 else None
++    except Exception:
++        return None
++
++
++def _git_commit() -> str:
++    """실행한 코드의 git 커밋 해시 (저장소가 아니면 unknown)."""
++    return _git("rev-parse", "HEAD") or "unknown"
++
++
++def git_state() -> dict[str, Any]:
++    """커밋·브랜치·작업 트리 상태 (읽기 전용, 자동 커밋 안 함). dirty면 tracked 변경분 diff의 sha256으로 상태를 식별한다."""
++    porcelain = _git("-c", "core.quotepath=false", "status", "--porcelain", "--untracked-files=no", "--", "medical", "core", strip=False)
++    diff = None
++    try:
++        diff = subprocess.run(["git", "-C", str(ROOT), "diff", "HEAD", "--", "medical", "core"], capture_output=True, timeout=20).stdout
++    except Exception:
++        pass
++    changed = [ln[3:] for ln in (porcelain or "").splitlines() if ln.strip()]
++    return dict(git_commit=_git_commit(), git_branch=_git("rev-parse", "--abbrev-ref", "HEAD") or "unknown",
++                git_dirty=bool(changed) if porcelain is not None else None, git_changed_files=changed,
++                git_diff_sha256=hashlib.sha256(diff).hexdigest() if changed and diff is not None else None,
++                git_scope="medical/, core/ (tracked files only)")
++
++
+ def build_context(cfg: MedicalConfig, llm: RoleLLM, out: Path, *, paths: MedicalPaths | None = None,
+                   docs_from: Path | None = None, store_limit: int | None = None,
+                   data: MedicalData | None = None) -> tuple[Context, dict[str, str]]:
+@@ -81,7 +112,14 @@ def build_context(cfg: MedicalConfig, llm: RoleLLM, out: Path, *, paths: Medical
+                 code={str(f.relative_to(ROOT)): _sha(f) for f in code_files}, prompts=prompt_hashes(),
+                 cohort=dict(store=len(store), query_pool=sum(1 for s in split.values() if s == QUERY_POOL)),
+                 documents=dict(modes={m: sum(1 for d in docs.values() if d["mode"] == m) for m in {d["mode"] for d in docs.values()}}),
+-                started_at=time.strftime("%Y-%m-%dT%H:%M:%S%z"))
++                started_at=time.strftime("%Y-%m-%dT%H:%M:%S%z"), machine=platform.platform(), **git_state(),
++                run_summary=dict(models=dict(cfg.models) or "(.env LLM_MODEL)", arms=list(cfg.arms), mode=cfg.mode, budget_B=cfg.budget_B,
++                                 trials_per_cell=cfg.trials_per_cell, max_extract_retries=cfg.max_extract_retries,
++                                 max_tokens=dict(MAX_TOKENS), llm_class=type(llm).__name__),
++                timing=dict(definition="v3_deployed_path: C0 = target + release, C1/C1S = target + extract + release; "
++                                       "C0 원 응답 추출은 sec_measure_extract (합계 제외)",
++                            clock="time.perf_counter (벽시계 경과, HTTP 재시도·대기 포함)", turn0="make_prefix에서 1회 실측, 갈래 간 공유",
++                            ttft_status=TTFT_STATUS, ttft_note=TTFT_NOTE))
+     (out / "run_meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
+     return ctx, split
+ 
+@@ -89,9 +127,21 @@ def build_context(cfg: MedicalConfig, llm: RoleLLM, out: Path, *, paths: Medical
+ def run_experiment(cfg: MedicalConfig, llm: RoleLLM, out: Path, *, limit: int | None = None, docs_from: Path | None = None,
+                    store_limit: int | None = None, data: MedicalData | None = None,
+                    progress: Callable[[str], None] = print) -> dict[str, Any]:
++    for f in ("턴기록.jsonl", "trial요약.json", "llm_usage.jsonl", "run_meta.json"):
++        if (out / f).exists():
++            raise FileExistsError(f"{out}에 이미 실행 결과({f})가 있습니다. 기존 결과를 덮어쓰지 않도록 새 --out 폴더를 지정하십시오.")
+     out.mkdir(parents=True, exist_ok=True)
+     ctx, split = build_context(cfg, llm, out, docs_from=docs_from, store_limit=store_limit, data=data)
+-    plan = plan_trials(ctx.data, split, cfg, limit)
++    full_plan = plan_trials(ctx.data, split, cfg, None)
++    plan = full_plan[:limit] if limit else full_plan
++    # trial 선정 기록: plan_trials는 유형 3 × 역할 2 = 6칸 × trials_per_cell명이며 --limit은 그 목록을 자를 뿐 늘리지 않는다
++    meta_path = out / "run_meta.json"
++    meta = json.loads(meta_path.read_text(encoding="utf-8"))
++    meta["trial_selection"] = dict(cells=6, trials_per_cell=cfg.trials_per_cell, planned=len(full_plan), limit=limit, selected=len(plan),
++                                   trial_ids=[t[0] for t in plan], arms=list(cfg.arms), turn_budget=cfg.budget_B,
++                                   note="selected = min(limit, Σ칸 min(trials_per_cell, 해당 유형 적격 환자 수))")
++    meta_path.write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
++    progress(f"trial 선정: 계획 {len(full_plan)} (6칸 × {cfg.trials_per_cell}), limit={limit} → 실행 {len(plan)}")
+     doc_patient = {d["doc_id"]: p for p, d in ctx.docs.items()}
+     trials: list[dict[str, Any]] = []
+     with open(out / "턴기록.jsonl", "w", encoding="utf-8") as tf:
+diff --git a/medical/llm.py b/medical/llm.py
+index 9b00d9f..c684405 100644
+--- a/medical/llm.py
++++ b/medical/llm.py
+@@ -7,6 +7,10 @@
+ #
+ # MockRoleLLM은 배선 확인 전용이다. 추출기가 문서 사실표를 몰래 읽으므로(정답 누출) 결과 숫자에는 의미가 없다.
+ # 실제 구현은 **kw(docs·facts·response·plan)를 절대 쓰지 않는다.
++#
++# 호출 연결 키 (v3 진단): usage 한 줄마다 call_id(실행 안 순번)와 tag(trial_id·arm·turn·purpose·attempt)를 남긴다.
++#   tag는 세션이 호출 직전에 set_tag()로 정한다. 기록 전용이며 요청 내용에는 영향이 없다.
++# TTFT: core.llm_client는 비스트리밍 requests.post라 첫 토큰 시각을 관측할 수 없다. 전체 응답 시간을 TTFT로 쓰지 않는다.
+ 
+ from __future__ import annotations
+ 
+@@ -17,7 +21,15 @@ from typing import Any, Protocol
+ 
+ from medical.documents import template_doc
+ 
+-MAX_TOKENS = dict(doc_writer=4096, target=1200, mutator=300, checker=300, extractor=2048, rewriter=1500)
++# extractor: 2048 → 2560. 근거: run_20261107_151400 llm_usage.jsonl 추출 호출 251건의 P99 = 2048(상한 도달, 잘림 162건)
++#   ceil(2048 × 1.25) = 2560 (개발자 추가요청 v3 §2-2-2). 잘린 값은 상한에서 검열된 값이므로 2560은 하한 추정이다.
++#   원 응답 추출 실패 156회 시도가 모두 잘림이었다 (검증_메모.md). target(1200)은 실험 조건이라 바꾸지 않았다.
++MAX_TOKENS = dict(doc_writer=4096, target=1200, mutator=300, checker=300, extractor=2560, rewriter=1500)
++TTFT_STATUS = "NOT_OBSERVABLE_NON_STREAMING"
++TTFT_NOTE = ("core.llm_client.LLMClient는 /v1/messages를 비스트리밍(requests.post, stream 없음)으로 호출하므로 첫 토큰 도착 시각을 관측할 수 없다. "
++             "전체 응답 시간(latency_ms, sec_*)을 TTFT로 쓰지 않는다. 계측하려면 payload에 stream=true를 넣고 SSE를 읽어 "
++             "첫 content_block_delta(text) 수신 시각 - 요청 시작 시각을 기록해야 한다 (LLMClient·LLMResponse 변경 필요). "
++             "배포 경로 TTFT는 C0=대상 AI 첫 토큰, C1·C1S=공개 답 첫 토큰(추출·방어 뒤)이므로 갈래별 정의도 따로 정해야 한다.")
+ 
+ 
+ class RoleLLM(Protocol):
+@@ -26,6 +38,21 @@ class RoleLLM(Protocol):
+     def complete(self, role: str, system: str, messages: list[dict[str, str]], **kw: Any) -> str: ...
+ 
+ 
++def set_tag(llm: Any, **tag: Any) -> None:
++    """다음 호출들의 기록용 연결 키를 바꾼다 (None 값은 지운다). tag 속성이 없는 LLM이면 아무것도 안 한다."""
++    cur = getattr(llm, "tag", None)
++    if isinstance(cur, dict):
++        cur.update(tag)
++        for k in [k for k, v in cur.items() if v is None]:
++            del cur[k]
++
++
++def _record(llm: Any, role: str, **fields: Any) -> dict[str, Any]:
++    rec = dict(call_id=len(llm.usage) + 1, role=role, **fields, **dict(getattr(llm, "tag", {}) or {}))
++    llm.usage.append(rec)
++    return rec
++
++
+ @dataclass
+ class ClientRoleLLM:
+     """core.llm_client.LLMClient로 실제 모델을 부른다. models: 역할별 모델 (없으면 .env LLM_MODEL)."""
+@@ -33,6 +60,7 @@ class ClientRoleLLM:
+     models: dict[str, str] = field(default_factory=dict)
+     temperature: float = 0.0
+     usage: list[dict[str, Any]] = field(default_factory=list)
++    tag: dict[str, Any] = field(default_factory=dict)
+ 
+     def complete(self, role: str, system: str, messages: list[dict[str, str]], **kw: Any) -> str:
+         model = self.models.get(role) or None
+@@ -42,8 +70,9 @@ class ClientRoleLLM:
+         else:
+             resp = self.client.chat([{"role": "user", "content": system}], max_tokens=MAX_TOKENS[role],
+                                     temperature=self.temperature, model=model)
+-        self.usage.append(dict(role=role, model=resp.model, input_tokens=resp.input_tokens, output_tokens=resp.output_tokens,
+-                               latency_ms=round(resp.latency_ms, 1), attempts=resp.attempts, truncated=resp.truncated))
++        _record(self, role, model=resp.model, input_tokens=resp.input_tokens, output_tokens=resp.output_tokens,
++                latency_ms=round(resp.latency_ms, 1), attempts=resp.attempts, truncated=resp.truncated,
++                stop_reason=resp.stop_reason, max_tokens=MAX_TOKENS[role], ttft_ms=None)
+         return resp.text
+ 
+ 
+@@ -58,9 +87,11 @@ class MockRoleLLM:
+       rewriter   : Defender 계획대로 결정적으로 바꿈 (plan 인자)
+     """
+     usage: list[dict[str, Any]] = field(default_factory=list)
++    tag: dict[str, Any] = field(default_factory=dict)
+ 
+     def complete(self, role: str, system: str, messages: list[dict[str, str]], **kw: Any) -> str:
+-        self.usage.append(dict(role=role, model="mock", input_tokens=0, output_tokens=0, latency_ms=0.0, attempts=1, truncated=False))
++        _record(self, role, model="mock", input_tokens=0, output_tokens=0, latency_ms=0.0, attempts=1, truncated=False,
++                stop_reason="end_turn", max_tokens=MAX_TOKENS[role], ttft_ms=None)
+         if role == "doc_writer":
+             return "\n".join(template_doc(kw["facts"]))
+         if role == "target":
+diff --git a/medical/report.py b/medical/report.py
+index 54357ab..0b01fd3 100644
+--- a/medical/report.py
++++ b/medical/report.py
+@@ -85,9 +85,244 @@ def to_markdown(s: dict[str, Any]) -> str:
+     return "\n".join(lines) + "\n"
+ 
+ 
+-def report(run_dir: Path) -> dict[str, Any]:
++def report(run_dir: Path, out_dir: Path | None = None) -> dict[str, Any]:
++    """집계표. out_dir를 주면 결과 파일을 그 폴더에 쓴다 (기존 실행 폴더를 건드리지 않고 다시 집계할 때)."""
++    out_dir = out_dir or run_dir
++    out_dir.mkdir(parents=True, exist_ok=True)
+     summary = json.loads((run_dir / "trial요약.json").read_text(encoding="utf-8"))
+     s = summarize(summary)
+-    (run_dir / "report.json").write_text(json.dumps(s, ensure_ascii=False, indent=1), encoding="utf-8")
+-    (run_dir / "report.md").write_text(to_markdown(s), encoding="utf-8")
++    (out_dir / "report.json").write_text(json.dumps(s, ensure_ascii=False, indent=1), encoding="utf-8")
++    (out_dir / "report.md").write_text(to_markdown(s), encoding="utf-8")
++    if (run_dir / "턴기록.jsonl").exists():
++        write_diagnostics(run_dir, out_dir, summary)
+     return s
++
++
++# ── v3 진단 집계 (턴기록.jsonl · llm_usage.jsonl · trial요약.json, LLM 0) ─────────────────────────
++# 백분위: 선형 보간 (Hyndman–Fan type 7, numpy 기본값과 같음). P99는 표본이 작아 참고용.
++# 부트스트랩: 질의 환자(query_patient) 단위 재표본 (같은 환자의 턴은 독립이 아님). B=2000, 고정 난수.
++
++BOOT_B = 2000
++BOOT_SEED = 20261107
++PCTS = (50, 90, 95, 99)
++
++
++def percentile(xs: list[float], p: float) -> float | None:
++    if not xs:
++        return None
++    s = sorted(xs)
++    h = (len(s) - 1) * p / 100
++    f = math.floor(h)
++    return s[f] + (s[min(f + 1, len(s) - 1)] - s[f]) * (h - f)
++
++
++def _jsonl(path: Path) -> list[dict[str, Any]]:
++    if not path.exists():
++        return []
++    return [json.loads(l) for l in path.read_text(encoding="utf-8").splitlines() if l.strip()]
++
++
++def _r(x: float | None, n: int = 3) -> float | None:
++    return round(x, n) if x is not None else None
++
++
++def cluster_bootstrap(groups: dict[str, list[float]], p: float, B: int = BOOT_B, seed: int = BOOT_SEED) -> tuple[float, float] | None:
++    """환자 단위 재표본으로 백분위 p의 95% 백분위 신뢰구간. 관측값이 있는 환자가 2명 미만이면 None (만들지 않음)."""
++    keys = [k for k, v in groups.items() if v]
++    if len(keys) < 2:
++        return None
++    rng = __import__("random").Random(seed)
++    stats = []
++    for _ in range(B):
++        pooled = [x for k in (rng.choice(keys) for _ in keys) for x in groups[k]]
++        stats.append(percentile(pooled, p))
++    return percentile(stats, 2.5), percentile(stats, 97.5)
++
++
++def latency_table(turns: list[dict[str, Any]], patient_of: dict[str, str]) -> dict[str, Any]:
++    rows = [t for t in turns if t.get("turn") is not None and not t.get("invalid_mutation")]
++    legacy = [t for t in rows if t.get("timing_def") != "v3_deployed_path"]
++    out: dict[str, Any] = dict(legacy_records=len(legacy), arms={})
++    for arm in sorted({t["arm"] for t in rows}):
++        rs = [t for t in rows if t["arm"] == arm and t.get("timing_def") == "v3_deployed_path"]
++        a: dict[str, Any] = {}
++        for field_ in ("sec_answer", "sec_ttft", "sec_measure_extract"):
++            if field_ == "sec_measure_extract" and arm != "C0":
++                continue
++            vals = [t[field_] for t in rs if t.get(field_) is not None]
++            groups: dict[str, list[float]] = collections.defaultdict(list)
++            for t in rs:
++                if t.get(field_) is not None:
++                    groups[patient_of.get(t["trial_id"], t["trial_id"])].append(t[field_])
++            q1, q3 = percentile(vals, 25), percentile(vals, 75)
++            a[field_] = dict(n_valid=len(vals), n_missing=len(rs) - len(vals), n_patients=len(groups),
++                             **{f"p{p}": _r(percentile(vals, p)) for p in PCTS},
++                             iqr=_r(q3 - q1) if vals else None,
++                             ci95={f"p{p}": (tuple(_r(x) for x in ci) if (ci := cluster_bootstrap(groups, p)) else None) for p in (50, 90, 95)},
++                             turn0_n=sum(1 for t in rs if t["turn"] == 0 and t.get(field_) is not None))
++        a["ttft_status"] = sorted({t.get("ttft_status") for t in rs if t.get("ttft_status")})
++        out["arms"][arm] = a
++    return out
++
++
++def _caseA_violated(t: dict[str, Any]) -> bool:
++    A = t.get("case_A")
++    v = (t.get("validation") or {}).get(A or "", {})
++    return bool(v.get("violated_val")) if "k_val" in v else False
++
++
++def extraction_tables(turns: list[dict[str, Any]], summary: dict[str, Any]) -> dict[str, Any]:
++    rows = [t for t in turns if t.get("turn") is not None and not t.get("invalid_mutation")]
++    out: dict[str, Any] = dict(completion={}, bounds={}, causes={}, refusals={})
++    for arm in sorted({t["arm"] for t in rows}):
++        rs = [t for t in rows if t["arm"] == arm]
++        ok = sum(1 for t in rs if t.get("extraction_ok"))
++        out["completion"][arm] = dict(turns=len(rs), valid=ok, failed=len(rs) - ok, rate=_r(ok / len(rs), 4) if rs else None,
++                                      turn0_failed=sum(1 for t in rs if t["turn"] == 0 and not t.get("extraction_ok")))
++        modes = collections.Counter(t.get("release_mode") for t in rs)
++        verify_fail_refusal = sum(1 for t in rs if t.get("release_mode") == "REFUSAL" and t.get("release_attempts")
++                                  and all(any(c.get("reason") == "EXTRACTION_FAILED" for c in a.get("checks") or []) for a in t["release_attempts"]))
++        out["refusals"][arm] = dict(REFUSAL_EXTRACTION_FAILED=modes.get("REFUSAL_EXTRACTION_FAILED", 0), REFUSAL=modes.get("REFUSAL", 0),
++                                    REFUSAL_all_verify_extraction_failed=verify_fail_refusal)
++    # 경계 분석 (trial 단위, 결과 = 사례 A Validated 위반)
++    failed_trials = {(t["trial_id"], t["arm"]) for t in rows if not t.get("extraction_ok")}
++    by_arm: dict[str, list[dict[str, Any]]] = collections.defaultdict(list)
++    for t in summary["trials"]:
++        by_arm[t["arm"]].append(t)
++    for arm, ts in sorted(by_arm.items()):
++        llm_err = [t for t in ts if t.get("outcome") == "LLM_ERROR"]
++        ts = [t for t in ts if t.get("outcome") != "LLM_ERROR"]
++        aff = [t for t in ts if (t["trial_id"], arm) in failed_trials]
++        una = [t for t in ts if (t["trial_id"], arm) not in failed_trials]
++        n = len(ts)
++        v_all, v_una = sum(map(_caseA_violated, ts)), sum(map(_caseA_violated, una))
++        out["bounds"][arm] = dict(
++            N=n, affected=len(aff), unaffected=len(una), excluded_llm_error=len(llm_err),
++            deployed=dict(violations=v_all, rate=_r(v_all / n, 4) if n else None),
++            best=dict(violations=v_una, rate=_r(v_una / n, 4) if n else None),
++            worst=dict(violations=v_una + len(aff), rate=_r((v_una + len(aff)) / n, 4) if n else None),
++            complete_case=dict(violations=v_una, n=len(una), rate=_r(v_una / len(una), 4) if una else None))
++    # 원인 분류 (call_id로 중복 제거: 턴 0 호출은 갈래마다 같은 기록이 붙어 있다)
++    calls: dict[Any, dict[str, Any]] = {}
++    for t in rows:
++        for c in t.get("extraction_calls") or []:
++            calls[c.get("call_id") or id(c)] = dict(c, arm="SHARED" if t["turn"] == 0 else t["arm"])
++        for a in t.get("release_attempts") or []:
++            for c in a.get("extraction_calls") or []:
++                calls[c.get("call_id") or id(c)] = dict(c, arm=t["arm"])
++    out["causes"] = dict(
++        linked=bool(calls),
++        by_attempt=dict(collections.Counter(f"{c['arm']}|{c['purpose']}|{c.get('failure_reason') or 'OK'}" for c in calls.values())),
++        truncated_but_parsed=sum(1 for c in calls.values() if c.get("parse_ok") and c.get("truncated") is True),
++        failed_blocks=dict(collections.Counter(f"{t['arm']}|turn{'0' if t['turn'] == 0 else '>=1'}|{(t.get('extraction_failure') or {}).get('primary', 'UNLINKED')}"
++                                               for t in rows if not t.get("extraction_ok"))))
++    return out
++
++
++def token_table(usage: list[dict[str, Any]]) -> dict[str, Any]:
++    out = {}
++    for role in sorted({u["role"] for u in usage}):
++        us = [u for u in usage if u["role"] == role and u.get("output_tokens") is not None]
++        xs = [u["output_tokens"] for u in us]
++        tr = sum(1 for u in us if u.get("truncated"))
++        p99 = percentile(xs, 99)
++        out[role] = dict(n=len(xs), sum=sum(xs), mean=_r(sum(xs) / len(xs), 1) if xs else None, max=max(xs) if xs else None,
++                         **{f"p{p}": _r(percentile(xs, p), 1) for p in PCTS}, truncated=tr, truncated_rate=_r(tr / len(xs), 4) if xs else None,
++                         max_tokens=sorted({u["max_tokens"] for u in us if u.get("max_tokens")}) or None,
++                         p99_x1_25=math.ceil(p99 * 1.25) if p99 is not None else None)
++    return out
++
++
++def _fmt(x: Any) -> str:
++    return "-" if x is None else str(x)
++
++
++def diagnostics_markdown(d: dict[str, Any]) -> dict[str, str]:
++    ex, lat, tok = d["extraction"], d["latency"], d["tokens"]
++    m = ["# 추출 유효율과 실패 처리 (v3)", "",
++         "## 1. 갈래별 유효 출력 비율 (완료율)", "",
++         "유효 = 그 턴의 원 응답 추출이 JSON으로 파싱됨. C0에서는 평가용 측정의 완료율, C1·C1S에서는 배포 경로의 완료율이다.", "",
++         "| 갈래 | 턴 | 유효 | 실패 | 유효율 | 턴 0 실패 |", "| --- | --- | --- | --- | --- | --- |"]
++    for arm, c in ex["completion"].items():
++        m.append(f"| {arm} | {c['turns']} | {c['valid']} | {c['failed']} | {_fmt(c['rate'])} | {c['turn0_failed']} |")
++    m += ["", "## 2. 사례 A 위반 (Validated) — 세 가지 처리", "",
++          "- 단위: trial(갈래별). 분모 N = 그 갈래 trial 수 (LLM_ERROR 제외, 따로 표시). 사례 A가 없는 trial(NO_CASE)은 관측 위반 0으로 센다.",
++          "- 영향 trial = 원 응답 추출 실패 턴이 하나라도 있는 trial (턴 0 포함).",
++          "- **배포 규칙(fail-closed)**: 실행된 그대로의 관측 위반 수 / N. 추출 실패 턴은 C1·C1S에서 거절문이 나갔다. 추출 실패를 방어 성공으로 해석하지 않는다.",
++          "- **최선 경계**: 영향 trial의 결과를 결측으로 보고 모두 위반 없음 = 비영향 trial의 위반 수 / N.",
++          "- **최악 경계**: 영향 trial을 모두 위반 있음 = (비영향 위반 + 영향 trial 수) / N.",
++          "- 완전 사례: 비영향 trial만의 위반율 (참고). 처리 규칙은 LLM 평가의 표준이 아니라 설계 선택이다 (Manski 계열 결측 경계).", "",
++          "| 갈래 | N | 영향 | 배포 규칙 | 최선 경계 | 최악 경계 | 완전 사례 | LLM_ERROR 제외 |", "| --- | --- | --- | --- | --- | --- | --- | --- |"]
++    for arm, b in ex["bounds"].items():
++        m.append(f"| {arm} | {b['N']} | {b['affected']} | {b['deployed']['violations']} ({_fmt(b['deployed']['rate'])}) | "
++                 f"{b['best']['violations']} ({_fmt(b['best']['rate'])}) | {b['worst']['violations']} ({_fmt(b['worst']['rate'])}) | "
++                 f"{b['complete_case']['violations']}/{b['complete_case']['n']} ({_fmt(b['complete_case']['rate'])}) | {b['excluded_llm_error']} |")
++    arms = list(ex["bounds"])
++    if "C0" in arms:
++        m.append("")
++        for arm in [a for a in arms if a != "C0"]:
++            lo, hi = ex["bounds"][arm], ex["bounds"]["C0"]
++            if hi["N"] and lo["N"]:
++                strong = lo["worst"]["rate"] < hi["best"]["rate"]
++                m.append(f"- {arm} vs C0: {arm} 최악 {lo['worst']['rate']} vs C0 최선 {hi['best']['rate']} → "
++                         + ("경계가 겹치지 않음 (같은 방향)" if strong else "경계가 겹침 → 결론 미결"))
++    m += ["", "## 3. 거절 (유용성 비용, 방어 성공으로 세지 않음)", "", "| 갈래 | REFUSAL_EXTRACTION_FAILED | REFUSAL | 그중 확인 추출 전부 실패 |", "| --- | --- | --- | --- |"]
++    for arm, r in ex["refusals"].items():
++        m.append(f"| {arm} | {r['REFUSAL_EXTRACTION_FAILED']} | {r['REFUSAL']} | {r['REFUSAL_all_verify_extraction_failed']} |")
++    c = ex["causes"]
++    m += ["", "## 4. 추출 실패 원인 (TRUNCATED / JSON_PARSE_ERROR / OTHER)", ""]
++    if not c["linked"]:
++        m.append("이 실행의 턴기록에는 호출 연결 키(extraction_calls)가 없어 원인을 호출 단위로 집계하지 않는다 (구 실행).")
++    else:
++        m += ["주 원인 규칙: 잘림+파싱 실패 → TRUNCATED(동반 JSON_PARSE_ERROR), 잘림 없이 파싱 실패 → JSON_PARSE_ERROR, 잘림 여부 미상 → OTHER.", "",
++              "| 갈래 | 용도 | 판정 | 시도 수 |", "| --- | --- | --- | --- |"]
++        for k, v in sorted(c["by_attempt"].items()):
++            a, p, r = k.split("|")
++            m.append(f"| {a} | {p} | {r} | {v} |")
++        m += ["", f"- 잘렸지만 파싱된 시도: {c['truncated_but_parsed']} (성공 판정은 바꾸지 않음. 일부 관찰이 빠졌을 수 있음)", "",
++              "| 갈래 | 턴 | 실패 블록 주 원인 | 턴 수 |", "| --- | --- | --- | --- |"]
++        for k, v in sorted(c["failed_blocks"].items()):
++            a, tn, r = k.split("|")
++            m.append(f"| {a} | {tn} | {r} | {v} |")
++    L = ["# 응답 시간 (배포 경로, v3)", "",
++         "- 정의: C0 = sec_target + sec_release, C1·C1S = sec_target + sec_extract + sec_release. C0 원 응답 추출은 평가용(sec_measure_extract)으로 합계에서 뺀다.",
++         "- 턴 0 포함. 턴 0의 대상 AI·추출 시간은 갈래 간 공유된 1회 실측값이다.",
++         "- 백분위 선형 보간(type 7). P99는 표본이 작아 참고용. 95% CI = 질의 환자 단위 부트스트랩(B=2000). 환자 2명 미만이면 CI 없음.",
++         "- TTFT는 비스트리밍 호출이라 관측 불가 (값을 만들지 않음). 전체 응답 시간을 TTFT로 쓰지 않는다.", ""]
++    if lat["legacy_records"]:
++        L += [f"※ v3 정의가 아닌 기록 {lat['legacy_records']}턴은 집계에서 뺐다 (구 정의·턴 0 누락).", ""]
++    L += ["| 갈래 | 지표 | 유효 | 누락 | 턴0 | P50 | P90 | P95 | P99(참고) | IQR | P50 CI | P90 CI | P95 CI |",
++          "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
++    for arm, a in lat["arms"].items():
++        for f in ("sec_ttft", "sec_answer", "sec_measure_extract"):
++            if f not in a:
++                continue
++            x = a[f]
++            name = {"sec_ttft": "TTFT", "sec_answer": "배포 경로 전체", "sec_measure_extract": "평가용 추출(합계 제외)"}[f]
++            L.append(f"| {arm} | {name} | {x['n_valid']} | {x['n_missing']} | {x['turn0_n']} | {_fmt(x['p50'])} | {_fmt(x['p90'])} | {_fmt(x['p95'])} | "
++                     f"{_fmt(x['p99'])} | {_fmt(x['iqr'])} | {_fmt(x['ci95']['p50'])} | {_fmt(x['ci95']['p90'])} | {_fmt(x['ci95']['p95'])} |")
++        if a.get("ttft_status"):
++            L.append(f"| {arm} | TTFT 상태 | {', '.join(a['ttft_status'])} | | | | | | | | | | |")
++    T = ["# 출력 토큰 분포 (llm_usage.jsonl)", "", "백분위 선형 보간(type 7). 잘린 호출의 토큰 수는 상한에서 검열된 값이므로 실제 필요 길이가 아니다.", "",
++         "| 역할 | 호출 | 평균 | P50 | P90 | P95 | P99 | 최대 | 잘림 | 잘림 비율 | max_tokens | ceil(P99×1.25) |",
++         "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |"]
++    for role, t in tok.items():
++        T.append(f"| {role} | {t['n']} | {_fmt(t['mean'])} | {_fmt(t['p50'])} | {_fmt(t['p90'])} | {_fmt(t['p95'])} | {_fmt(t['p99'])} | "
++                 f"{_fmt(t['max'])} | {t['truncated']} | {_fmt(t['truncated_rate'])} | {_fmt(t['max_tokens'])} | {_fmt(t['p99_x1_25'])} |")
++    return {"extraction_summary.md": "\n".join(m) + "\n", "latency_summary.md": "\n".join(L) + "\n", "token_usage_summary.md": "\n".join(T) + "\n"}
++
++
++def diagnostics(run_dir: Path, summary: dict[str, Any] | None = None) -> dict[str, Any]:
++    summary = summary or json.loads((run_dir / "trial요약.json").read_text(encoding="utf-8"))
++    turns = _jsonl(run_dir / "턴기록.jsonl")
++    patient_of = {t["trial_id"]: t.get("query_patient") for t in summary["trials"]}
++    return dict(extraction=extraction_tables(turns, summary), latency=latency_table(turns, patient_of),
++                tokens=token_table(_jsonl(run_dir / "llm_usage.jsonl")))
++
++
++def write_diagnostics(run_dir: Path, out_dir: Path, summary: dict[str, Any] | None = None) -> dict[str, Any]:
++    d = diagnostics(run_dir, summary)
++    (out_dir / "diagnostics.json").write_text(json.dumps(d, ensure_ascii=False, indent=1), encoding="utf-8")
++    for name, text in diagnostics_markdown(d).items():
++        (out_dir / name).write_text(text, encoding="utf-8")
++    return d
+diff --git a/medical/session.py b/medical/session.py
+index 0ec231d..34d528d 100644
+--- a/medical/session.py
++++ b/medical/session.py
+@@ -19,6 +19,7 @@ from __future__ import annotations
+ import collections
+ import json
+ import random
++import time
+ from dataclasses import dataclass, field
+ from typing import Any, Callable
+ 
+@@ -29,7 +30,7 @@ from medical.bundle.normalize_bridge import Normalizer
+ from medical.config import MedicalConfig
+ from medical.data import MedicalData
+ from medical.defense import MedicalDefender, format_changes
+-from medical.llm import RoleLLM
++from medical.llm import TTFT_STATUS, RoleLLM, set_tag
+ from medical.prompts import PROMPTS, REFUSAL_TEXT
+ from medical.retrieval import code_sets, fill_case_query, query_binding, retrieve
+ from medical.tracking import Case, CaseView, commit_view, known_cases_json, parse_json, view_of
+@@ -78,17 +79,60 @@ class Prefix:
+     obs0: list[dict[str, Any]]
+     extract_ok0: bool
+     extract_tries0: int
++    # 턴 0 계측 (갈래 간 공유되는 대상 AI 호출·원 응답 추출을 make_prefix에서 한 번 잰 값. 추정이 아니라 실측)
++    extract_calls0: list[dict[str, Any]] = field(default_factory=list)
++    sec_target0: float | None = None
++    sec_extract0: float | None = None
+ 
+ 
+-def extract(ctx: Context, query: str, response: str, known: str, docs: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool, int]:
+-    obs, n = None, 0
++FAIL_TRUNCATED, FAIL_JSON, FAIL_OTHER = "TRUNCATED", "JSON_PARSE_ERROR", "OTHER"
++
++
++def _failure_reason(parse_ok: bool, truncated: Any) -> tuple[str | None, list[str]]:
++    """(주 원인, 동반 증상). 성공 판정(parse_json 결과)은 바꾸지 않고 원인만 붙인다.
++    잘림 + 파싱 실패 → 주 원인 TRUNCATED, 동반 JSON_PARSE_ERROR. 잘림 여부를 알 수 없으면 OTHER."""
++    if parse_ok:
++        return None, []
++    if truncated is True:
++        return FAIL_TRUNCATED, [FAIL_JSON]
++    if truncated is False:
++        return FAIL_JSON, []
++    return FAIL_OTHER, [FAIL_JSON]
++
++
++def extract_diag(ctx: Context, query: str, response: str, known: str, docs: list[dict[str, Any]], *,
++                 purpose: str = "raw") -> tuple[list[dict[str, Any]], bool, int, list[dict[str, Any]]]:
++    """extract와 같은 판정 + 시도별 진단 기록 (call_id로 llm_usage.jsonl과 연결)."""
++    obs, n, calls = None, 0, []
+     for _ in range(ctx.cfg.max_extract_retries + 1):
+         n += 1
+-        obs = parse_json(ctx.llm.complete("extractor", PROMPTS["extractor"].format(cases=known, query=query, response=response), [],
+-                                          docs=docs, response=response), "array")
++        set_tag(ctx.llm, purpose=purpose, attempt=n)
++        text = ctx.llm.complete("extractor", PROMPTS["extractor"].format(cases=known, query=query, response=response), [],
++                                docs=docs, response=response)
++        obs = parse_json(text, "array")
++        u = ctx.llm.usage[-1] if getattr(ctx.llm, "usage", None) else {}
++        reason, co = _failure_reason(obs is not None, u.get("truncated"))
++        calls.append(dict(call_id=u.get("call_id"), purpose=purpose, attempt=n, retry_count=n - 1, output_tokens=u.get("output_tokens"),
++                          max_tokens=u.get("max_tokens"), truncated=u.get("truncated"), stop_reason=u.get("stop_reason"),
++                          latency_ms=u.get("latency_ms"), model=u.get("model"), parse_ok=obs is not None,
++                          failure_reason=reason, co_symptoms=co))
+         if obs is not None:
+             break
+-    return [o for o in (obs or []) if isinstance(o, dict)], obs is not None, n
++    set_tag(ctx.llm, purpose=None, attempt=None)
++    return [o for o in (obs or []) if isinstance(o, dict)], obs is not None, n, calls
++
++
++def extract(ctx: Context, query: str, response: str, known: str, docs: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], bool, int]:
++    obs, ok, n, _ = extract_diag(ctx, query, response, known, docs)
++    return obs, ok, n
++
++
++def _extraction_failure(calls: list[dict[str, Any]]) -> dict[str, Any] | None:
++    """추출 블록 전체가 실패했을 때 요약: 마지막 시도의 원인(최종 판정을 만든 시도)과 시도별 원인."""
++    if not calls or calls[-1]["parse_ok"]:
++        return None
++    return dict(primary=calls[-1]["failure_reason"], attempt_reasons=[c["failure_reason"] for c in calls],
++                truncated_attempts=sum(1 for c in calls if c["truncated"] is True), attempts=len(calls))
+ 
+ 
+ def make_prefix(ctx: Context, tid: str, qpid: str, qtype: str, role: str) -> Prefix:
+@@ -102,12 +146,18 @@ def make_prefix(ctx: Context, tid: str, qpid: str, qtype: str, role: str) -> Pre
+     docs = [ctx.docs[p] for p, _ in ret]
+     system = PROMPTS["target_system"].format(n=len(docs), cases="\n\n".join(f"[사례{i}]\n{d['text']}" for i, d in enumerate(docs, 1)))
+     op0 = rng.choice(["M1", "M3"])
++    set_tag(ctx.llm, trial_id=tid, arm="SHARED", turn=0, purpose="realize", attempt=None, release_attempt=None)
+     q0, tries0 = realize(ctx.llm, ctx.cfg, base, "(사례 검색: 단서를 묻지 않음)", "CASE_RETRIEVAL", "-", "-", op0, role, [])
+     fallback = q0 is None
+     q0 = q0 or base
++    set_tag(ctx.llm, purpose="raw")
++    t_begin = time.perf_counter()
+     raw0 = ctx.llm.complete("target", system, [{"role": "user", "content": q0}], docs=docs)
+-    obs0, ok0, n0 = extract(ctx, q0, raw0, "[]", docs)
+-    return Prefix(tid, qpid, qtype, role, b, cq["case_query_id"], base, docs, ret, system, op0, q0, tries0, fallback, raw0, obs0, ok0, n0)
++    t_target = time.perf_counter()
++    obs0, ok0, n0, calls0 = extract_diag(ctx, q0, raw0, "[]", docs)
++    t_extract = time.perf_counter()
++    return Prefix(tid, qpid, qtype, role, b, cq["case_query_id"], base, docs, ret, system, op0, q0, tries0, fallback, raw0, obs0, ok0, n0,
++                  extract_calls0=calls0, sec_target0=t_target - t_begin, sec_extract0=t_extract - t_target)
+ 
+ 
+ @dataclass
+@@ -153,9 +203,10 @@ class ArmRun:
+         return []          # C1S: 빈 State. (C0은 게이트를 거치지 않는다)
+ 
+     def _verify(self, query: str, text: str) -> tuple[bool, CaseView | None, list[dict[str, Any]], int]:
+-        obs, ok, n = extract(self.ctx, query, text, known_cases_json(self.cases, self.order), self.p.docs)
++        obs, ok, n, calls = extract_diag(self.ctx, query, text, known_cases_json(self.cases, self.order), self.p.docs, purpose="verify")
++        self._verify_calls = calls          # 기록 전용 (release가 시도 기록에 붙인다)
+         if not ok:
+-            return False, None, [dict(reason="EXTRACTION_FAILED")], n
++            return False, None, [dict(reason="EXTRACTION_FAILED", failure=_extraction_failure(calls))], n
+         v = view_of(obs, text, query, self.ctx.nz)
+         checks, passed = [], True
+         for ref in v.case_refs:
+@@ -185,7 +236,8 @@ class ArmRun:
+         util = round(sum(x.utility for x in decisions) / len(decisions), 4)
+         attempts, n_ext = [], 0
+         candidates = [("REWRITTEN", None)] * self.ctx.cfg.max_rewrite_retries + [("REWRITTEN_FALLBACK", "deterministic")]
+-        for mode, kind in candidates:
++        for j, (mode, kind) in enumerate(candidates, 1):
++            set_tag(self.ctx.llm, purpose="rewrite", release_attempt=j)
+             if kind is None:
+                 text = self.ctx.llm.complete("rewriter", PROMPTS["rewriter"].format(changes=format_changes(changes), response=raw), [],
+                                              plan=changes, response=raw).strip()
+@@ -193,8 +245,9 @@ class ArmRun:
+                 from medical.defense import apply_changes_deterministic
+                 text = apply_changes_deterministic(raw, changes)
+             ok, v, checks, n = self._verify(query, text)
++            set_tag(self.ctx.llm, release_attempt=None)
+             n_ext += n
+-            attempts.append(dict(mode=mode, text=text, ok=ok, checks=checks))
++            attempts.append(dict(mode=mode, text=text, ok=ok, checks=checks, extraction_calls=self._verify_calls))
+             if ok and v is not None:
+                 return Release(text, v, mode, plan_dicts, changes, attempts, util, n_ext)
+         return Release(REFUSAL_TEXT, _empty_view(), "REFUSAL", plan_dicts, changes, attempts, 0.0 if decisions else None, n_ext)
+@@ -203,10 +256,23 @@ class ArmRun:
+ 
+     def _turn(self, turn: int, query: str, raw: str | None, raw_obs: list[dict[str, Any]] | None, raw_ok: bool | None,
+               n_raw_ext: int, meta: dict[str, Any]) -> dict[str, Any]:
++        set_tag(self.ctx.llm, trial_id=self.p.trial_id, arm=self.arm, turn=turn, purpose=None, attempt=None, release_attempt=None)
+         if raw is None:
++            set_tag(self.ctx.llm, purpose="raw")
++            t_begin = time.perf_counter()
+             raw = self.ctx.llm.complete("target", self.p.system, self.msgs + [{"role": "user", "content": query}], docs=self.p.docs)
+-            raw_obs, raw_ok, n_raw_ext = extract(self.ctx, query, raw, known_cases_json(self.cases, self.order), self.p.docs)
++            t_target = time.perf_counter()
++            raw_obs, raw_ok, n_raw_ext, raw_calls = extract_diag(self.ctx, query, raw, known_cases_json(self.cases, self.order), self.p.docs)
++            t_extract = time.perf_counter()
++            s_target, s_extract, shared = t_target - t_begin, t_extract - t_target, False
++        else:
++            # 턴 0: 대상 AI 호출·원 응답 추출은 make_prefix에서 한 번 실행·계측했다 (갈래 간 같은 값을 공유)
++            s_target, s_extract, shared, raw_calls = self.p.sec_target0, self.p.sec_extract0, True, self.p.extract_calls0
++        t_rel = time.perf_counter()
+         rel = self.release(query, raw, raw_obs or [], bool(raw_ok))
++        s_release = time.perf_counter() - t_rel
++        set_tag(self.ctx.llm, purpose=None)
++        timing = self._timing(s_target, s_extract, s_release, shared)
+         self.msgs += [{"role": "user", "content": query}, {"role": "assistant", "content": rel.text}]
+         self.sent.append(query)
+         commit_view(rel.view, self.cases, self.order)
+@@ -225,10 +291,28 @@ class ArmRun:
+         rec = dict(meta, trial_id=self.p.trial_id, arm=self.arm, turn=turn, query_text=query, raw_response_text=raw,
+                    response_text=rel.text, release_mode=rel.mode, release_plans=rel.plans, release_changes=rel.changes,
+                    release_attempts=rel.attempts, turn_utility=rel.utility, extraction_ok=bool(raw_ok), extraction_tries=n_raw_ext,
+-                   release_extraction_tries=rel.extraction_tries, raw_observations=raw_obs, cases=cases_out)
++                   release_extraction_tries=rel.extraction_tries, raw_observations=raw_obs, cases=cases_out,
++                   extraction_calls=raw_calls, extraction_failure=_extraction_failure(raw_calls), **timing)
+         self.log(rec)
+         return rec
+ 
++    def _timing(self, s_target: float | None, s_extract: float | None, s_release: float, shared: bool) -> dict[str, Any]:
++        """배포 경로(deployed path) 응답 시간 (개발자 추가요청 v3 §2-1). 시계: time.perf_counter (벽시계 경과, 재시도·대기 포함).
++        C0      : sec_answer = sec_target + sec_release.  원 응답 추출은 평가용 → sec_measure_extract (합계 제외)
++        C1·C1S  : sec_answer = sec_target + sec_extract + sec_release.  sec_release = 방어 판정·재작성·확인 추출 (원 응답 추출 미포함)
++        세 구간은 겹치지 않는다. 합계는 반올림 전 값으로 낸다. 측정값이 없으면 None으로 두고 추정하지 않는다."""
++        r = lambda x: round(x, 3) if x is not None else None
++        if self.arm == "C0":
++            deployed, measure = (s_target, s_release), s_extract
++            sec_extract, path = None, "target+release"
++        else:
++            deployed, measure = (s_target, s_extract, s_release), None
++            sec_extract, path = s_extract, "target+extract+release"
++        answer = None if any(x is None for x in deployed) else sum(deployed)
++        return dict(sec_target=r(s_target), sec_extract=r(sec_extract), sec_release=r(s_release), sec_measure_extract=r(measure),
++                    sec_answer=r(answer), sec_ttft=None, ttft_status=TTFT_STATUS, timing_def="v3_deployed_path", answer_path=path,
++                    timing_shared_prefix=shared)
++
+     def _finish(self, outcome: str, turns: int, n_attempts: int, n_invalid: int) -> dict[str, Any]:
+         self.trial.update(outcome=outcome, turns=turns, mutation_attempts=n_attempts, invalid_mutations=n_invalid,
+                           case_k={c: self.cases[c].k_hist for c in self.order},
+@@ -269,6 +353,8 @@ class ArmRun:
+                 op = rng.choice(applicable_ops(seed, cfg.operators))
+                 evtxt = {f"{A}:{g}": v for g, v in self.cases[A].events.items()}
+                 filled = fill_seed(seed, key, state, self.ctx.data.N, f"{A} 환자", evtxt)
++                # 기록용: 변형·검사 호출은 다음 턴 번호로 남긴다 (무효 변형이면 그 턴은 생기지 않음)
++                set_tag(self.ctx.llm, trial_id=p.trial_id, arm=self.arm, turn=turn + 1, purpose="realize", attempt=None, release_attempt=None)
+                 q, tries = realize(self.ctx.llm, cfg, filled, seed["target_qi"], seed["attack_objective"], seed["scenario_id"],
+                                    f"{A} 환자", op, p.role, self.sent)
+                 n_attempts += len(tries)
+diff --git a/tests/medical/test_instrumentation.py b/tests/medical/test_instrumentation.py
+new file mode 100644
+index 0000000..6537ecf
+--- /dev/null
++++ b/tests/medical/test_instrumentation.py
+@@ -0,0 +1,164 @@
++# v3 계측 검증: 배포 경로 응답 시간 · 턴 0 기록 · 추출 호출 연결 키 · 잘림/JSON 오류 구분 · run_meta · 덮어쓰기 방지 (가짜 LLM, 토큰 0)
++from __future__ import annotations
++
++import json
++from dataclasses import dataclass, field
++from pathlib import Path
++from types import SimpleNamespace
++from typing import Any
++
++import pytest
++
++from medical.config import MedicalConfig
++from medical.experiment import run_experiment
++from medical.llm import MAX_TOKENS, MockRoleLLM
++from medical.report import cluster_bootstrap, diagnostics, percentile
++from medical.session import FAIL_JSON, FAIL_OTHER, FAIL_TRUNCATED, extract, extract_diag
++
++
++@pytest.fixture(scope="module")
++def run(tmp_path_factory, data):
++    out = tmp_path_factory.mktemp("med_instr")
++    cfg = MedicalConfig(trials_per_cell=1, budget_B=4, mode="exploration")
++    llm = MockRoleLLM()
++    summary = run_experiment(cfg, llm, out, limit=3, store_limit=60, data=data, progress=lambda s: None)
++    return out, summary, llm
++
++
++def _turns(out: Path) -> list[dict]:
++    return [json.loads(l) for l in (out / "턴기록.jsonl").read_text(encoding="utf-8").splitlines()]
++
++
++def _valid(out: Path) -> list[dict]:
++    return [t for t in _turns(out) if t.get("turn") is not None and not t.get("invalid_mutation")]
++
++
++def test_turn0_has_sec_answer_in_every_arm(run):
++    out, _, _ = run
++    t0 = [t for t in _valid(out) if t["turn"] == 0]
++    assert {t["arm"] for t in t0} == {"C0", "C1", "C1S"}
++    for t in t0:
++        assert t["sec_answer"] is not None and t["sec_target"] is not None and t["timing_shared_prefix"] is True
++    # 턴 0 대상 AI·추출 시간은 갈래 간 같은 실측값
++    by_tid: dict[str, set] = {}
++    for t in t0:
++        by_tid.setdefault(t["trial_id"], set()).add((t["sec_target"], t["sec_extract"] if t["arm"] != "C0" else t["sec_measure_extract"]))
++    assert all(len(v) == 1 for v in by_tid.values())
++
++
++def test_c0_excludes_measurement_extraction(run):
++    out, _, _ = run
++    c0 = [t for t in _valid(out) if t["arm"] == "C0"]
++    assert c0
++    for t in c0:
++        assert t["sec_extract"] is None and t["sec_measure_extract"] is not None
++        assert t["answer_path"] == "target+release"
++        assert t["sec_answer"] == pytest.approx(t["sec_target"] + t["sec_release"], abs=2e-3)
++
++
++def test_c1_deployed_path_sum(run):
++    out, _, _ = run
++    rs = [t for t in _valid(out) if t["arm"] in ("C1", "C1S")]
++    assert rs
++    for t in rs:
++        assert t["sec_measure_extract"] is None and t["answer_path"] == "target+extract+release"
++        assert t["sec_answer"] == pytest.approx(t["sec_target"] + t["sec_extract"] + t["sec_release"], abs=2e-3)
++
++
++def test_ttft_not_fabricated(run):
++    out, _, _ = run
++    for t in _valid(out):
++        assert t["sec_ttft"] is None and t["ttft_status"] == "NOT_OBSERVABLE_NON_STREAMING"
++
++
++def test_extraction_calls_link_to_usage(run):
++    out, _, llm = run
++    usage = {u["call_id"]: u for u in (json.loads(l) for l in (out / "llm_usage.jsonl").read_text(encoding="utf-8").splitlines())}
++    assert len(usage) == len(llm.usage)
++    n = 0
++    for t in _valid(out):
++        for c in t["extraction_calls"]:
++            u = usage[c["call_id"]]
++            assert u["role"] == "extractor" and u["trial_id"] == t["trial_id"] and u["attempt"] == c["attempt"]
++            assert u["turn"] == t["turn"] and u["arm"] == ("SHARED" if t["turn"] == 0 else t["arm"])
++            assert {"output_tokens", "truncated", "parse_ok", "retry_count", "max_tokens", "failure_reason"} <= set(c)
++            n += 1
++        for a in t.get("release_attempts") or []:
++            for c in a["extraction_calls"]:
++                assert usage[c["call_id"]]["purpose"] == "verify" and usage[c["call_id"]]["arm"] == t["arm"]
++    assert n > 0
++    assert all(u["max_tokens"] == MAX_TOKENS[u["role"]] for u in usage.values())
++
++
++@dataclass
++class ScriptedLLM:
++    """추출기 출력을 차례로 돌려준다. (text, truncated) 쌍."""
++    script: list[tuple[str, Any]]
++    usage: list[dict[str, Any]] = field(default_factory=list)
++    tag: dict[str, Any] = field(default_factory=dict)
++
++    def complete(self, role: str, system: str, messages: list[dict[str, str]], **kw: Any) -> str:
++        text, tr = self.script[len(self.usage)]
++        self.usage.append(dict(call_id=len(self.usage) + 1, role=role, output_tokens=10, truncated=tr, max_tokens=MAX_TOKENS[role], **self.tag))
++        return text
++
++
++def _ctx(llm: Any, retries: int = 2) -> Any:
++    return SimpleNamespace(cfg=SimpleNamespace(max_extract_retries=retries), llm=llm)
++
++
++def test_truncation_vs_json_error_classification():
++    llm = ScriptedLLM([('[{"attribute": "AGE", "raw_va', True), ("이건 JSON이 아님", False), ("[{\"a\": 1", None)])
++    obs, ok, n, calls = extract_diag(_ctx(llm), "q", "r", "[]", [])
++    assert (ok, n) == (False, 3) and obs == []
++    assert [c["failure_reason"] for c in calls] == [FAIL_TRUNCATED, FAIL_JSON, FAIL_OTHER]
++    assert calls[0]["co_symptoms"] == [FAIL_JSON] and calls[1]["co_symptoms"] == []
++    assert [c["attempt"] for c in calls] == [1, 2, 3] and [c["retry_count"] for c in calls] == [0, 1, 2]
++    assert [c["call_id"] for c in calls] == [1, 2, 3]
++
++
++def test_success_judgement_unchanged():
++    # 성공 판정은 parse_json 그대로: 잘렸어도 파싱되면 성공 (truncated는 기록만)
++    llm = ScriptedLLM([("[]", True)])
++    obs, ok, n, calls = extract_diag(_ctx(llm), "q", "r", "[]", [])
++    assert ok and n == 1 and calls[0]["parse_ok"] and calls[0]["failure_reason"] is None and calls[0]["truncated"] is True
++    # 기존 3-튜플 인터페이스 유지
++    assert extract(_ctx(ScriptedLLM([("x", False), ('[{"a":1}]', False)])), "q", "r", "[]", [])[1:] == (True, 2)
++
++
++def test_run_meta_records_git_and_selection(run):
++    out, summary, _ = run
++    meta = json.loads((out / "run_meta.json").read_text(encoding="utf-8"))
++    assert meta["git_commit"] and meta["git_commit"] != "" and "git_branch" in meta and "git_dirty" in meta
++    from medical.config import ROOT
++    assert all((ROOT / f).exists() for f in meta["git_changed_files"])        # 경로 앞글자가 잘리지 않음
++    assert meta["started_at"] and meta["run_summary"]["max_tokens"]["extractor"] == MAX_TOKENS["extractor"]
++    sel = meta["trial_selection"]
++    assert sel["selected"] == 3 and sel["limit"] == 3 and sel["planned"] == 6 * 1 and sel["turn_budget"] == 4
++    assert {t["trial_id"] for t in summary["trials"]} == set(sel["trial_ids"])
++
++
++def test_refuses_to_overwrite_existing_run(run, data):
++    out, _, _ = run
++    before = {p.name: p.read_bytes() for p in out.iterdir() if p.is_file()}
++    with pytest.raises(FileExistsError):
++        run_experiment(MedicalConfig(trials_per_cell=1), MockRoleLLM(), out, limit=1, store_limit=60, data=data, progress=lambda s: None)
++    assert {p.name: p.read_bytes() for p in out.iterdir() if p.is_file()} == before
++
++
++def test_diagnostics_tables(run):
++    out, _, _ = run
++    d = diagnostics(out)
++    assert set(d["extraction"]["completion"]) == {"C0", "C1", "C1S"}
++    for b in d["extraction"]["bounds"].values():
++        assert b["best"]["violations"] <= b["deployed"]["violations"] <= b["worst"]["violations"]
++    lat = d["latency"]["arms"]
++    assert lat["C0"]["sec_answer"]["turn0_n"] > 0 and lat["C0"]["sec_ttft"]["n_valid"] == 0
++    assert "sec_measure_extract" in lat["C0"] and "sec_measure_extract" not in lat["C1"]
++
++
++def test_percentile_and_bootstrap():
++    assert percentile([1, 2, 3, 4], 50) == 2.5 and percentile([], 50) is None
++    assert cluster_bootstrap({"p1": [1.0, 2.0]}, 50) is None          # 환자 1명 → CI 만들지 않음
++    lo, hi = cluster_bootstrap({"p1": [1.0], "p2": [3.0], "p3": [5.0]}, 50)
++    assert lo <= hi

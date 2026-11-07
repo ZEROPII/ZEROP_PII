@@ -1,0 +1,5 @@
+extractor n 251 sum 397231 mean 1582.6 min 54 max 2048 NR P50/90/95/99 [2048, 2048, 2048, 2048] LIN [2048.0, 2048.0, 2048.0, 2048.0] trunc 162 64.5% trunc tokens [(2048, 162)] non-trunc P99 NR 2043 non-trunc max 2043
+target n 132 sum 114366 mean 866.4 min 314 max 1200 NR P50/90/95/99 [856, 1200, 1200, 1200] LIN [866.0, 1200.0, 1200.0, 1200.0] trunc 59 44.7% trunc tokens [(1200, 59)] non-trunc P99 NR 1189 non-trunc max 1189
+checker n 261 sum 48815 mean 187.0 min 128 max 300 NR P50/90/95/99 [179, 229, 237, 300] LIN [179.0, 229.0, 237.0, 300.0] trunc 9 3.4% trunc tokens [(300, 9)] non-trunc P99 NR 245 non-trunc max 245
+mutator n 261 sum 25757 mean 98.7 min 62 max 158 NR P50/90/95/99 [94, 136, 144, 155] LIN [94.0, 136.0, 144.0, 155.0] trunc 0 0.0% trunc tokens [] non-trunc P99 NR 155 non-trunc max 158
+rewriter n 9 sum 5131 mean 570.1 min 296 max 1184 NR P50/90/95/99 [410, 1184, 1184, 1184] LIN [410.0, 1184.0, 1184.0, 1184.0] trunc 0 0.0% trunc tokens [] non-trunc P99 NR 1184 non-trunc max 1184
