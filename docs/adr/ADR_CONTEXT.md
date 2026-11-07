@@ -15,7 +15,7 @@
 ### ADR-0001. 실험 조건을 고정하고 실행마다 설정을 기록한다
 
 - 승인 · 2026-09-20 · 결정 이정민, 양승준 · S2 · Jira ZP-12 · 실험·검증
-- 근거: `README.md`, `medical/config.py`, `ext:개발의사결정_요약보고서_v1.0#Stage1-2-8`
+- 근거: `docs/research_harness.md`, `medical/config.py`, `ext:개발의사결정_요약보고서_v1.0#Stage1-2-8`
 
 **결정**
 
@@ -132,7 +132,7 @@
 ### ADR-0008. 실제로 공개한 응답의 단서만 State에 반영한다
 
 - 승인 · 2026-10-05 · 결정 양승준, 이유진 · S3 · Jira ZP-21 · 위험 측정·방어
-- 근거: `orchestrator/`, `README.md`, `ext:개발의사결정_요약보고서_v1.0#Stage11`
+- 근거: `orchestrator/`, `docs/research_harness.md`, `ext:개발의사결정_요약보고서_v1.0#Stage11`
 
 **결정**
 
@@ -149,7 +149,7 @@
 ### ADR-0009. 비교 갈래끼리 같은 질문과 같은 원 응답을 쓴다 (--paired)
 
 - 승인 · 2026-10-06 · 결정 양승준 · S3 · Jira ZP-22 · 실험·검증
-- 근거: `README.md`, `orchestrator/shared_raw.py`
+- 근거: `docs/research_harness.md`, `orchestrator/shared_raw.py`
 
 **결정**
 

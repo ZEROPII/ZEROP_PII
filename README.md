@@ -1,497 +1,235 @@
-# Evaluation 통합 문서
-> `evaluation_proto`와 `eval-metrics`의 역할·데이터 흐름·평가 지표를 하나의 문서로 통합한 설계/사용 가이드입니다.  
+<p align="center">
+  <img src="docs/images/banner.png" alt="MediCloak: 과거 사례는 진료에 쓰고, 그 환자는 드러나지 않게" width="100%">
+</p>
 
+<p align="center">
+  <img src="https://img.shields.io/badge/KISIA_2026-AI_보안_기술개발_개인정보반-10262e?style=flat-square" alt="KISIA 2026 AI 보안 기술개발 개인정보반">
+  <img src="https://img.shields.io/badge/Python-3.11-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.11">
+  <img src="https://img.shields.io/badge/FastAPI-서버-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI">
+  <img src="https://img.shields.io/badge/React-18-0b7a75?style=flat-square&logo=react&logoColor=white" alt="React 18">
+  <img src="https://img.shields.io/badge/HL7_FHIR-R4-0b7a75?style=flat-square" alt="FHIR R4">
+  <img src="https://img.shields.io/badge/tests-pytest_976_·_vitest_87-16a374?style=flat-square" alt="pytest 976 passed, vitest 87 passed">
+  <a href="docs/adr/README.md"><img src="https://img.shields.io/badge/ADR-33건-5b5bf0?style=flat-square" alt="ADR 33건"></a>
+</p>
 
-## 1. 개요
+<p align="center">
+  <b>사례 검색 → 대상 AI 초안 → 단서 추출 → 누적 후보 수 계산 → 넓히거나 가림 → 다시 확인 → 화면</b><br>
+  병원 진료 지원 AI의 답이 과거 환자를 드러내지 않도록, 답이 나가기 직전에 검사하는 개인정보 보호 계층
+</p>
 
-현재 Evaluation 관련 코드는 크게 두 단계로 나뉩니다.
-
-| 구분 | 목적 | 핵심 구성 | 입력 | 출력 |
-|---|---|---|---|---|
-| **evaluation_proto** | 평가 파이프라인의 최소 동작 검증 및 초기 baseline | `log_schema.py`, `eval_baseline.py`, `run_demo.py` | turn 단위 CSV 로그 | Security / Defender / Utility / Coverage 요약 |
-| **eval-metrics (통합 평가 프레임워크)** | 실제 실험 설계에 맞춘 정교한 평가·통계 분석 | `evaluation/log_schema.py`, `evaluation/eval_baseline.py`, `evaluation/run_test.py` | `trial_summary.json`, `turn_log.jsonl` 등 | 위반율, AI 정확도, 방어 비용, 통계 검정, 언러닝 재검증 리포트 |
-
-`evaluation_proto`는 **로그를 남기고 → 읽고 → 기본 지표를 계산하는 파이프라인**을 검증하는 프로토타입입니다.  
-`eval-metrics`는 실험 단위(Trial)와 대화 턴(Turn)을 분리하고, 정답 사실표 기반 검증 및 통계 검정까지 포함하는 확장된 평가 체계입니다.
-
-두 구현은 목적과 스키마가 다르므로, 같은 이름의 지표라도 분모·판정 기준을 확인하지 않고 결과를 직접 합치면 안 됩니다.
-
-## 2. 전체 아키텍처
-
-```mermaid
-flowchart TD
-    A[Fuzzer / RAG Target / Defender] --> B[대화 실행 및 QI 공개]
-    B --> C[Evaluation Logger]
-    C --> D{로그 포맷}
-    D -->|Proto| E[turn 단위 CSV]
-    D -->|Metrics| F[trial_summary.json + turn_log.jsonl]
-    E --> G[Proto Baseline Evaluator]
-    F --> H[Schema Adapter / Validator]
-    H --> I[Eval Metrics Engine]
-    G --> J[기본 요약 리포트]
-    I --> K[통계·조건 비교·언러닝 리포트]
-    J --> L[CSV / Markdown / JSON]
-    K --> L
-```
-
-### 2.1 평가 파이프라인의 공통 원칙
-
-1. 실험 실행 모듈은 평가 모듈에 결과를 전달할 수 있도록 로그를 기록합니다.
-2. 로그는 실험 결과의 원본 데이터이며, 지표 계산 코드는 원본 로그를 읽어 파생 지표를 만듭니다.
-3. 가능한 한 원문 prompt/응답보다 평가에 필요한 구조화 필드와 라벨을 저장합니다.
-4. 평가 불가능한 데이터는 0점으로 간주하지 않고 `None` 또는 제외 상태로 구분합니다.
-5. 실험 조건과 임계값은 결과를 본 뒤 바꾸지 않도록 사전에 고정합니다.
+> KISIA AI 보안 기술개발 개인정보반(2026.8.17 ~ 11.6) 팀 프로젝트 · **Team Zero PII**
 
 ---
 
-## 3. evaluation_proto
+## 만들게 된 계기
 
-### 3.1 목적과 구성
+병원의 진료 지원 AI는 의료진이 "지금 환자와 비슷한 과거 사례"를 대화로 찾아보게 해 줍니다. 답에서 이름과 등록번호를 지워도, 질문이 이어지면 진단 · 처방 약 · 처방 시작일 · 나이 · 거주 지역이 한 사람에 대한 단서로 쌓입니다. 이 프로젝트의 기준 집단(합성 환자 461명)으로 세어 보면, 정확한 날짜 하나만 알려 줘도 98.5%의 환자가 후보 5명 미만으로 좁혀집니다.
 
-초기 Sprint 1 프로토타입으로, 다른 모듈이 완성되기 전에도 Evaluation 파이프라인을 독립적으로 테스트할 수 있도록 설계되었습니다.
+답 하나하나를 따로 검사해서는 이렇게 쌓이는 위험을 막지 못합니다. **MediCloak**은 답이 화면에 나가기 전에 대화 전체에서 나온 단서를 사례마다 모아, 조건이 같은 과거 환자가 몇 명 남는지(k) 셉니다. 5명 아래로 좁혀지는 값만 상위 범주로 넓히거나 가리고, 나머지는 그대로 답합니다. 모델을 다시 학습시키거나 원본 기록을 고치지 않고, RAG의 답 전달 단계에 들어갑니다.
 
-| 파일 | 역할 |
-|---|---|
-| `evaluation/log_schema.py` | 한 턴의 로그 레코드 정의 및 CSV append 저장 |
-| `evaluation/eval_baseline.py` | CSV 로드, 기본 평가 지표 계산, 결과 파일 생성 |
-| `evaluation/run_demo.py` | 가상 로그를 생성해 전체 파이프라인을 검증 |
-| `evaluation/logs/` | 실험 로그 저장 위치 |
-| `evaluation/results/` | 평가 결과 저장 위치 |
+<p align="center">
+  <img src="docs/images/clinic-flow.gif" alt="의료진이 사례 1의 약과 시작 시기를 묻자 시작 시기만 비공개로 표시되는 장면" width="760">
+  <br><sub>▲ 의료진이 사례 1의 약과 시작 시기를 묻자 시작 시기만 '비공개'로 나가고, '왜 그런가요?'에 그 이유가 나옵니다</sub>
+</p>
 
-### 3.2 로그 단위와 스키마
+---
 
-**한 turn = CSV 한 행**입니다.
+## 한눈에 보기
 
-주요 필드는 다음과 같습니다.
+<table>
+<tr>
+<td width="50%"><a href="docs/images/screen-clinic.png"><img src="docs/images/screen-clinic.png" alt="의료진 유사 사례 조회 화면"></a></td>
+<td width="50%"><a href="docs/images/screen-monitor.png"><img src="docs/images/screen-monitor.png" alt="보안 담당자 실시간 관제 화면"></a></td>
+</tr>
+<tr>
+<td><b>의료진 · 유사 사례 조회</b><br>비슷한 과거 사례 5건에 묻습니다. 환자를 알아볼 수 있는 값은 '비공개'나 범위로 보이고, 위험 숫자는 보이지 않습니다.</td>
+<td><b>보안 담당자 · 실시간 관제</b><br>같은 대화를 숫자와 함께 봅니다. 그대로 냈다면 후보가 1명이었을 답을 157명으로 지킨 기록과 의료진 요청이 올라옵니다.</td>
+</tr>
+<tr>
+<td><a href="docs/images/screen-watch.png"><img src="docs/images/screen-watch.png" alt="의료진 대화 위험 분석 화면"></a></td>
+<td><a href="docs/images/screen-report.png"><img src="docs/images/screen-report.png" alt="레드팀 점검 리포트 화면"></a></td>
+</tr>
+<tr>
+<td><b>의료진 대화 위험 분석</b><br>사례마다 후보가 단서별로 줄어든 과정(461 → 189 → 157)과 답마다의 판정 근거를 봅니다.</td>
+<td><b>레드팀 점검 리포트</b><br>방어 없음 · 턴별 방어 · 누적 방어로 같은 공격 대화를 돌려, 기준 아래로 내려간 대화와 답변 유용도를 비교합니다.</td>
+</tr>
+</table>
 
-| 필드 | 의미 |
-|---|---|
-| `experiment_id` | 실험 식별자 |
-| `target_id` | 대상 페르소나 식별자 |
-| `defender` | 방어기 종류 (`none`, `ontology_gen_v1` 등) |
-| `turn` | 대화 턴 번호 |
-| `attack_type` | 공격 유형 (`direct`, `indirect` 등) |
-| `mutation_type` | 질문 변형 유형 (`paraphrase`, `specificity_increase` 등) |
-| `qi` | 해당 턴에서 관찰된 QI 카테고리 목록 |
-| `k_before`, `k_after` | 처리 전·후 후보군 크기 |
-| `risk_event` | 위험 임계값 도달 여부 |
-| `generalized` | 일반화 적용 여부 |
-| `suppressed` | 억제/거부 적용 여부 |
-| `utility_score` | 응답 유용성 점수(0~1) |
-| `transition_id`, `state_id` | 상태 전이 추적용 선택 필드 |
-| `threshold` | 위험 판정 임계값 |
-| `model`, `config` | 모델 및 실행 설정 |
-| `replay_type` | 초기 실행/재실행 구분 |
-| `timestamp` | 로그 생성 시각(KST 기본값) |
+<sub>화면은 API 키 없이 시연용 응답기로 켠 운영 모드에서 찍었고, 공개 전 검사가 보이도록 입력 게이팅은 껐습니다. 리포트 화면의 기준 평가는 10턴까지 센 값이라 아래 검증 결과(8턴)와 숫자가 조금 다릅니다.</sub>
 
-`qi`는 `age|location`처럼 구분자로 직렬화합니다. 프로토타입 문서 기준으로 QI의 실제 값이나 prompt/응답 원문은 저장하지 않고 카테고리만 기록합니다.
+---
 
-### 3.3 Proto 지표
+## 어떻게 막나
 
-#### Security
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/flow-dark.png">
+  <img src="docs/images/flow-light.png" alt="질문부터 화면까지 답 하나가 나가는 7단계: 유사 사례 검색, 입력 게이팅, 대상 AI 초안, 단서 추출, 후보 수 k, 판정, 다시 확인" width="100%">
+</picture>
 
-| 지표 | 정의 | 해석 |
-|---|---|---|
-| `total_turns` | 실험의 전체 턴 수 | 평가 표본 크기 |
-| `min_k_before` | 처리 전 최소 k | 방어 전 가장 좁은 후보군 |
-| `min_k_after` | 처리 후 최소 k | 방어 후 가장 좁은 후보군 |
-| `risk_event_count` | 위험 이벤트 수 | 위험 임계값에 도달한 턴 수 |
-| `threshold_reach_rate` | `risk_event_count / total_turns` | 전체 턴 중 위험 턴 비율 |
-| `first_turn_to_risk` | 최초 위험 턴 | 위험이 처음 나타난 시점 |
+- **대화 전체로 셉니다.** 이번 답의 단서에 같은 대화에서 앞서 나간 값, 같은 과거 환자에 대해 다른 대화에서 나간 값(최근 90일)까지 합쳐 판정합니다.
+- **같은 진료 사건으로 묶어 셉니다.** 환자 한 명에게 진단이 평균 8.8개, 처방이 6.8개 있어서 값을 따로 맞추면 후보가 부풀려집니다. '60대에 당뇨병 진단'은 한 사건이 두 조건을 함께 만족해야 후보로 남습니다. 576명 기준으로 따로 세면 25명, 사건으로 세면 4명입니다.
+- **필요한 만큼만 바꿉니다.** 기준은 후보 5명입니다. 새 단서를 모두 더해도 5명보다 많으면 그대로 내고, 아니면 의료 온톨로지의 상위 범주로 넓히고, 원래 값으로 3명 이하인 값은 가립니다. 나이는 5세 구간, 날짜는 월보다 자세히 내지 않습니다.
+- **고친 답도 다시 셉니다.** 재작성한 답을 다시 추출해 처음부터 셉니다. 통과하지 못하면 값 치환, 사례 빼기, 거절 순으로 넘어갑니다.
+- **사람이 열어 줄 길을 둡니다.** 진료에 꼭 필요한 값은 의료진이 세부 정보 요청을 보내고, 보안 담당자가 함께 공개했을 때의 후보 수를 확인한 뒤 승인합니다. 열람 · 승인 · 규칙은 사유와 함께 감사 기록에 남습니다.
 
-#### Defender
+---
 
-| 지표 | 정의 |
-|---|---|
-| `generalization_rate` | 일반화가 적용된 턴 비율 |
-| `suppression_rate` | 억제/거부가 적용된 턴 비율 |
-| `defense_success_rate` | 방어 전 위험했던 턴 중 방어 후 안전해진 비율 |
+## 기능
 
-Proto의 `defense_success_rate`는 `k_before <= threshold`인 턴을 위험 전제로 보고, 그중 `k_after > threshold`가 된 비율로 계산합니다. 다만 초기 구현의 `k_before`가 방어 전 후보값인지, 직전 상태값인지 실험 로그 작성 규약을 명확히 해야 합니다.
+**의료진** · 진료 지원 AI
 
-#### Utility / Coverage
+- **[외래 진료 목록](docs/images/screen-emr.png)**: 가상 EMR(FHIR R4)에서 외래 환자와 진료 목적(처방 · 시술·치료 · 경과·관리)을 골라 진료 지원 AI를 엽니다. 목록에는 생년과 거주 지역이 없습니다.
+- **[유사 사례 조회](docs/images/screen-clinic.png)**: 사례별 대화, 찾은 사례 전체에 묻기, 답에 실제로 나온 값만 모으는 사례 노트, 보내기 전 확인, '왜 그런가요?', 세부 정보 요청
 
-- **Utility:** 평균·최솟값·최댓값 `utility_score`
-- **Coverage:** 등장한 QI 카테고리별 기록 수, 고유 `state_id` 수, 고유 `transition_id` 수
-- **High-risk Path Corpus:** `k_after <= threshold_tau`인 턴을 추출해 회귀 테스트 및 재공격 입력으로 활용
+**보안 담당자** · MediCloak 관제
 
-### 3.4 실행 방법
+- **[실시간 관제](docs/images/screen-monitor.png)**: 세 줄 요약(위험했던 것 · 시스템이 한 일 · 내가 할 일), 방어 방식별 후보 수 눈금, 사유를 적는 원문 열람, 값 공개 승인, 대화별 규칙, 검토 보조 초안
+- **[의료진 대화 분석](docs/images/screen-watch.png) · [단서 그래프](docs/images/screen-graph.png)**: 후보가 단서마다 줄어든 과정, 답마다의 판정 표(그대로였다면 몇 명이었는지), 사례와 단서의 연결
+- **[레드팀 리포트](docs/images/screen-report.png)**: 실제 LLM으로 공격 대화를 돌려 방어 방식별로 비교합니다. 모델이나 판정 규칙이 바뀐 채로 서버를 켜면 점검이 자동으로 돌고 직전 결과와 비교합니다.
+- **[감사 기록](docs/images/screen-audit.png) · [보호 정책](docs/images/screen-policy.png)**: 로그인 · EMR 열기 · 질문 · 열람 · 승인 · 규칙 · 레드팀 기록, 지금 걸린 판정 기준과 보호 설정
 
-프로젝트 루트의 `evaluation/` 기준:
+---
+
+## 시스템 구성
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/arch-dark.png">
+  <img src="docs/images/arch-light.png" alt="의료진 화면과 보안 담당자 관제가 FastAPI 서버에 붙고, 서버는 SQLite · FHIR · 사례 문서 · LLM을 쓰며 판정은 연구 하네스 코드를 그대로 쓰는 구성" width="100%">
+</picture>
+
+- 화면 두 개(의료진, 보안 담당자)와 서버 하나로 이루어집니다. 역할은 로그인 계정으로 나뉘고, 의료진 화면 API로는 후보 수 같은 위험 숫자를 보내지 않습니다.
+- 서버의 판정은 연구 하네스(`medical/`)의 후보 수 계산(kcalc)과 Defender를 그대로 불러 씁니다. 실험에서 잰 방어와 화면에서 도는 방어가 같은 코드입니다.
+- 데이터는 Synthea 합성 환자 576명입니다. 461명은 과거 기록(검색 대상이자 기준 집단)으로, 나머지는 외래 환자로 씁니다. 실제 환자 정보는 없습니다.
+
+---
+
+## 검증 결과
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/images/results-dark.png">
+  <img src="docs/images/results-light.png" alt="공격 대화 296건에서 방어 없음 95.6%, 턴별 방어 83.1%, 누적 방어 0%가 기준 아래로 좁혀졌고, 누적 방어는 의료정보 87.2%를 그대로 냈다" width="100%">
+</picture>
+
+| 측정 | 조건 | 결과 |
+| --- | --- | --- |
+| 기준 아래로 좁혀진 대화 | 모의 POC, 공격 대화 296건 × 3갈래, 8턴, 결정적 응답기 | 방어 없음 95.6% · 턴별 방어 83.1% · **누적 방어 0%**. 방어 없음과 누적 방어의 짝 검정(exact McNemar) 283 : 0 |
+| 누적 방어의 정보 유지 | 같은 실행의 판정 8,840건 | 의료정보는 87.2%를 그대로 냈고, 개인정보는 34.9%를 가렸습니다(시기는 70.3%). 공개 단서 유지율 0.65 |
+| 단서 추출 정확도 | 규칙을 고정한 뒤 처음 보는 질의 환자 13명, claude-haiku-4.5, 팀 고정본 채점 | 정밀도 97.0% · 재현율 89.2% · F1 0.929 |
+| 실제 LLM 소규모 측정 | 질의 환자 6명, 8턴, claude-haiku-4.5 | 방어 없음 5/6, 누적 방어 0/6(시스템 판정). 원본 사실표와 대조해 다시 세니 누적 방어 2/6이었습니다. 날짜 단서가 정규화되지 않아 위험으로 세어지지 않은 것이 원인이었고, 판정 규칙 v8에서 고쳤습니다([ADR-0033](docs/adr/0033-rag-remeasure-tooling-and-period-value-fix.md)) |
+| 처리 시간 | 같은 실측, 턴 1 이후 평균 | 방어 없음 12.4초 · 누적 방어 19.4초. 늘어난 시간은 대부분 재작성과 다시 확인 추출입니다 |
+
+<details>
+<summary>다시 세는 명령 (LLM 호출 없음)</summary>
 
 ```bash
-# 더미 로그 생성 → 지표 계산 → 결과 리포트 생성
-python evaluation/run_demo.py
-
-# 실제 로그 평가
-python evaluation/eval_baseline.py
+python -m medical.simulate --out runs/medical/sim_staged --profile staged --fuzzer uniform   # 모의 POC, 약 30분
+python scripts/verify_result3.py runs/medical/sim_staged                                     # 위 표의 위반율과 판정 비율
 ```
 
-실제 프로젝트에서는 다른 모듈이 `LogManager.log_turn()`을 호출해 로그를 누적한 다음 평가기를 실행합니다.
+단서 추출 정확도의 기록과 채점 방법은 [medical/scoring/결과_기록.md](medical/scoring/결과_기록.md)에 있습니다.
+</details>
 
-### 3.5 Proto의 한계
+**읽을 때 알아 둘 점**
 
-- Trial/대상/조건/실험 단계를 명시적으로 분리하지 않고 turn 행 중심으로 집계합니다.
-- 조건 간 짝비교와 통계적 유의성 검정이 제한적입니다.
-- QI 카테고리 Coverage는 로그에 등장한 항목만 세므로, 미등장 카테고리를 0으로 표시하지 않습니다.
-- 정답 사실표와 대조하는 cue 단위 정확도, 검색 품질, 언러닝 재검증을 충분히 표현하지 못합니다.
-- Proto의 위험 지표는 `risk_event` 플래그에 의존하므로, 사후 정답 검증값과 실행 중 추정값을 분리하기 어렵습니다.
-
----
-
-## 4. eval-metrics: 통합 평가 프레임워크
-
-### 4.1 설계 목표
-
-확장 평가 프레임워크는 다음 질문에 답하는 것을 목표로 합니다.
-
-1. 방어가 누적 재식별 위험 위반을 줄이는가?
-2. 방어가 RAG 대상 AI의 사실 정확도와 응답 유용성을 얼마나 보존하는가?
-3. 위험하지 않은 상황까지 과도하게 수정하거나 거절하지는 않는가?
-4. 실행 중 추정한 위험(`k_run`)이 정답 기준 위험(`k_val`)과 일치하는가?
-5. 언러닝 이후 같은 정보가 다시 노출되거나 위험 경로가 재발하는가?
-6. 방어를 위해 추가되는 지연 및 토큰 비용은 어느 정도인가?
-
-### 4.2 파일별 역할
-
-| 파일 | 역할 |
-|---|---|
-| `evaluation/log_schema.py` | Trial/Turn/Cue 데이터 모델, 허용값 검증, 로그 어댑터 및 로더 |
-| `evaluation/eval_baseline.py` | 모든 평가 지표 및 통계 검정 계산, Markdown 리포트 생성 |
-| `evaluation/run_test.py` | 단위 테스트, Toy 시뮬레이션, 실제 Defender 연동 테스트 |
-| `evaluation/eval_output/trial_summary.json` | Trial 단위 요약 로그 |
-| `evaluation/eval_output/turn_log.jsonl` | Turn 단위 상세 로그 |
-| `evaluation/eval_output/evaluation_report.md` | 평가 결과 예시 |
-
-### 4.3 데이터 모델: Trial / Turn / Cue
-
-```mermaid
-flowchart TD
-    A[TrialRecord<br/>대상 1명 × 조건 1개 × 단계 1개]
-    A --> B[TurnRecord 1]
-    A --> C[TurnRecord 2]
-    A --> D[TurnRecord N]
-    B --> E[CueLabel 1]
-    B --> F[CueLabel 2]
-    C --> G[CueLabel ...]
-    D --> H[CueLabel ...]
-```
-
-- **Trial:** 대상 1명 × 조건 1개 × 단계 1개의 실험 단위. 여러 턴을 포함합니다.
-- **Turn:** 대화 한 턴. k 값, 응답 결과, 위험 상태, 수정 방식, 지연·토큰 정보를 담습니다.
-- **Cue:** 응답에서 추출한 개별 정보 단서. 정답 사실표와 비교해 정확성 라벨을 부여합니다.
-
-#### 핵심 필드
-
-| 레코드 | 필드 | 의미 |
-|---|---|---|
-| Trial | `trial_id`, `target_id` | 실험 및 대상 식별자 |
-| Trial | `condition`, `phase` | 실험 조건 및 단계 |
-| Trial | `path_id`, `source_path_id` | 위험 경로 및 원본 경로 연결 |
-| Trial | `retrieved_doc_ids`, `retrieval_scores` | 검색 문서와 점수 |
-| Turn | `k_run` | 실행 중 추정한 후보군 크기 |
-| Turn | `k_val` | 실제 공개된 응답을 정답 기준으로 검증한 후보군 크기 |
-| Turn | `k_val_candidate` | 방어 전 후보 응답의 정답 기준 k |
-| Turn | `case_k_val`, `case_k_val_candidate` | 사례별 검증 k |
-| Turn | `cue_labels` | 개별 단서의 사실 정확도 라벨 |
-| Turn | `expected_cues`, `omitted_cues` | 기대 단서 수와 누락 단서 수 |
-| Turn | `release_mode` | 공개 방식 |
-| Turn | `utility` | 응답/QI 유지 유용성 점수 |
-| Turn | `risk_state` | 위험 후보·검증 완료 등 상태 |
-| Turn | `latency_ms`, `tokens_in`, `tokens_out` | 실행 비용 |
-
-`CueLabel`의 주요 필드는 다음과 같습니다.
-
-| 필드 | 의미 |
-|---|---|
-| `cue_type` | AGE, DX, PROC, MED 등 단서 유형 |
-| `label` | `CORRECT`, `LESS_PRECISE`, `INCORRECT` |
-| `case_id` | 사실이 속한 사례(A/B 등) |
-| `in_other_retrieved_doc` | 다른 검색 문서의 사실을 가져왔는지 |
-| `unmapped` | 진단명 등 정규화 실패 여부 |
-
-#### 조건·단계·라벨 코드
-
-| 분류 | 값 | 의미 |
-|---|---|---|
-| Condition | `C0` | 무방어 |
-| Condition | `C1` | 누적 상태 기반 Defender |
-| Condition | `C1S` | Stateless Defender 대조군 |
-| Condition | `C2` | Unlearning-only |
-| Condition | `C3` | Defender + Unlearning |
-| Phase | `MAIN` | 본 실험 |
-| Phase | `3A` | Replay를 통한 방어 효과 재검증 |
-| Phase | `3B` | 경량 언러닝 재검증 |
-| Replay | `EXACT` | 원 질문 그대로 재공격 |
-| Replay | `PARAPHRASE` | 표현을 바꾼 재공격 |
-| Replay | `REORDER` | 질문 순서를 바꾼 재공격 |
-| Fact label | `CORRECT` | 정답 사실과 일치 |
-| Fact label | `LESS_PRECISE` | 틀리지는 않지만 덜 구체적 |
-| Fact label | `INCORRECT` | 사실과 다름(환각) |
-| Release | `PASSTHROUGH` | 원 응답 그대로 통과 |
-| Release | `ALLOWED` | 허용 |
-| Release | `REWRITTEN` | 재작성/일반화 |
-| Release | `REFUSAL` | 거절 |
-
-### 4.4 데이터 로딩과 검증 흐름
-
-```mermaid
-flowchart TD
-    A[trial_summary.json] --> C[load_trials]
-    B[turn_log.jsonl] --> C
-    D[rag_docs.jsonl / fact_table.csv] --> E[검색·정답 근거 데이터]
-    C --> F[adapt_trial / adapt_turn]
-    F --> G[TrialRecord / TurnRecord]
-    G --> H[validate_trial / validate_turn]
-    H --> I{strict mode}
-    I -->|통과| J[EvalBaseline]
-    I -->|오류 + strict=True| K[SchemaError]
-    I -->|오류 + strict=False| L[경고 수집 후 처리]
-    L --> J
-    E --> J
-    J --> M[run_all]
-    M --> N[evaluation_report.md]
-```
-
-`load_trials()`는 중첩형/평탄형 로그를 어댑터로 표준 데이터 모델에 맞춥니다. `strict=True`는 스키마 위반을 엄격하게 검사합니다. LLM 사용량 로그가 있으면 `load_llm_usage()`로 Trial별 지연 및 토큰 합계를 집계할 수 있습니다.
+- k는 고정된 기준 집단(461명) 안에서 후보가 몇 명 남는지입니다. 실제 신원 확인 여부나 법적 안전성을 보장하는 값이 아닙니다.
+- 데이터는 한 주(Massachusetts)의 합성 환자이고, 실제 LLM 측정은 6명 규모입니다.
+- 후보 전원이 같은 값을 가지면 그 값은 알려질 수 있습니다(동질성). k로는 막지 못하는 부분입니다.
 
 ---
 
-## 5. eval-metrics 지표 정의
+## 보안 설계
 
-### 5.1 주 지표: 누적 재식별 위험 위반
+- **역할 분리.** 의료진과 보안 담당자는 서로의 API를 쓰지 못합니다. 미들웨어와 경로별 검사 두 곳에서 확인하고, 로그인 없이 부르면 401, 다른 역할의 경로는 403입니다.
+- **비밀번호와 세션.** 비밀번호는 PBKDF2-HMAC-SHA256 200,000회와 계정별 salt로 저장합니다. 세션 토큰은 HttpOnly 쿠키로 주고 DB에는 SHA-256만 둡니다. 12시간이 지나거나 60분 동안 쓰지 않으면 끝나고, 같은 계정 · 주소에서 10분에 5번 틀리면 막습니다.
+- **원문 열람.** 보안 담당자도 사유를 고르고 확인하려는 내용을 적어야 원 응답과 가린 값을 봅니다. 감사 기록과 관제 화면에는 환자 번호 대신 HMAC으로 만든 기호(`P-3f9a1c`)가 남습니다.
+- **과거 기록 환자.** 검색 대상 461명은 FHIR로 열 수 없고, 진료 지원 AI의 답과 MediCloak 판정을 거쳐서만 보입니다.
+- **민감 정보.** 물질 사용 · 정신 건강 · 생식 · HIV 관련 값은 후보가 10명 이상일 때만 내고, 미성년 시기 물질 사용 장애 환자는 검색 대상에서 뺍니다.
+- **답 시간 한도.** 45초 안에 확인을 마치지 못한 답은 내보내지 않고 안내 문장을 보냅니다.
+- **API 키.** `.env`에서만 읽고 화면 · 로그 · 감사 기록 · 오류 문구에 넣지 않습니다.
 
-기본 설정은 `k_req=5`, `max_turn=8`, `violation_scope="A"`입니다.
-
-| 지표 | 정의 | 해석 |
-|---|---|---|
-| **위반 비율** | 대상 중 한 번이라도 `1 <= k_val < k_req`인 턴이 발생한 대상 비율 | 누적 대화에서 위험을 경험한 대상의 비중 |
-| 첫 위반 턴(위반자) | 실제 위반한 대상의 최초 위반 턴 중앙값 | 위험이 발생한 대상에서 위험 도달 속도 |
-| 첫 위반 턴(센서링) | 미위반 대상은 `max_turn + 1`로 처리한 중앙값 | 미위반 대상도 포함한 위험 도달 시점 비교 |
-| 주 검정 | C0 vs C1 exact McNemar, `target_id`로 짝지음 | 누적 방어의 위반 감소 효과 검정 |
-| 탐색 검정 | C0 vs C1S, C1S vs C1 | Holm 보정으로 다중 비교 통제 |
-
-**위험 상태 해석**
-
-- `RUNTIME_HIGH_RISK_CANDIDATE`: 실행 중 추정 k 기준 위험 후보
-- `PENDING_VALIDATION`: 사후 정답 검증 대기
-- `VALIDATED_HIGH_RISK`: 정답 기준으로 확인된 위험 (`1 <= k_val < k_req`)
-- `VALIDATED_NOT_HIGH_RISK`: 검증 결과 위험이 아님
-- `ZERO_MATCH_QUARANTINED`: k=0 상태로 격리. 성공적인 위험 차단으로 간주하지 않고 별도 검증
-
-> **중요한 정의 차이:** 통합 프레임워크의 주 위반 판정은 기본적으로 `1 <= k_val < k_req`입니다. k=0은 `ZERO_MATCH_QUARANTINED`로 별도 취급하며 주 위반에 포함하지 않습니다. Proto의 `k_after <= threshold`와 동일한 정의가 아닙니다.
-
-### 5.2 대상 AI(RAG) 성능: C0 / MAIN 기준
-
-방어로 인해 답변이 바뀌는 효과와 대상 AI 자체 성능을 분리하기 위해, **기본 RAG 성능은 C0(무방어) + MAIN에서만 측정**합니다.
-
-| 지표 | 계산 | 의미 |
-|---|---|---|
-| `accuracy_strict` | `CORRECT / 전체 단서` | 정확히 일치한 단서 비율 |
-| `accuracy_lenient` | `(CORRECT + LESS_PRECISE) / 전체 단서` | 틀리지 않은 단서 비율 |
-| `hallucination_rate` | `INCORRECT / 전체 단서` | 사실과 다른 단서 비율 |
-| `case_confusion_rate` | 다른 검색 문서의 사실인 단서 / 전체 단서 | 사례 간 정보 혼동 |
-| `omission_rate` | 누락 단서 / 기대 단서 | 답변에서 빠진 정보 비율 |
-| `case_marking_compliance` | `(전체 단서 - UNRESOLVED) / 전체 단서` | 사례 구분 표기 준수율 |
-| `no_case_rate` | 사례 없음 응답 턴 / 전체 턴 | 사례 없음 판단 비율 |
-| `refusal_rate` | 거절 턴 / 전체 턴 | 응답 거절 비율 |
-| `unmapped_cue_rate` | 매핑 실패 단서 / 전체 단서 | 진단명 등 정규화 실패 |
-| `P@k` | 상위 k 검색 문서 중 대상의 정답 ICD3와 일치한 문서 비율 | 검색 단계 적합도 |
-
-정확도는 문장 전체가 아니라 **단서 단위**로 채점합니다.
-
-- `CORRECT`: 정답 사실과 일치
-- `LESS_PRECISE`: 상위 개념 등으로 덜 구체적이지만 틀리지는 않음
-- `INCORRECT`: 사실과 다름
-
-`P@k`는 `doc_icd3`와 `target_icd3` 매핑이 있어야 계산할 수 있습니다. 매핑이 없으면 0이 아니라 `None`으로 남깁니다.
-
-### 5.3 방어 효과와 정보 유지
-
-| 지표 | 정의 | 목적 |
-|---|---|---|
-| `utility_refusal_as_zero` | 거절 턴의 유용성을 0으로 두고 계산 | 실제 사용자 관점의 보수적 유용성 |
-| `utility_excluding_refusal` | 거절을 제외한 응답의 유용성 | 응답한 경우의 품질 |
-| `overblock_rate_turns` | 방어 전 후보 k가 안전(`k_val_candidate >= k_req`)인 턴 중 방어가 REWRITTEN/REFUSAL한 비율 | 불필요한 개입 정도 |
-| `retention_vs_C0` | C0와 방어 조건을 대상별로 짝지은 정확도·환각·누락·P@k 변화 | 방어로 인한 품질 손실/유지 |
-| `accuracy_retention_ratio` | 방어 조건 정확도 / C0 정확도 | 정확도 유지 비율 |
-
-과잉 차단은 반드시 **방어 전 후보값**인 `k_val_candidate`를 기준으로 합니다. 방어 후 k를 기준으로 하면 방어가 성공적으로 k를 높인 턴을 원래부터 안전했던 턴으로 잘못 분류할 수 있습니다.
-
-### 5.4 일치도·공격 효율·운영 비용
-
-| 지표 | 정의 |
-|---|---|
-| `k_agreement` | `k_run`과 `k_val`의 정확 일치율 및 위험 판정 일치율 |
-| `mutation_valid_ratio` | 유효한 질문 변형 수 / 전체 변형 시도 수 |
-| `k_decrease_per_turn` | k가 감소한 턴 / 전체 턴 |
-| `release_distribution` | PASSTHROUGH / ALLOWED / REWRITTEN / REFUSAL 건수 |
-| `latency_ms_mean/median` | 평균 및 중앙값 처리 시간 |
-| `tokens_in_total` | 입력 토큰 합계 |
-| `tokens_out_total` | 출력 토큰 합계 |
-
-### 5.5 언러닝 재검증: 3B
-
-C2/C3에서 언러닝 전후의 정보 재노출과 위험 재발을 평가합니다.
-
-| 재공격 유형 | 의미 |
-|---|---|
-| `EXACT` | 기존 질문을 그대로 재사용 |
-| `PARAPHRASE` | 표현을 바꿔 재공격 |
-| `REORDER` | 질문 순서를 바꿔 재공격 |
-
-각 유형별 산출값:
-
-- **단서 재노출률:** 재노출 여부가 기록된 턴 중 다시 노출된 비율
-- **k 재발률:** 과거 `VALIDATED_HIGH_RISK`로 확인된 경로에 연결된 재공격 Trial 중 위험이 재발한 비율
-- **유용성 변화:** 언러닝 전후 대상별 유용성 변화량
-- **과잉 차단 변화:** 언러닝 전후 대상별 과잉 차단 변화량
-- **RAG 성능 변화:** 정확도·환각·누락·P@k의 전후 짝비교
-
-k 재발률의 분모는 모든 재공격이 아니라, 과거에 정답으로 확인된 위험 경로에 연결된 Trial로 제한합니다.
+자세한 동작과 운영할 때 정해야 할 것(외부 LLM으로 나가는 데이터, 승인 당직, 감사 기록 보관)은 [medicloak/README.md](medicloak/README.md)에 있습니다.
 
 ---
 
-## 6. 통계 처리 원칙
+## 실행
 
-| 방법 | 적용 | 해석 |
-|---|---|---|
-| Wilson 95% CI | 비율 지표 | 단서/표본 비율의 신뢰구간 |
-| Exact McNemar | 같은 대상의 조건 간 위반 여부 비교 | 짝지어진 이진 결과 비교 |
-| Holm correction | 탐색적 다중 비교 | 다중 검정으로 인한 오류율 통제 |
-| 대상 단위 Bootstrap CI | 정확도·환각·유용성 등의 대상 평균 | 단서가 서로 독립이라고 가정하지 않는 보수적 구간 |
-
-- 주 지표와 주 검정은 실험 결과를 확인하기 전에 고정합니다.
-- 평가 불가 데이터는 분모에 포함하지 않으며, 누락값을 0으로 치환하지 않습니다.
-- 단서 단위 Wilson 구간은 단서 독립 가정으로 좁게 나올 수 있으므로 대상 단위 Bootstrap 결과와 함께 해석합니다.
-- 조건 간 비교는 가능한 한 동일 `target_id`를 기준으로 짝지어 계산합니다.
-
----
-
-## 7. 결과 예시와 해석상의 주의
-
-업로드된 `evaluation/eval_output/evaluation_report.md`는 다음과 같은 예시 결과를 포함합니다.
-
-- PRIMARY 위반 비율: C0 100%(20/20), C1 70%(14/20), C1S 100%(20/20)
-- C0 vs C1 exact McNemar: 짝 20, C0만 위반 6 / C1만 위반 0, p=0.0312
-- C0 대상 AI 성능 예시: strict accuracy 77.5%, lenient accuracy 84.4%, hallucination 15.6%
-
-그러나 `evaluation/README.md`와 `evaluation/evaluation/README.md`의 테스트 설명에 따르면, 이 결과에는 Toy 시뮬레이션 데이터가 포함되어 있습니다. 특히 정확도·환각률은 `run_test.py`의 난수 라벨 생성 설정에 영향을 받으므로 **실제 RAG 모델 성능이나 연구의 실증 결과로 인용하면 안 됩니다.** 파이프라인과 지표 구현을 검증하는 테스트 결과로만 사용해야 합니다.
-
-또한 현재 결과 문서에서 P@5가 `None`인 것은 ICD3 문서/대상 매핑이 없기 때문입니다. 매핑 부재를 검색 성능 0점으로 해석하면 안 됩니다.
-
----
-
-## 8. 실행 및 검증
-
-`evaluation/evaluation/` 패키지 기준으로 프로젝트 루트에서 실행합니다.
+Python 3.10 이상(3.11 · 3.13에서 확인)과 화면 빌드용 Node.js 18 이상이 필요합니다.
 
 ```bash
-# 단위 테스트 + Toy 통합 테스트
-python -m evaluation.run_test
-
-# 지표 정의 단위 테스트만
-python -m evaluation.run_test --mode unit
-
-# Toy end-to-end 테스트
-python -m evaluation.run_test --mode toy
-
-# 실제 Defender 연동 테스트
-python -m evaluation.run_test --mode defender \
-  --defender-root <부모폴더> \
-  --profiles <user_patient_profiles_576.json> \
-  --node-data <노드_v0.9.csv> \
-  --n-targets 20
+git clone https://github.com/ZEROPII/ZEROP_PII.git
+cd ZEROP_PII
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r webdemo/requirements.txt
 ```
 
-실행 전후 확인 사항:
+**운영 모드** (로그인 · 가상 EMR · `.env`의 실제 LLM)
 
-- `trial_summary.json`, `turn_log.jsonl`이 같은 실험 실행을 가리키는지
-- `trial_id`, `target_id`, `condition`, `phase`, `turn` 연결이 일관적인지
-- `k_run`, `k_val`, `k_val_candidate`의 의미가 로그 생산 모듈과 일치하는지
-- `risk_state`와 `path_id`가 3B 재공격의 원본 경로와 연결되는지
-- `fact_table.csv` 및 RAG 문서/ICD3 매핑이 존재하는지
-- `evaluable=False`, `UNRESOLVED`, `None` 값이 의도한 방식으로 제외되는지
+```bash
+cp .env.example .env                  # LLM_API_KEY · LLM_API_BASE · LLM_MODEL 채우기
+python -m medicloak init              # DB · 가상 EMR 576명 · 처음 계정 3개
+python -m medicloak check-llm         # 실제 LLM에 짧은 요청 한 번 (키 값은 출력하지 않음)
+python -m medicloak serve --build     # 화면 빌드 후 서버, http://127.0.0.1:8000
+```
+
+계정은 의료진 `doctor1` · `doctor2`, 보안 담당자 `privacy1`이고 비밀번호는 `runs/medicloak/initial_accounts.txt`에 적힙니다. 키 없이 같은 화면을 보려면 `python -m medicloak serve --llm oracle --build`(결정적 응답기), 로그인 없이 둘러보려면 `python -m webdemo --build`를 씁니다.
+
+**테스트**
+
+```bash
+python -m pytest -q                   # 976 passed, 3 skipped (LLM은 가짜 HTTP 세션)
+cd frontend && npm test               # vitest 87 passed
+```
 
 ---
 
-## 9. 통합 브랜치로 합칠 때의 권장 구조
-
-두 구현을 단순히 한 폴더에 복사하기보다, Proto를 레거시/파이프라인 참고로 두고 통합 평가 프레임워크를 기본 실행 경로로 삼는 구성이 적합합니다.
+## 저장소 구성
 
 ```text
-evaluation/
-├── README.md                    # 이 문서 또는 요약 진입점
-├── proto/                       # 초기 CSV 기반 프로토타입(필요 시 보존)
-│   ├── log_schema.py
-│   ├── eval_baseline.py
-│   └── run_demo.py
-├── metrics/                     # 통합 평가 프레임워크
-│   ├── log_schema.py
-│   ├── eval_baseline.py
-│   └── run_test.py
-├── data/
-│   ├── trial_summary.json
-│   ├── turn_log.jsonl
-│   ├── rag_docs.jsonl
-│   └── fact_table.csv
-└── results/
-    ├── evaluation_report.md
-    └── evaluation_summary.json
+ZEROP_PII/
+├─ medicloak/              # 운영 모드 실행: init · serve · users · check-llm
+├─ webdemo/backend/        # FastAPI 서버: 로그인 · 진료 대화 · 공개 전 검사 · 관제 · 레드팀
+├─ frontend/               # React 화면: 진료 지원 AI(의료진) · MediCloak 관제(보안 담당자)
+├─ medical/                # 의료 시나리오 하네스: 문서 · 검색 · 대상 AI · 추출 · kcalc · Defender · 퍼저
+│  ├─ bundle/              # 팀 전달 고정본 (정규화 · 하네스 참조 구현 · 검증)
+│  ├─ scoring/             # 단서 추출 채점과 보류 검증
+│  └─ terminology.py       # 의료 용어 RAG (이유진)
+├─ risk_defender/          # Privacy State · k 계산 · 판정 정책 (이유진)
+├─ fuzzer/                 # k 피드백으로 변형 전략을 고르는 공격 질문 생성 (한재이)
+├─ evaluation/             # 평가 지표 정의 · 통계 검정, eval-metrics (이정민)
+├─ eval_demo/              # 평가 지표 22개 대시보드 (이정민)
+├─ data/medical/           # 의료 온톨로지 노드 · 사건연결표 · 표현-노드 매핑표 · Seed Registry
+├─ core/                   # .env 설정 · LLM 호출 (모든 갈래가 같이 씀)
+├─ scripts/                # 측정 · RAG 재측정 · 결과 다시 세기 · ADR 도구
+├─ tests/                  # pytest 979개 (가짜 HTTP 세션으로 LLM 경로까지)
+└─ docs/                   # ADR 33건 · 의료 시나리오 · 평가 통합 문서 · README 그림
 ```
 
-### 통합 시 반드시 정리할 항목
+SynthPAI(일반 게시글) 단계의 모듈(`target_llm/` · `qi_extractor/` · `normalizer/` · `attack/` · `ontology/` · `adapters/` · `orchestrator/` · `validation/` · `api_server/` · `analysis/` · `evaluation_v1/` · `risk_defender_synthpai/`)은 그대로 두었습니다. 의료로 옮기기 전 실험을 재현할 때 쓰며, 설명은 [docs/research_harness.md](docs/research_harness.md)에 있습니다. 평가 프로토타입(`eval/`과 루트의 `eval_baseline.py` · `log_schema.py` · `run_demo.py`)은 [docs/evaluation.md](docs/evaluation.md)를 보세요.
 
-1. **단일 기준 스키마 채택:** 신규 로그는 Trial/Turn/Cue 구조를 기본으로 하고 Proto CSV는 필요할 때 어댑터로 읽습니다.
-2. **QI 사전 통일:** `AGE`, `LOC`, `REGION` 등 명칭과 의미를 하나의 canonical mapping으로 정리합니다. `LOC`와 `REGION`을 동일 범주로 볼지는 팀에서 확정해야 합니다.
-3. **위험 판정 정의 통일:** `k=0`을 주 위반에 포함할지, 격리 상태로 별도 보고할지 문서·코드·논문에서 일치시킵니다.
-4. **임계값 분리 명시:** `k_req=5`(평가 기준), 일반화 임계값 5, 억제 임계값 3은 역할이 다르므로 이름과 설정 위치를 구분합니다.
-5. **로그의 k 의미 고정:** `k_run`(실행 추정), `k_val`(실제 공개 결과 검증), `k_val_candidate`(방어 전 후보)를 혼용하지 않습니다.
-6. **결과와 테스트 데이터 분리:** Toy 결과는 `toy_results/` 또는 테스트 산출물로 분리하고 실제 실험 결과와 섞지 않습니다.
-7. **사실표 의존성 확인:** `run_test.py`가 `fact_table` 로더를 import하므로 `fact_table.py` 또는 해당 모듈이 제공되는지 통합 브랜치에서 확인합니다.
-8. **스키마 중복 정리:** 현재 업로드된 `evaluation/evaluation/log_schema.py`에는 `TurnRecord` 필드가 중복 선언된 흔적과 중략 주석이 남아 있습니다. 병합 전 dataclass 정의를 한 번 정리하고 테스트를 실행해야 합니다.
-9. **문서와 코드의 테스트 설명 일치:** Toy 라벨 생성 로직과 상단 docstring/README 설명이 다른 부분이 없는지 확인합니다.
+## 문서
 
-### 권장 데이터 흐름
-
-```mermaid
-flowchart LR
-    A[실험 모듈] --> B[Trial / Turn / Cue 로그]
-    B --> C[Schema Validation]
-    C --> D[Fact-table Validation]
-    D --> E[Eval Metrics]
-    E --> F[Primary Risk Results]
-    E --> G[RAG Accuracy Results]
-    E --> H[Utility / Overblock]
-    E --> I[Unlearning Replay]
-    F --> J[Markdown Report]
-    G --> J
-    H --> J
-    I --> J
-```
+- [medicloak/README.md](medicloak/README.md): 운영 모드의 옵션, 화면 흐름, API, 보안 동작, 운영 가이드
+- [docs/medical.md](docs/medical.md): 의료 시나리오 하네스와 기준 집단 사전 점검
+- [docs/adr/](docs/adr/README.md): 설계 결정 기록 33건
+- [docs/evaluation.md](docs/evaluation.md): 평가 통합 문서(evaluation_proto · eval-metrics)
+- [docs/rag_remeasure/](docs/rag_remeasure/README.md): RAG 기준 재측정 도구와 원본 대조 검증기
+- [docs/README.md](docs/README.md): 나머지 문서 안내
 
 ---
 
-## 10. 선행연구와 평가 설계의 연결
+## 팀
 
-현재 문서에 정리된 선행연구는 지표의 개념적 근거로 활용할 수 있습니다. 다만 각 연구가 우리 코드의 산식을 그대로 사용했다고 서술해서는 안 됩니다.
+**Team Zero PII**
 
-| 평가 축 | 참고 연구/프레임워크 | 본 프로젝트에서 참고하는 점 |
-|---|---|---|
-| k-anonymity | Sweeney (2002), El Emam & Dankar (2008) | 후보군 크기 k와 재식별 위험의 이론적 배경 |
-| 다중 턴 누적 위험 | Weatherhead et al. (2026), Lee et al. (2026) | 대화가 누적되며 위험이 커지는 문제 설정 |
-| 텍스트 비식별화 | TAB (Pilán et al., 2022), Stubbs et al. (2015) | QI/개인정보 탐지의 Precision·Recall·F1 및 유용성 고려 |
-| RAG 사실성 | RAGAS, ARES | 검색 컨텍스트와 응답 주장의 근거 충실도 평가 |
-| 의료 QA 정확도 | MIRAGE/MedRAG, Med-HALT | 의료 도메인에서 정확도와 환각을 함께 평가 |
-| 응답 품질 루브릭 | HealthBench, LiveMedBench | 단순 문자열 유사도보다 내용·완전성·임상적 적절성을 평가 |
+| 이름 | 역할 | 맡은 일 |
+| --- | --- | --- |
+| 양승준 | System Integration · Development Lead | 대상 AI(RAG)와 단서 추출, 모듈 통합, MediCloak 서버와 화면, 실험 자동화 |
+| 한재이 | Privacy Fuzzing · Offensive Security Lead | 공격 시나리오, Seed와 변형, k 피드백 퍼저 |
+| 이유진 | Privacy Risk · Defense Lead | Privacy State와 k 계산, 판정 정책, 의료 용어 RAG |
+| 이정민 | Evaluation · Assurance Lead | 실험 설계, 평가 지표, 평가 대시보드 |
+| 배성윤 | Research · Policy & Privacy Model Lead | 위협 모델, 준식별정보 정의, 온톨로지와 연구 논리 |
 
-참고문헌 상세 목록은 기존 `evaluation/Evaluation.md` 및 `evaluation_v1/README.md`를 유지하거나 별도 `REFERENCES.md`로 분리하는 것이 좋습니다. 논문 인용 전에는 원문과 서지정보를 다시 확인해야 합니다.
+- 주간 스크럼과 Jira 백로그로 진행했고, 기준 · 구조 · 실험 방식을 바꾼 결정은 [ADR](docs/adr/README.md)로 남겼습니다.
+- 논문: 「대화형 의료 AI의 누적 준식별정보 노출에 대한 공개 전 방어」, 한국융합보안학회 2026 추계학술대회
 
----
-
-## 11. 핵심 요약
-
-- **evaluation_proto:** turn 단위 CSV를 쌓고 기본 Security / Defender / Utility / Coverage 지표를 계산하는 초기 파이프라인 검증 코드.
-- **eval-metrics:** Trial–Turn–Cue 구조, 정답 사실표 검증, 누적 위험 위반 통계, RAG 정확도, 과잉 차단, 유용성, 언러닝 재검증까지 포함하는 통합 평가 체계.
-- **통합 방향:** 신규 실험의 표준은 eval-metrics로 두고 Proto는 레거시 참고 또는 CSV 호환 어댑터로 유지.
-- **가장 중요한 주의점:** Proto와 통합 프레임워크의 k 위험 정의·분모·로그 단위가 다르므로, 기존 결과를 그대로 합치지 말고 canonical schema와 metric definition을 먼저 확정해야 합니다.
+<sub>모든 환자 데이터는 Synthea로 만든 합성 데이터입니다. 화면의 의료진 · 보안 담당자 이름과 계정은 시연용입니다.</sub>

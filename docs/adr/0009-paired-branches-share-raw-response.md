@@ -10,7 +10,7 @@ jira: [ZP-22]
 tags: [troubleshooting, reproducibility, paired]
 supersedes: []
 superseded_by: []
-sources: [README.md, orchestrator/shared_raw.py]
+sources: [docs/research_harness.md, orchestrator/shared_raw.py]
 ---
 # ADR-0009. 비교 갈래끼리 같은 질문과 같은 원 응답을 쓴다 (--paired)
 
