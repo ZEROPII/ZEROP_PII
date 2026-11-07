@@ -1,0 +1,33 @@
+diff --git a/medical/bundle/normalize_bridge.py b/medical/bundle/normalize_bridge.py
+index 7a577b5..22a841e 100644
+--- a/medical/bundle/normalize_bridge.py
++++ b/medical/bundle/normalize_bridge.py
+@@ -68,6 +68,18 @@ class Normalizer:
+         if role not in ROLES: return None, 'PENDING'
+         basis = 'DATE' if role.startswith(('CONDITION', 'CAREPLAN')) else 'UTC'   # 진단·관리 계획은 날짜만, 시술·진료·처방은 UTC
+         s = raw.strip()
++        # v0.11.2: 꼬리말('시작'·'부터'·'이후')과 기간 표기('2018-03-09~24', '2016-02-01~현재')를 정리한다.
++        #   시작 역할이면 '~' 왼쪽, 종료 역할이면 오른쪽(연·월이 빠졌으면 왼쪽 날짜에서 채움). '~현재'·'지속'은 종료일 없음.
++        s = re.sub(r'\s*(시작|부터|이후|경부터)$', '', s)
++        if '~' in s:
++            left, right = [x.strip() for x in s.split('~', 1)]
++            if role.endswith('_END') and right and not re.search(r'현재|지속', right):
++                m = re.fullmatch(r'(\d{4})-(\d{2})-(\d{2})', left)
++                if m and re.fullmatch(r'\d{1,2}', right): s = f'{m.group(1)}-{m.group(2)}-{int(right):02d}'
++                elif m and re.fullmatch(r'\d{1,2}-\d{1,2}', right): s = f'{m.group(1)}-' + '-'.join(f'{int(x):02d}' for x in right.split('-'))
++                else: s = right
++            else:
++                s = left
+         s = re.sub(r'\s*(경|쯤|무렵|즈음)$', '', s)
+         s2 = re.sub(r'(\d{1,2})\s*월\s*(초순|중순|하순|상순|초반|중반|후반|초|중|말)$', r'\1월', s)
+         if s2 != s: self._period_note = 'SUB_MONTH_TO_MONTH'; s = s2
+@@ -102,6 +114,9 @@ class Normalizer:
+                 if g.strip(): yield g.strip(), 'PAREN_SPLIT'
+         for j in self._JOSA:                                            # 뒤에 붙은 조사
+             if s.endswith(j) and len(s) > len(j) + 1: yield s[:-len(j)].strip(), 'JOSA_STRIPPED'
++        if '/' in s and att in ('DX', 'PROC', 'PLAN'):                   # v0.11.2: "Gingivitis/Gingival disease" → 각각 찾기
++            for part in s.split('/'):
++                if part.strip(): yield part.strip(), 'SLASH_SPLIT'
+         if att == 'REGION':
+             for suf in self._REGION_SUFFIX:                             # "Massachusetts 주"
+                 if s.endswith(suf) and len(s) > len(suf) + 1: yield s[:-len(suf)].strip().rstrip(','), 'REGION_SUFFIX_STRIPPED'

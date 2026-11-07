@@ -1,0 +1,64 @@
+name: ADR
+
+on:
+  pull_request:
+    paths:
+      - "docs/adr/**"
+      - "scripts/adr.py"
+      - ".github/workflows/adr.yml"
+  push:
+    branches: [main, system_integration]
+    paths:
+      - "docs/adr/**"
+      - "scripts/adr.py"
+
+permissions:
+  contents: write
+
+jobs:
+  lint:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: ADR 형식 검사
+        run: python scripts/adr.py lint
+      - name: 생성 파일 확인 (안내만)
+        run: |
+          if ! python scripts/adr.py index --check; then
+            echo "::notice::색인 · AI 문맥 파일은 병합 뒤 자동으로 갱신됩니다. 미리 보려면 python scripts/adr.py index"
+          fi
+      - name: 이 PR의 ADR 목록
+        run: |
+          {
+            echo "### 이 PR에서 바뀐 ADR"
+            git fetch --depth=1 origin "${{ github.base_ref }}"
+            git diff --name-only "origin/${{ github.base_ref }}" -- 'docs/adr/[0-9]*.md' | sed 's/^/- /'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  index:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: ADR 형식 검사
+        run: python scripts/adr.py lint
+      - name: 색인 · index.json · ADR_CONTEXT.md 생성
+        run: python scripts/adr.py index
+      - name: 바뀌었으면 커밋
+        run: |
+          if git diff --quiet -- docs/adr; then
+            echo "생성 파일 변화 없음"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/adr/README.md docs/adr/index.json docs/adr/ADR_CONTEXT.md
+          git commit -m "DOCS: ADR 색인 · AI 문맥 파일 갱신 [skip ci]"
+          git push

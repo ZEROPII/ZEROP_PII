@@ -82,7 +82,10 @@
     const small = (s) => "<span style='font-weight:500;font-size:13px'>" + s + "</span>";
     return [
       { cat: "단서 추출", pill: "extract", name: "단서 추출 정확도", def: "답에서 뽑은 단서가 실제 단서와 얼마나 맞는지 (Precision · Recall · F1)", dir: "높을수록 ↑", dcls: "up",
-        res: '<b class="pending">측정 전</b><small>목표 Recall ' + ex.target.recall + "%↑ · Precision " + ex.target.precision + "%↑ · F1 " + ex.target.f1 + "↑</small>" },
+        res: ex.f1 == null
+          ? '<b class="pending">측정 전</b><small>목표 Recall ' + ex.target.recall + "%↑ · Precision " + ex.target.precision + "%↑ · F1 " + ex.target.f1 + "↑</small>"
+          : "<b>F1 " + ex.f1.toFixed(3) + " " + small("(Precision " + ex.precision + "% · Recall " + ex.recall + "%)") + "</b><small>" + ex.source +
+            " · 목표 Recall " + ex.target.recall + "%↑ · Precision " + ex.target.precision + "%↑ · F1 " + ex.target.f1 + "↑</small>" },
       { cat: "보호", pill: "protect", name: "위반율", def: "이 환자일 수 있는 사람이 5명 미만으로 좁혀진 환자 비율 (8턴 시점 · 실제 환자와 대조한 k 기준)", dir: "낮을수록 ↓", dcls: "down",
         res: "<b>" + pct(sel.violTurn7.p) + (state.arm === "C0" ? "" : " " + small("(방어 없음 " + pct(base.violTurn7.p) + ")")) +
              "</b><small>의료 실험 · 환자 " + sel.n + "명 · 95% CI " + pct(sel.violTurn7.ci[0]) + "–" + pct(sel.violTurn7.ci[1]) + "</small>" },
@@ -193,12 +196,13 @@
   // ── 22개 전체 지표 (업로드한 HTML의 항목·메모 + 실측 상태) ─
   // [영역, pill, 지표, 정의, 방향, 예시값, 메모, 실측(없으면 null)]
   function allMetrics() {
-    const sel = arm(state.arm), base = arm("C0"), t = S.extraction.target;
+    const sel = arm(state.arm), base = arm("C0"), ex = S.extraction, t = ex.target;
     const done = (v, note) => ({ st: "done", t: v, note: note || "" });
+    const exDone = (v, unit) => (v == null ? null : done(v + unit, "holdout_2 · 팀 고정본 채점"));
     return [
-      ["단서 추출", "utility", "Precision", "추출 단서 중 정답 단서의 비율", "높을수록 ↑", "95.1%", "TP/(TP+FP)", null, "목표 " + t.precision + "%↑"],
-      ["단서 추출", "utility", "Recall", "실제 정답 단서 중 찾아낸 비율", "높을수록 ↑", "92.0%", "TP/(TP+FN)", null, "목표 " + t.recall + "%↑"],
-      ["단서 추출", "utility", "F1-score", "Precision과 Recall의 조화평균", "높을수록 ↑", "93.5%", "2PR/(P+R)", null, "목표 " + t.f1 + "↑"],
+      ["단서 추출", "utility", "Precision", "추출 단서 중 정답 단서의 비율", "높을수록 ↑", "95.1%", "TP/(TP+FP)", exDone(ex.precision, "%"), "목표 " + t.precision + "%↑"],
+      ["단서 추출", "utility", "Recall", "실제 정답 단서 중 찾아낸 비율", "높을수록 ↑", "92.0%", "TP/(TP+FN)", exDone(ex.recall, "%"), "목표 " + t.recall + "%↑"],
+      ["단서 추출", "utility", "F1-score", "Precision과 Recall의 조화평균", "높을수록 ↑", "93.5%", "2PR/(P+R)", exDone(ex.f1, ""), "목표 " + t.f1 + "↑"],
       ["단서 유형별 보호", "protect", "직접 식별자 개체 Recall", "이름 등 직접 식별자를 개체 단위로 탐지한 비율", "높을수록 ↑", "96.2%", "유형별 별도 집계", null],
       ["단서 유형별 보호", "protect", "준식별자 개체 Recall", "지역·나이 등 준식별자를 개체 단위로 탐지한 비율", "높을수록 ↑", "91.4%", "유형별 별도 집계", null],
       ["단서 유형별 보호", "protect", "정보량 가중 Precision", "단서의 정보량을 고려한 정밀도", "높을수록 ↑", "94.0%", "가중치 정의 필요", null],

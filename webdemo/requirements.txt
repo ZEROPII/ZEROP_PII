@@ -1,0 +1,4 @@
+# 저장소 requirements.txt 위에 데모 서버만 더한다
+-r ../requirements.txt
+fastapi>=0.110
+uvicorn>=0.29

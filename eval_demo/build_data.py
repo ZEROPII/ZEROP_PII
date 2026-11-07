@@ -1,8 +1,8 @@
 """poc_summary.json -> data.js 변환 스크립트.
 
 사용법 (저장소 루트에서):
-    python scripts/build_data.py                       # data/poc_summary.json 사용
-    python scripts/build_data.py path/to/new_summary.json
+    python eval_demo/build_data.py                       # eval_demo/poc_summary.json 사용
+    python eval_demo/build_data.py path/to/new_summary.json
 
 PPT에만 있고 JSON에는 없는 값(SynthPAI 정보 유지율, 처리 시간 등)은
 아래 STATIC 딕셔너리에서 직접 수정하세요.
@@ -11,8 +11,8 @@ import json
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parent.parent
-src = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "data" / "poc_summary.json"
+ROOT = Path(__file__).resolve().parent          # eval_demo/ (저장소에서는 data/ · scripts/ 없이 한 폴더에 둔다)
+src = Path(sys.argv[1]) if len(sys.argv) > 1 else ROOT / "poc_summary.json"
 raw = json.loads(src.read_text(encoding="utf-8"))
 
 # ── JSON에 없는 값: 발표자료(37·39·42p) 기준. 새로 측정하면 여기만 고치면 됩니다. ──
@@ -23,7 +23,11 @@ STATIC = {
     "latency": {"meanSec": 0.011, "p95Sec": 0.037,
                 "source": "시뮬레이션 · k 계산 + 판정, LLM 제외 (발표 42p)"},
     # 아직 측정 전인 값은 None 으로 두면 화면에 '측정 전'으로 표시됩니다.
-    "extraction": {"recall": None, "precision": None, "f1": None,
+    # 측정값: holdout_2 (규칙 고정 뒤 처음 보는 질의 환자 13명 · 14 trial), 팀 고정본 채점 단계 1.
+    # 출처와 재현 명령은 medical/scoring/결과_기록.md · README.md
+    "extraction": {"recall": 89.2, "precision": 97.0, "f1": 0.929,
+                   "committed": {"recall": 83.2, "f1": 0.896},
+                   "source": "holdout_2 · 처음 보는 질의 환자 13명 · 팀 고정본 채점 (확정 값 기준 재현율 83.2% · F1 0.896)",
                    "target": {"recall": 95, "precision": 90, "f1": 0.92}},
 }
 

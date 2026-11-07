@@ -1,266 +1,370 @@
-evaluation_proto
-# Evaluation (Sprint 1)
+# ZEROP_PII
 
-log schema + baseline evaluation 파트입니다. Sprint 1 목표는 일단 한 번 끝까지 도는
-것이라, 지표를 다 채우기보다 로그를 쌓고 읽고 결과를 뽑는 흐름부터 맞췄습니다.
+멀티턴 대화에서 준식별정보(QI)가 쌓여 대상이 몇 명까지 좁혀지는지(k)를 턴마다 계산하고, 기준 아래로 내려가려는 응답을 공개 전에 일반화·억제하는 Privacy Framework의 POC 구현입니다.
 
-## 파일
+공격 질문 생성(Fuzzer), 대상 시스템(Target LLM), QI 추출, 위험 판정·방어(Risk/Defender), 평가 로그를 한 번의 실행으로 연결합니다.
 
-- `log_schema.py` — 로그 한 줄(turn 하나)의 스키마와 CSV로 쌓는 `LogManager`. 직접
-  실행하는 파일이 아니라 다른 모듈에서 import해서 사용합니다.
-- `eval_baseline.py` — 쌓인 CSV를 읽어서 지표를 계산합니다. 이 파일을 실행합니다.
-- `run_demo.py` — 더미 데이터로 확인용
+## 통합 브랜치 `feat/integrated-v2-scoring-terminology` (2026-11-03)
 
-세 파일 다 같은 폴더에 있어야 합니다 (`eval_baseline.py`가 `log_schema.py`를 import).
+`feat/integrated-demo`(9c5c148) 위에 아래를 합친 브랜치입니다.
 
-## 로그 컬럼
+| 가져온 것 | 출처 | 들어간 곳 |
+| --- | --- | --- |
+| 단서 추출 규칙 추출 · 정규화 v2 · 추출 바로잡기 | 양승준 (holdout 검증용으로 따로 보낸 패치 2개) | `medical/rule_extract.py` · `normalize_ext.py` · `obs_fix.py`, `python -m medical run --rule-extract` |
+| 단서 추출 · 위험 판정 채점, 보류 검증 도구와 결과 | 팀 고정본 채점 + 양승준 | `medical/scoring/` ([README](../medical/scoring/README.md), [결과 기록](../medical/scoring/결과_기록.md)) |
+| 평가 지표 22개 대시보드, 평가 문서 | 이정민 `eval-metrics` | `eval_demo/`, `evaluation/README.md` · `Evaluation.md`. 데모 서버 `/eval/` |
+| K 피드백 끄기(No-K) Ablation | 한재이 `K_FUZZER_ON_OFF` (39a3863) | `adapters/fuzzer_adapter.py`, `orchestrator --feedback-mode no-k`, `validation/ablation.py` |
+| Mutation 시스템 프롬프트 갱신, 공격 시드 Target QI | 한재이 `fuzzer_proto` | `fuzzer/seedinput/seedprompt.txt`, `fuzzer/fuzzer_mutation.py` |
+| 의료 용어 RAG | 이유진 `feat/terminology-rag` | `medical/terminology.py`, `scripts/build_terminology_db.py`, 화면 연동 ([README](../medical/README_terminology.md)) |
 
-한 turn당 한 줄씩 남습니다.
-
-필수: `experiment_id`, `target_id`, `defender`, `turn`, `attack_type`, `mutation_type`,
-`qi`, `k_before`, `k_after`, `risk_event`, `generalized`, `suppressed`, `utility_score`
-
-옵션: `transition_id`, `state_id`, `threshold`, `model`, `config`, `replay_type`,
-`timestamp`(레코드 생성 시각, 안 넘기면 자동으로 채워짐)
-
-`qi`는 값이 아니라 카테고리 이름만 남깁니다 (`"age|location"` 형태). prompt나 응답
-원문도 저장하지 않습니다. 
-
-QI 표기도 걸리는 부분이 있는데, Fuzzer 쪽 target(`AGE`, `LOC`, `SEX`, `INC`...)이
-확정 QI 5개(`age`, `location`, `occupation`, `education`, `relationship_status`)와
-대소문자도 다르고 항목도 다릅니다. 로그 자체는 어떤 문자열이 와도 그대로 쌓이지만,
-표기가 다르면 Coverage 집계가 어긋나므로 통일이 필요합니다.
-
-## 쓰는 법
-
-turn마다 이렇게 기록하면 됩니다.
-
-```python
-from log_schema import ExperimentLogRecord, LogManager
-
-logger = LogManager("evaluation/logs/experiment_log.csv")
-logger.log_turn(ExperimentLogRecord(
-    experiment_id="exp_001", target_id="person_101", defender="none",
-    turn=1, attack_type="direct", mutation_type="none",
-    qi=["age"], k_before=100, k_after=50,
-    risk_event=False, generalized=False, suppressed=False,
-))
-```
-
-평가는:
+화면과 서버:
 
 ```bash
-python eval_baseline.py
+python -m medicloak init && python -m medicloak serve --build   # 운영 모드: 로그인 · 가상 EMR(DB · FHIR) · .env의 실제 LLM. medicloak/README.md
+python -m webdemo --build          # 데모 서버 + 화면 (LLM 0, API 키 불필요, 로그인 없음). http://127.0.0.1:8000
+python -m api_server               # 실제 LLM 연구 서버 (.env 필요). 화면은 cd frontend && VITE_API_MODE=http VITE_API_BASE_URL=/api npm run dev
+python scripts/build_terminology_db.py --no-llm   # 용어 DB 메타데이터 (LLM 0). 쉬운 설명은 --resume으로 채움 (LLM)
 ```
 
-`results/`에 `evaluation_summary.csv/.md`, `coverage_summary.json`이 생성됩니다.
-로그 파일이 없거나 비어 있어도 에러 없이 "0건입니다" 안내만 뜨고 끝나므로, 실행
-순서를 따로 신경 쓸 필요는 없습니다.
+의료 용어는 위쪽 막대 `용어` 버튼, 답변 속 밑줄 · 용어 칩, 보안 담당자 `용어` 메뉴에서 봅니다. 화면에서는 LLM을 부르지 않습니다.
 
-## run_demo.py
+## 현재 상태
 
-실제 로그 없이 파이프라인만 확인하고 싶을 때 사용합니다.
+| 항목 | 상태 |
+| --- | --- |
+| 모듈 구현 및 연결 (질문 생성 → 응답 → 추출 → 판정 → 공개 → State 반영) | 완료 |
+| 단위·통합 테스트 | pytest 882개 통과 · frontend vitest 15개 (LLM 호출은 가짜 client 사용) |
+| 의료 시나리오 (Synthea 576명) | `python -m medical` — RAG 문서·유사 환자 검색·사례별 추적·사건 단위 k(kcalc)·Defender(이유진 정책)·C0/C1/C1S·Validated k. 상세: [docs/medical.md](../docs/medical.md) |
+| 단서 추출 정확도 (보류 검증) | holdout_2(처음 보는 질의 환자 13명) 팀 고정본 채점 정밀도 97.0% · 재현율 89.2% · F1 0.929, 확정 값 기준 F1 0.896. [medical/scoring/](../medical/scoring/README.md) |
+| 화면 (MediCloak) | `frontend/` 의료진 화면(EMR 진료 지원 AI, 위험 숫자 없음, 사례 노트 · 세부 정보 요청) + 보안 관제 · 의료진 대화 위험 분석 · 단서 그래프 · 리포트 · 감사 기록 · 의료 용어 사전. 데모 서버(`python -m webdemo`) 또는 연구 서버(`python -m api_server`). ADR-0020 |
+| MediCloak 운영 모드 | `python -m medicloak`: 로그인 · 역할 분리(의료진 · 보안 담당자), 의료진 계정마다 대화, SQLite DB(가상 EMR 576명 · 대화 · 감사 기록), FHIR R4 읽기 API(외래 환자만), `.env`의 실제 LLM이 의료진 질문에 답함, 의료진 화면 API에서 위험 숫자 제거. [medicloak/README.md](../medicloak/README.md), ADR-0021 |
+| 의료 용어 RAG | 검색 · 용어 카드 · 답변 속 용어 자동 표시 (`medical/terminology.py` + `term_service.py`) |
+| 실행 갈래 | C0(Defender 없음), C1(공개 전 Defender), C1S(무상태 Defender 대조군) |
+| 위험 계산 백엔드 | `risk_defender`(이유진 파트, 기본) / `ontology`(D1 Stage 3 계층 + D1 Stage 11 Defender) |
+| Privacy Coverage 기록 (D1 Stage 9) | 턴별 판정과 세션 요약을 trace에 기록 |
+| 위험 경로 보관 (D1 Stage 10) | 실행 중 k가 k_req 아래로 내려갔거나 0이 된 세션의 질문 순서를 `high_risk_paths.jsonl`에 기록 |
+| 정답(GT) 대조 평가 `k_val` | `python -m validation` (실행이 끝난 뒤 따로 돌림. 실행 중 코드는 정답을 읽지 않음) |
+| Exact Replay (D1 Stage 13) | `python -m orchestrator.replay` (보관된 질문을 새 세션에서 그대로 재실행) |
+| 실행 집계 | `python -m orchestrator.report` (대상이 여럿이면 대상별 표와 갈래별 위반 조합 포함) |
+| 기록된 응답으로 다시 계산 | `python -m orchestrator.recompute` (코드를 고친 뒤 LLM을 거의 부르지 않고 결과 재확인) |
+| 유용성 지표 | 원 응답 대비 공개 응답의 유사도·길이비·QI 유지율 (`orchestrator/utility.py`, LLM 호출 없음). 로그의 `utility_score`에 유사도를 기록 |
+| 실행 비교와 짝 검정 | `python -m orchestrator.report … --compare 파일` (설정별 비교표, exact McNemar) |
+| 대상 선정 | `python -m validation.select_targets` (사람 라벨로 층을 나눠 추첨) |
+| C2·C3 (경량 언러닝 규칙 생성·주입) | 미구현 |
+| 변형 재공격 (D1 Stage 14), Interesting 질문의 Seed 승격 | 미구현 |
+
+모듈별 상세 설명(Risk/Defender 정책, Threshold 선정 근거, Evaluation 로그 컬럼)은 [docs/modules.md](../docs/modules.md)에, 온톨로지 계층과 검토가 필요한 항목은 [docs/ontology.md](../docs/ontology.md)에 있습니다.
+
+## 폴더 구조
+
+| 폴더 | 담당 | 하는 일 |
+| --- | --- | --- |
+| `core/` | 양승준 | `.env` 설정 적재, LLM 호출(Anthropic `/v1/messages` 형식), QI 공통 정의 |
+| `target_llm/` | 양승준 | SynthPAI 코멘트 적재, persona 단위 검색, Target 응답 생성 |
+| `qi_extractor/` | 양승준 | 응답에서 8개 QI 관찰값 추출, 근거 문구 검증 |
+| `normalizer/` | 양승준 | 관찰값을 기준 집단 표기로 정규화 (MAPPED / PENDING / UNMAPPED) |
+| `attack/` | 양승준 | Seed 레지스트리 적재, 조건 평가, Seed 선택 |
+| `ontology/` | 양승준 (계층 명세 검토: 배성윤) | 8개 QI의 표준 값과 상하위 관계, 기준 집단 매핑, 후보 수 색인, 일반화 탐색 |
+| `adapters/` | 양승준 | `risk_defender`·`fuzzer` 연결 어댑터, 온톨로지 백엔드(`ontology_risk.py`) |
+| `orchestrator/` | 양승준 | 턴 루프, 공개 게이트, 응답 재작성, Coverage 기록, 실행 기록, 위험 경로 보관, 재실행, 집계 |
+| `medical/` | 양승준 (전달 묶음 `medical/bundle/`은 원본 그대로) | 의료 시나리오 실행: 문서·검색·대상 AI·추출·사례 추적·Defender·질문 생성·평가·집계 |
+| `medical/scoring/` | 양승준 (`frozen/`은 팀 고정본, 수정 금지) | 단서 추출 · 위험 판정 채점, 보류 검증 |
+| `medical/terminology.py`, `scripts/build_terminology_db.py` | 이유진 | 의료 용어 DB와 검색 |
+| `api_server/`, `frontend/` | 한재이 (화면 통합 · 관제 화면: 양승준) | 연구 서버 API, React 화면 |
+| `webdemo/` | 양승준 | 데모 서버 (결정적 응답기, LLM 0), 관제 · 레드팀 · `/eval/` |
+| `eval_demo/`, `evaluation/` | 이정민 | 평가 지표 대시보드, 평가 지표 정의 |
+| `validation/` | 양승준 | 실행이 끝난 뒤 State를 정답과 대조해 `k_val` 계산 (실행 중 코드에서 import 금지) |
+| `fuzzer/` | 한재이 | k 피드백 → 변형 전략 → Mutation 지시문 |
+| `risk_defender/` | 이유진 | Privacy State, k 계산, 일반화·억제 판정 |
+| `evaluation_v1/` | 이정민 | 실험 로그 스키마, 지표 계산 |
+| `data/seed_registry/` | 한재이 | O1 72개, O2 45개 Seed |
+| `scripts/` | 이유진 | 합성 기준 집단 생성, threshold 실험 |
+| `tests/` | — | 위 모듈 테스트 |
+
+팀원 모듈(`fuzzer/`, `risk_defender/`, `evaluation_v1/`)은 수정하지 않고 `adapters/`와 `orchestrator/`에서 불러 씁니다.
+
+## 한 턴의 처리 순서
+
+1. **질문 생성** — 공개된 QI와 턴 수만 보고 조건에 맞는 Seed를 고른 뒤 Mutation LLM으로 질문을 만든다. Seed는 위험 계산에 들어가는 QI를 노리는 것부터 고른다.
+2. **Target 응답** — 대상 persona의 코멘트를 문맥으로 원 응답(raw candidate)을 만든다.
+3. **추출·정규화** — 원 응답에서 QI를 뽑아 기준 집단 표기로 바꾼다.
+4. **공개 게이트**
+   - C0: 원 응답을 그대로 공개한다.
+   - C1: Defender 판정에 따라 응답을 고쳐 쓰고, 고친 응답에서 다시 추출해 k가 하한 이상인지 확인한다. 끝내 만족하지 못하면 거절 문장을 공개한다.
+   - C1S: C1과 같되 Defender가 매 턴 빈 State에서 판정한다. 누적 State가 방어에 얼마나 기여하는지 보기 위한 대조군이다.
+5. **State 반영** — 공개된 응답에서 나온 관찰만 State에 넣고 k를 갱신한다.
+6. **피드백** — 턴 전후 k를 Fuzzer에 돌려주어 다음 변형 전략을 고른다.
+
+원 응답과 정답(GT)은 공격 쪽 모듈과 State로 넘어가지 않습니다. k 값은 전략 선택에만 쓰이고 Mutation LLM 프롬프트에는 들어가지 않습니다.
+
+## 설치
+
+Python 3.10 이상이 필요합니다.
 
 ```bash
-python run_demo.py
-
-# Privacy Risk / Defender Module
-
-이 모듈은 이유진 담당 범위인 Privacy State, 후보군 크기 `k`, 재식별 위험도, projected risk, Defender 일반화/억제 동작을 구현한 코드.
-
-## QI Set
-
-Synthea 합성 환자 기반 의료 시나리오에서 다음 7개 QI를 사용한다. 명칭은 fuzzer 코드와 통일된 영어 대문자 약어를 사용한다.
-
-| 약어 | 의미 | 저장 형태 | 출처 |
-|------|------|-----------|------|
-| `SEX` | 성별 | 단일 문자열 | `sex_node` |
-| `REGION` | 거주/진료 지역 | 단일 문자열 | `region_node` |
-| `DX` | 진단명 (SNOMED CT / ICD) | 이벤트 번들 리스트 | `code_node` (CONDITION) |
-| `PROC` | 시술/처치 (SNOMED CT) | 이벤트 번들 리스트 | `code_node` (PROCEDURE, PROCEDURE_HISTORY) |
-| `MED` | 투약 정보 | 이벤트 번들 리스트 | `code_node` (MEDICATION) |
-| `PLAN` | 케어플랜 | 이벤트 번들 리스트 | `code_node` (CAREPLAN) |
-
-`PERIOD`는 독립 QI 필드 없이 각 이벤트 번들의 `"date"` (시작일) / `"date_end"` (종료일) 키로 내포된다.
-환자 레벨 `AGE`는 제거됨 — 나이 정보는 각 이벤트 번들의 `"age"` 키로만 존재한다.
-
-### 이벤트 번들 구조
-
-DX/PROC/MED/PLAN은 각 이벤트를 `{"code", "age", "date", "date_end"}` 번들로 저장한다. 종료일(`date_end`)이 없는 이벤트(예: 진행 중 투약)는 해당 키를 생략한다.
-
-```json
-{
-  "SEX": "SEX_MALE",
-  "REGION": "REGION_DATASET_LOCALITY_...",
-  "DX": [
-    {"code": "DX_SCT_66383009", "age": "AGE_Y22", "date": "PERIOD_CONDITION_START_DATE_DAY_2019-03-24", "date_end": "PERIOD_CONDITION_END_DATE_DAY_2019-04-07"},
-    {"code": "DX_ICD_CODE_J329", "age": "AGE_Y25", "date": "PERIOD_CONDITION_START_DATE_DAY_2022-11-07"}
-  ],
-  "PROC": [
-    {"code": "PROC_SCT_1260009003", "age": "AGE_Y22", "date": "PERIOD_PROCEDURE_START_UTC_DAY_2019-04-06", "date_end": "PERIOD_PROCEDURE_END_UTC_DAY_2019-04-06"}
-  ],
-  "MED": [
-    {"code": "MED_RX_1535362", "age": "AGE_Y22", "date": "PERIOD_MEDICATION_START_UTC_DAY_2019-03-24", "date_end": "PERIOD_MEDICATION_END_UTC_DAY_2019-09-30"}
-  ]
-}
+git clone https://github.com/ZEROPII/ZEROP_PII.git
+cd ZEROP_PII
+python -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
 ```
 
-### 이벤트 수 분포 (576명 기준)
+## 실행 준비
 
-사건표(사건연결표_v0.9.csv)의 전체 이벤트를 상한 없이 포함한다. 고유 코드 기준 중복 제거 후 날짜순 정렬.
-
-| QI | 총 이벤트 | 환자당 평균 |
-|----|----------|------------|
-| DX | 5,032 | 8.7 |
-| MED | 3,848 | 6.7 |
-| PROC | 2,742 | 4.8 |
-| PLAN | 1,738 | 3.0 |
-
-PROC는 `PROCEDURE`와 `PROCEDURE_HISTORY` 이벤트를 모두 포함한다.
-
-## 데이터 파일
-
-`risk_defender/data/`에 포함되어 있다. 별도 설정 없이 바로 실행 가능하다.
-
-| 파일 | 설명 |
-|------|------|
-| `risk_defender/data/노드_v0.9.csv` | 69,034개 노드와 계층 구조 (node_id, parent_id, depth, canonical_label) |
-| `risk_defender/data/사건연결표_v0.9.csv` | 576명 환자의 51,759개 의료 이벤트 |
-| `risk_defender/data/user_patient_profiles_576.json` | 576명 환자 프로필 **(기본값)** |
-
-`user_patient_profiles_576.json`은 `사건연결표_v0.9.csv`에서 재생성할 수 있다.
+### 1. 환경변수
 
 ```bash
-python3 -c "
-from risk_defender.loader import load_population_from_csv
-import json, pathlib
-records = load_population_from_csv(seed=None)  # 상한 없음, 사건표 전체
-out = [{'person_id': r.person_id, 'qis': r.qis} for r in records]
-pathlib.Path('risk_defender/data/user_patient_profiles_576.json').write_text(
-    json.dumps(out, ensure_ascii=False, indent=2), encoding='utf-8'
-)
-"
+cp .env.example .env
 ```
 
-## Risk 정의
+`.env`를 열어 세 값을 채웁니다. Fuzzer, Target, Extractor, 재작성기가 모두 이 설정 하나를 씁니다.
 
-```text
-K_t = 현재 Privacy State에 저장된 QI 조합과 일치하는 reference population 후보군
-k_t = |K_t|
-Risk_t = 1 / k_t
-RiskGain_t = Risk_after - Risk_before
+```
+LLM_API_KEY=
+LLM_API_BASE=
+LLM_MODEL=
 ```
 
-`k_after <= threshold`이면 해당 QI 추가가 위험하다고 판단한다. 후보가 0명인 경우(`k = 0`)도 상태가 모순되었거나 지나치게 구체화된 것으로 보고 위험 transition으로 처리한다.
+`.env`는 `.gitignore`에 등록되어 있습니다. 커밋하지 마세요.
 
-## Defender 정책
-
-두 개의 threshold를 사용한다: `generalize_threshold=5`, `suppress_threshold=3`
-
-| projected k | 동작 |
-|-------------|------|
-| k > 5 | **allow** — 그대로 허용 |
-| 3 < k ≤ 5 | **generalize** — 일반화 시도, 실패 시 suppress |
-| k ≤ 3 | **suppress** — 일반화 없이 바로 억제 |
-
-k ≤ suppress_threshold이면 어떤 일반화도 시도하지 않고 즉시 해당 QI를 제거한다. k가 위험 구간(3 < k ≤ 5)일 때만 일반화를 거친다.
-
-## QI별 일반화 규칙
-
-일반화는 노드 계층(노드_v0.9.csv)을 따라 parent_id 방향으로 올라간다. 번들 이벤트에서는 `"code"` 필드가 일반화 대상이다.
-
-| QI | 일반화 예시 |
-|----|------------|
-| `AGE` | `AGE_Y22` → `AGE5_20` (20~24세) → `AGE10_20` (20대) → `ANY_AGE` |
-| `SEX` | `SEX_MALE` / `SEX_FEMALE` → `ANY_SEX` |
-| `REGION` | `REGION_DATASET_LOCALITY_*` (도시) → `REGION_DATASET_STATE_*` (주) → `ANY_REGION` |
-| `DX` | `DX_SCT_65363002` → 상위 개념 → `ANY_DX` |
-| `PROC` | `PROC_SCT_*` → 상위 개념 → `ANY_PROC` |
-| `MED` | `MED_RX_*` → 상위 분류 → `ANY_MED` |
-| `PLAN` | `PLAN_SCT_*` → 상위 분류 → `ANY_PLAN` |
-
-## 실행 예시
+### 2. 데이터
 
 ```bash
-# 프로젝트 루트에서
-python3 -m risk_defender.demo --generalize-threshold 5 --suppress-threshold 3
-
-# risk_defender 폴더 안에서
-python3 demo.py --generalize-threshold 5 --suppress-threshold 3
-
-# 특정 환자 지정 (UUID 또는 1-based 인덱스)
-python3 -m risk_defender.demo --target-id ae3336a0-1686-b8a7-bc13-ccc2967a3f73
-python3 -m risk_defender.demo --target-id 2
-
-# 데이터 경로 직접 지정
-python3 -m risk_defender.demo \
-  --profiles /path/to/user_patient_profiles_576.json \
-  --node-data /path/to/노드_v0.9.csv
+python -m target_llm.download          # SynthPAI 코멘트 (data/synthpai/)
+python -m adapters.prepare_reference    # 기준 집단: 원본 300명 + 합성 299,700명
 ```
 
-실행 결과는 `outputs/demo_single_target.csv`에 저장된다. 각 turn마다 원본 QI를 그대로 넣었을 때의 `k_after_raw`, Defender 적용 후의 `k_after_defense`, 일반화 또는 억제 결과가 기록된다.
+두 데이터 모두 저장소에 올라가지 않으므로 처음 한 번 실행해야 합니다. 기준 집단 파일은 약 70MB입니다.
 
-## Demo 동작 방식
+### 3. 연결 확인
 
-`demo.py`는 재현 가능한 검증을 위해 QI 입력 순서를 고정해서 실행한다.
-
-```python
-DEMO_QI_ORDER = ["AGE", "SEX", "REGION", "DX", "PROC", "MED", "PLAN"]
+```bash
+python -m core.llm_client               # 모델 응답이 오는지 확인
+python -m pytest -q                     # 805 passed
+python -m ontology                      # 기준 집단이 온톨로지로 전부 풀리는지 점검 (LLM 호출 없음)
 ```
 
-`--target-id`를 지정하지 않으면 population에서 첫 번째 환자를 기본 target으로 사용한다. 대상 환자에 특정 QI(예: PLAN)가 없으면 해당 turn은 건너뛴다.
+## 실행
 
-## 지금까지 한 것
+### 전체 실행
 
-- Privacy State / k / Defender 핵심 모듈 구현 완료
-- Synthea 합성 환자 576명을 reference population으로 로딩
-- 노드 계층(노드_v0.9.csv)을 활용한 계층적 QI 매칭 및 일반화 구현
-- 6개 의료 QI(SEX/REGION/DX/PROC/MED/PLAN)가 누적될 때 k와 risk gain 계산
-- threshold 이하 QI는 노드 계층을 따라 일반화하거나 억제
-- 이벤트 번들 구조 도입: DX/PROC/MED/PLAN 각 항목에 해당 시점 `age`, `date`, `date_end` 함께 저장
-- 환자 레벨 `AGE` 제거 → 나이 정보는 각 이벤트 번들 내 `"age"` 키로만 보유
-- 프로필 이벤트 수 상한 제거: 사건표 전체와 1:1 매칭 (DX 8.7개 / MED 6.7개 / PROC 4.8개 / PLAN 3.0개)
-- `PROCEDURE_HISTORY` 이벤트를 `PROC`으로 통합 (PROC 총계 2,742개)
-
-## 다음에 할 것
-
-
-
-## 핵심 인터페이스
-
-```python
-from risk_defender.loader import load_population
-from risk_defender.schema import PrivacyState, QIObservation
-from risk_defender.risk import evaluate_projected_risk
-from risk_defender.defender import defend_candidate_qis
-
-population = load_population()  # 기본값: user_patient_profiles_576.json
-
-state = PrivacyState(target_id="<patient-uuid>", session_id="s1")
-
-# 코드만 전달 → 해당 코드 가진 환자 전원 후보
-projected = evaluate_projected_risk(
-    population,
-    state,
-    [QIObservation("DX", {"code": "DX_SCT_65363002"})],
-    threshold=5,
-)
-
-# 코드 + 나이 같이 전달 → 더 좁은 후보군
-projected = evaluate_projected_risk(
-    population,
-    state,
-    [QIObservation("DX", {"code": "DX_SCT_65363002", "age": "AGE_Y22"})],
-    threshold=5,
-)
-
-decision = defend_candidate_qis(
-    population,
-    state,
-    [QIObservation("REGION", "REGION_DATASET_LOCALITY_E0E1225FF2456D89")],
-    generalize_threshold=5,
-    suppress_threshold=3,
-)
-
-main
+```bash
+python -m orchestrator --target pers1 --arms C0 C1 --turns 10 --experiment-id run_rd
+python -m orchestrator --target pers1 --arms C0 C1 C1S --backend ontology --turns 10 --experiment-id run_onto
 ```
+
+| 옵션 | 기본값 | 설명 |
+| --- | --- | --- |
+| `--target` | `pers1` | 대상 persona. 여러 개를 띄어 써서 줄 수 있음 |
+| `--arms` | `C0 C1` | 실행할 갈래. `C1S`를 넣으면 무상태 Defender 대조군도 돌린다 (`--conditions`도 같은 뜻) |
+| `--backend` | `risk_defender` | 위험 계산 방식. `ontology`는 D1 계층으로 8개 QI를 모두 센다 |
+| `--turns` | `5` | 세션당 턴 수 |
+| `--threshold` | `3` | 반드시 지키는 경계. k가 이 값 이하면 위험 (k_req = 값 + 1). `risk_defender`의 억제 기준 |
+| `--generalize-threshold` | `5` | `risk_defender`가 일반화를 시도하기 시작하는 경계. `ontology` 백엔드는 쓰지 않음 |
+| `--population` | `expanded` | `expanded`: 30만 명 / `base`: 원본 300명 |
+| `--rng-seed` | `42` | Seed 선택 난수 |
+| `--defense-rounds` | `2` | 응답 고쳐 쓰기 최대 횟수 |
+| `--experiment-id` | `poc_날짜_시각` | 결과 폴더 이름 |
+| `--temperature` | `0` | Target 응답의 temperature. 갈래 간 차이가 응답의 우연한 흔들림에서 오지 않게 고정한다. 음수를 주면 서버 기본값 |
+| `--all-seeds` | 꺼짐 | 켜면 k에 들어가지 않는 QI를 묻는 Seed도 고른다 (기본은 백엔드가 세는 QI를 노리는 Seed만) |
+| `--targets-file` | 없음 | 대상 목록 파일(`python -m validation.select_targets` 결과). 주면 `--target` 대신 쓴다 |
+| `--resume` | 꺼짐 | 같은 `--experiment-id`의 이전 기록에서 모든 갈래가 끝난 대상은 건너뛰고 나머지만 돌린다 |
+| `--stop-on-violation` | 꺼짐 | 실행 중 k가 k_req 아래(1 이상)로 내려간 턴에서 그 대상의 질문을 끝낸다. k가 0이 된 경우에는 끝내지 않는다 |
+| (자동) | 켜짐 | 세션이 LLM 호출 오류(API 한도 초과 등)로 끝나면 남은 대상을 돌리지 않고 멈춘다. 원인을 해결한 뒤 `--resume`으로 이어 돌린다 |
+| `--no-residual-check` | 꺼짐 | 고쳐 쓴 응답에 지운 값의 근거 문구가 남았는지 검사하지 않는다 |
+| `--paired` | 꺼짐 | 대상마다 첫 갈래가 만든 질문 순서를 나머지 갈래에 그대로 던진다. 갈래를 비교할 때는 켜는 것을 권장 |
+| `--plain-mutation` | 꺼짐 | 질문 생성의 보정(Target 자료 범위 안내, 변형 결과의 자료 출처 검사, QI 고른 배분)을 끈다. 이전 동작과 비교할 때만 사용 |
+| `--min-confidence` | 없음 | 추출기 확신도(1~5)가 이 값보다 낮은 관찰은 State에 넣지 않는다 |
+| `--rewriter-prompt` | `rewriter_system_v2` | 재작성 프롬프트 버전. v2는 삭제 지시에서 인용문과 다른 단서까지 빼도록 규칙을 구체화 |
+| `--extractor-prompt` | `extractor_system_v2` | 추출 프롬프트 버전. v2는 값마다 표준 영어 표기(`value_en`)를 요구한다. 이전 동작은 `extractor_system_v1` |
+
+턴당 LLM 호출은 질문 생성 1회, Target 1회, 추출 1회이고, C1에서 Defender가 개입하면 재작성과 재추출이 1회씩 더 듭니다. 기준 집단 30만 명 적재에 수 초, 메모리 약 500MB가 필요합니다.
+
+### 여러 대상으로 돌리기
+
+기본 대상은 `pers1` 한 명입니다. 파이프라인 확인용이고, 결과를 말하려면 여러 대상이 필요합니다.
+
+```bash
+# 1) 대상 고르기 (LLM 호출 없음). runs/target_selection.json에 저장된다
+python -m validation.select_targets --count 10 --include pers1
+
+# 2) 실행. 중간에 멈추면 같은 명령에 --resume을 붙여 이어 돌린다
+python -m orchestrator --targets-file runs/target_selection.json --arms C0 C1 C1S \
+    --backend ontology --turns 12 --paired --experiment-id run_multi10
+
+# 3) 정답 대조와 집계
+python -m validation run_multi10
+python -m orchestrator.report run_multi10 --targets-file runs/target_selection.json
+```
+
+**대상을 고르는 기준.** SynthPAI에는 글마다 사람이 읽고 적은 추정값(`reviews.human`)이 있습니다. 대상마다 그 추정값 중 실제 값과 맞는 것만 모아, 전부 알았을 때 기준 집단에서 몇 명으로 좁혀지는지(`k_reachable`)를 셉니다. `k_reachable`이 k_req보다 작으면 "단서 충분(rich)", 아니면 "단서 부족(sparse)" 층입니다. 30만 명 기준으로 300명 중 56명이 rich입니다. 기본 설정은 rich 70%, sparse 30%로 추첨합니다(`--rich-share`, `--seed`).
+
+두 층을 섞는 이유는 rich만 고르면 "Defender가 없으면 뚫린다"는 결과가 부풀려지고, sparse만 고르면 Defender가 개입할 일이 없기 때문입니다. `k_reachable`은 층을 나누는 기준일 뿐 결과 수치가 아닙니다. 사람 라벨은 글 하나만 보고 적은 것이라 Target LLM이 여러 글을 종합해 내놓는 답과 다를 수 있습니다.
+
+이 도구는 정답 profile을 읽으므로 `validation/` 아래에 있고, 실행 중 코드에는 대상 ID만 넘어갑니다.
+
+**비용.** `--paired`에서는 대상 1명에 질문 생성·Target·추출이 턴마다 한 번씩이라 12턴이면 약 36회이고, Defender가 개입한 턴마다 재작성과 재추출이 더 듭니다. 실행을 시작할 때 예상 호출 수가 출력됩니다.
+
+### 이미 돌린 실행을 다시 쓰기: 다시 계산, 설정 비교, 유용성
+
+LLM 호출의 대부분은 질문 생성, Target 응답, 원 응답 추출에 듭니다. 이 셋은 trace에 그대로 남아 있으므로, 그 뒤 단계(정규화, 위험 계산, Defender 판정)만 바꾸는 시험은 새로 돌리지 않고 기록을 다시 넣어 계산합니다.
+
+```bash
+# 1) 코드를 고친 뒤 같은 설정으로 다시 계산
+python -m orchestrator.recompute --source run_multi10
+
+# 2) 같은 대화에 다른 기준을 적용 (결과 폴더 이름에 바꾼 설정이 붙는다)
+python -m orchestrator.recompute --source run_multi10 --threshold 4        # k_req 5  → run_multi10__recomputed_t4
+python -m orchestrator.recompute --source run_multi10 --threshold 9        # k_req 10 → …_t9
+python -m orchestrator.recompute --source run_multi10 --min-confidence 4   # → …_c4
+python -m orchestrator.recompute --source run_multi10 --backend risk_defender   # → …_rd
+
+# 3) 정답 대조 후 한 표로 비교
+python -m validation run_multi10__recomputed run_multi10__recomputed_t4 run_multi10__recomputed_t9
+python -m orchestrator.report run_multi10__recomputed run_multi10__recomputed_t4 run_multi10__recomputed_t9 \
+    --compare runs/comparison.md
+```
+
+**LLM을 얼마나 부르는가.** 재작성 결과와 고쳐 쓴 응답의 재추출 출력도 trace에 남기므로, 같은 지시가 다시 나오면 그것도 기록을 씁니다. 기록에 없는 경우에만 부릅니다.
+
+| 상황 | LLM 호출 |
+| --- | --- |
+| 이 기능이 들어간 뒤의 실행을 같은 설정으로 다시 계산 | 0회 |
+| 그 전 실행(재추출 출력이 trace에 없음)을 다시 계산 | Defender가 개입한 턴의 재추출만. 10명 × 12턴 기준 약 20회 |
+| 설정을 바꿔 Defender의 판정이 달라진 턴 | 그 턴의 재작성 + 재추출 |
+| `--offline` | 0회. 기록에 없는 재작성·재추출이 필요한 턴은 거절로 처리하므로 C1이 실제보다 보수적으로 나온다. C0는 영향 없음 |
+
+참고로 10명 × 12턴을 새로 돌리면 약 380회입니다. 질문 생성(Fuzzer 프롬프트, 변형 검사)이나 Target 프롬프트를 바꿨을 때는 질문과 응답 자체가 달라지므로 새로 돌려야 합니다.
+
+**유용성 지표.** Defender가 응답을 고친 대가를 LLM 없이 잽니다. `report.md`의 "유용성" 절에 갈래별로 나옵니다.
+
+| 지표 | 뜻 |
+| --- | --- |
+| 유사도 | 원 응답과 공개 응답의 글자 3-gram 코사인 유사도 (0~1). 그대로 공개했으면 1.0. `experiment_log.csv`의 `utility_score` |
+| 길이비 | 공개 응답 길이 / 원 응답 길이 |
+| QI 유지율 | 원 응답에서 표준 값으로 풀린 QI 종류 중 공개 응답에 남은 비율 |
+| 바닥값 | 서로 다른 질문에 대한 원 응답끼리의 평균 유사도. 유사도가 이보다 낮으면 무관한 답 수준 |
+
+유사도는 글자 겹침을 재는 값이라 뜻이 보존됐는지를 직접 말해 주지 않습니다. 9월 PoC 보고서가 임베딩 유사도를 바닥값과 비교해 상대 판정만 한 것과 같은 한계이며, 절대적인 유용성 평가(사람 평가, LLM 판정)는 하지 않았습니다.
+
+**짝 검정.** 대상이 둘 이상이면 갈래 쌍마다 같은 대상에서 위반 여부가 어떻게 갈렸는지와 exact McNemar p값을 냅니다. 대상 10명에서는 갈린 대상이 3~4명이라 p가 0.125~0.25로 나옵니다. 차이가 없다는 뜻이 아니라 표본이 모자라다는 뜻입니다.
+
+### 질문이 Target에 맞도록 하는 장치
+
+10월 6일 실제 실행(pers1, 12턴)에서 질문 36개 중 26개가 구매 기록·검색 이력처럼 Target에 없는 자료를 물었고, 3개는 변형 LLM의 거부 문장이 질문으로 나갔습니다. Target은 대상 사용자의 게시글만 갖고 있습니다. 이를 막기 위해 `adapters/fuzzer_adapter.py`에 세 가지를 넣었습니다. `fuzzer/` 코드와 프롬프트 파일은 고치지 않았습니다.
+
+| 장치 | 하는 일 |
+| --- | --- |
+| 자료 범위 안내 | Mutation LLM system prompt(`fuzzer/seedinput/seedprompt.txt`) 뒤에 "Target은 사용자의 게시글만 갖고 있다"는 안내를 붙인다 |
+| 변형 결과 검사 | 거부·되묻기 문장(`META_OUTPUT`)과 Target에 없는 자료를 전제로 한 질문(`OUT_OF_SCOPE_SOURCE`)을 버리고 다시 요청한다. 끝내 안 되면 Seed 원문을 보낸다 |
+| QI 고른 배분 | 새 Seed를 고를 때 지금까지 가장 적게 물은 QI부터 고른다. 한 QI에 턴이 몰리지 않는다 |
+
+자료 출처 검사는 실제 실행에서 나온 표현을 모은 목록이라 빠진 표현이 있을 수 있습니다. 버린 변형의 수와 사유는 `report.md`의 "공격 쪽" 표에 나옵니다.
+
+**갈래 간 같은 질문과 같은 원 응답 (`--paired`).** 기본 실행에서는 갈래마다 Fuzzer가 따로 질문을 만들어서, Defender가 개입하지 않아도 갈래 간 k가 달라집니다. `--paired`를 켜면 첫 갈래(보통 C0)의 질문 순서를 나머지 갈래에 그대로 던지고, 같은 질문에 대한 Target의 원 응답과 그 추출 결과도 갈래들이 함께 씁니다. Target은 대화 기록 없이 질문만 보고 답하므로 같은 질문에는 같은 원 응답이 맞는데, 실제 모델은 temperature 0에서도 호출마다 응답이 달라졌기 때문입니다(10월 6일 실행에서 같은 질문 12개 중 8개). 이렇게 하면 갈래 간 차이는 공개 게이트(Defender 판정 → 재작성 → 재추출)에서만 생깁니다. 함께 쓴 응답은 trace에 토큰 0으로 기록됩니다. 대신 나머지 갈래의 공격자는 자기 갈래의 응답에 반응하지 않습니다. "방어된 응답을 보고 질문을 바꾸는 공격자"의 결과가 필요하면 `--paired` 없이 돌립니다.
+
+### 결과 파일
+
+`runs/<experiment_id>/` 아래에 생깁니다. 이 폴더는 저장소에 올리지 않습니다.
+
+| 파일 | 내용 |
+| --- | --- |
+| `experiment_log.csv` | `evaluation_v1/log_schema_v1.py` 형식의 턴별 기록 (k 전후, 위반·교차 여부, 일반화·억제 여부) |
+| `trace.jsonl` | 턴별 상세 기록 (질문, 원 응답, 추출·정규화, Defender 판정, 재작성, 공개 응답, Coverage 판정). 세션 끝에는 Coverage 요약 |
+| `run_config.json` | 실행 설정 (모델, 프롬프트 버전, temperature, 기준 집단, Seed 파일 해시, 위험 기준, 백엔드, 온톨로지 버전·해시) |
+| `high_risk_paths.jsonl` | 실행 중 1 ≤ k < k_req에 도달했거나 k가 0이 된 세션마다 한 줄 (질문 순서, Seed, 턴별 k, `trigger`). 그런 세션이 없으면 파일도 없음. k = 0은 틀린 값이 섞여 생긴 것일 수 있어 후보로만 보관하고 정답 대조로 가린다 |
+| `validation.jsonl`, `experiment_log_validated.csv`, `validated_paths.jsonl` | `python -m validation`이 만든다 (아래) |
+| `report.md` | `python -m orchestrator.report`가 만든다 (아래) |
+
+`experiment_log.csv`의 `defender` 컬럼은 `none` / `risk_defender` / `ontology_d1`이고, 무상태 갈래는 뒤에 `_stateless`가 붙습니다.
+
+### 실행이 끝난 뒤: 검증 → 집계 → 재실행
+
+세 명령 모두 `runs/` 아래 폴더 이름을 받습니다. 검증과 집계는 LLM을 부르지 않습니다.
+
+```bash
+python -m validation run_rd run_onto            # 정답 대조: k_val, QI별 판정, 위험 경로의 검증 상태
+python -m orchestrator.report run_rd run_onto   # 집계 표를 화면과 runs/<id>/report.md로
+python -m orchestrator.replay --source run_rd --arms C0 C1 --repeats 2   # 보관된 질문 재실행 (LLM 호출)
+python -m validation run_rd__replay             # 재실행 결과도 정답 대조
+```
+
+**k_run과 k_val.** 실행 중 k(`k_run`)는 State에 들어간 값으로 센 후보 수입니다. 응답이 틀린 값을 말했거나 추출이 틀렸으면 그 후보 안에 대상 본인이 없을 수 있고, 극단적으로는 0명이 됩니다. `k_val`은 State의 QI 중 대상의 실제 값과 맞는 것(같거나 더 넓은 값)만 남겨 다시 센 수입니다. 대상 본인은 항상 포함되므로 1 이상이고, `k_run`보다 작아지지 않습니다. 결과로 보고하는 수치는 `k_val`입니다 (D1 Stage 2).
+
+| 검증 결과 파일 | 내용 |
+| --- | --- |
+| `validation.jsonl` | 턴마다 `k_run`, `k_val`, QI별 판정(CORRECT / LESS_PRECISE / INCORRECT / UNASSESSABLE), 세션마다 요약 |
+| `experiment_log_validated.csv` | `experiment_log.csv`에 `k_val` 컬럼을 채운 사본. 원본은 그대로 둔다 |
+| `validated_paths.jsonl` | 보관된 경로에 `validation_status`를 채운 사본. `VALIDATED_HIGH_RISK`(맞는 QI만으로도 k_req 아래) / `NOT_VALIDATED`(틀린 값 때문에 위험해 보였던 경로) |
+
+**재실행(Exact Replay).** 보관된 경로의 질문 원문과 순서를 고정하고 빈 State의 새 세션에서 다시 던집니다. 질문을 다시 만들지 않으므로 Mutation LLM은 부르지 않고, Target 응답·추출·Defender 판정은 새로 합니다. 결과는 `runs/<source>__replay/`에 같은 형식으로 남고 CSV의 `replay_type`이 `exact_replay`입니다. 백엔드·위험 기준·기준 집단·Target temperature는 원래 실행의 `run_config.json`에서 가져옵니다. 화면에 나오는 "재발"은 `k_run` 기준이므로, 확정하려면 재실행 폴더에도 `python -m validation`을 돌립니다.
+
+위험 경로가 이어지는 순서는 다음과 같습니다. 굵은 글씨까지가 구현된 부분입니다.
+
+**실행 → 보관(`high_risk_paths.jsonl`) → 정답 대조(`validated_paths.jsonl`) → 재실행** → 규칙 생성·주입(C2·C3) → 변형 재공격
+
+### 두 가지 위험 계산 백엔드
+
+| | `risk_defender` (기본) | `ontology` |
+| --- | --- | --- |
+| k 계산 QI | AGE, LOC, OCCP, EDU, REL | 8개 전부 |
+| 계층 | `risk_defender` 내부 규칙 | `ontology/` (나이 5년·10년 구간, 직업 ISCO-08 4단계 등) |
+| Defender | k > 5 허용 / 3 < k ≤ 5 일반화 시도 / k ≤ 3 바로 억제 | 하한 k_floor = min(k_req, 지금 k). 한 단계씩 올려 보고 안 되면 억제 |
+| 구현 | 이유진 파트 코드를 그대로 호출 | `adapters/ontology_risk.py` |
+
+한 번의 실행은 백엔드 하나만 씁니다. 두 방식을 비교하려면 `--experiment-id`를 달리해 두 번 돌립니다.
+
+### 모듈별 확인
+
+전체 실행 전에 단계별로 확인할 때 씁니다.
+
+```bash
+python -m target_llm --target pers1 "질문"      # Target 응답만
+python -m qi_extractor --target pers1 "질문"    # Target → 추출
+python -m adapters --target pers1 "질문"        # Target → 추출 → 정규화 → 위험 판정
+python -m adapters.check_fuzzer                 # Seed 선택과 두 턴 변형
+```
+
+## 주요 설정과 미결정 사항
+
+| 항목 | 현재 값 | 비고 |
+| --- | --- | --- |
+| 위험 기준 | 억제 k ≤ 3 (k_req 4), 일반화 시도 k ≤ 5 | D1 의사결정 보고서는 k_req 5. 팀 결정 필요 |
+| 기준 집단 | 30만 명 | 국가명·관계 상태 표기가 일부 섞여 있음 |
+| k 계산 대상 QI | 기본 백엔드 5개 / `ontology` 8개 | 기본 백엔드에서 SEX, INC, POB는 추출·기록만 함 |
+| 일반화 계층 | 기본은 `risk_defender` 계층 | D1 Stage 3 계층은 `--backend ontology`로 사용 |
+| 직업 → ISCO 대응표 | `ontology/data/occp_alias_v0.1.csv` (217행) | 기계 초안. 77행은 사람 검토 필요 (`python -m ontology --show-review`) |
+| 억제 시점 | 백엔드마다 다름 | `risk_defender`는 k ≤ 3이면 일반화 없이 억제, D1은 일반화를 먼저 시도 |
+| Target 검색 | persona 코멘트 전체 | 임베딩 top-k 검색은 미적용 |
+| Seed | 117개, 개발 모드 | 사람 검토 전이라 본 실험 모드에서는 적재 거부 |
+| Seed 대상 QI | 백엔드가 세는 QI 우선 | 기본 백엔드에서 소득·성별·출생지 Seed는 그 안에서 고를 것이 없을 때만 씀. `--all-seeds`로 해제 |
+| 모호한 답의 구체화 | 켜짐 | 공개됐지만 표준 값으로 풀지 못한 답("코딩 일" 등)이 있으면 그 QI의 O2(구체화) Seed를 쓸 수 있음 |
+| 추출 프롬프트 | `extractor_system_v2` | 실제 모델로 v1과 비교 검증 전. 정규화 실패가 줄었는지는 `report.md`의 미해석 건수로 확인 |
+| State ID | State에 반영된 값 기준 | Part 7까지는 공개 기록 기준이었음. 이전 실행의 `state_id`와는 값이 다름 |
+| 지역·나이 해석 | 여러 지역을 나열한 표현은 미해석, 권역 이름은 국가까지 | "중서부, 스위스"는 정하지 않고 "미국 중서부"는 미국으로 읽음. 원문 범위가 표준 표기보다 넓은 나이는 10년 구간까지만 인정 |
+| 대상 수 | 실행 명령의 기본값은 pers1 한 명 | 파이프라인 확인용. 여러 대상은 `--targets-file`로 준다. 본 실험의 대상 수와 층 비율은 팀 결정 필요 |
+| 추출 근거 검증 | 근거 문구 중 하나라도 응답에 있으면 관찰을 인정 | 이전에는 하나라도 못 찾으면 관찰 전체를 버림. 못 찾은 문구는 trace의 `unverified_spans`에 기록 |
+| 추측성 값 | State에 그대로 반영 | Target이 근거가 약한 추정(소득, 관계 상태 등)을 답하면 틀린 값이 State에 들어가고, 이후 Defender 판정이 그 State를 기준으로 이뤄짐. 실행 후 `k_val`로 가려냄. `--min-confidence`로 줄일 수 있으나 맞는 값도 함께 빠질 수 있음 |
+| State 충돌 | 먼저 들어간 값 유지 | 나중에 더 확실한 값이 나와도 바뀌지 않음. 정책 결정 필요 |
+| 재작성 뒤 잔여 단서 | 지운 값의 근거 문구가 글자 그대로 남으면 다시 고침 | 재추출이 놓친 인용문을 막기 위함. 한 문구가 지울 값과 남길 값의 근거를 겸하면 남길 값의 근거도 빠진다. 표현을 바꿔 남긴 단서는 잡지 못한다 |
+| 두 구간에 걸친 나이 | 미해석 | "30대 후반~40대 초반", "25-32세"처럼 10년 구간 둘에 걸친 추정은 State에 넣지 않는다. 10명 실행에서 8명에게 나왔다. 값 하나에 node 하나만 두는 구조라서이며, 넣으려면 State 형식을 바꿔야 한다 |
+| 관계 상태 계층 | 6개 범주가 서로 무관 | 이혼한 사람을 "현재 독신"이라고 한 답이 틀린 값(SINGLE)으로 들어간다. "배우자 없음" 같은 묶음 단계를 둘지 D1 계층 담당과 결정 필요 |
+| 추출기 출력 해석 | 전체 JSON이 깨져도 읽히는 항목은 건짐 | 근거 문구 안의 따옴표 등으로 한 항목이 깨진 경우. 읽히지 않는 항목의 관찰은 잃는다 |
+| 검증의 범위 | State에 들어간 QI만 | 정규화하지 못한 공개분은 `k_val`에도 반영되지 않음 |
+
+## 의사결정 기록 (ADR)
+
+기준 · 구조 · 실험 방식을 바꾼 결정은 [`docs/adr/`](../docs/adr/README.md)에 한 건씩 남깁니다 (현재 21건). 색인과 AI용 요약(`docs/adr/ADR_CONTEXT.md`, `index.json`)은 `scripts/adr.py`가 ADR 파일에서 만들고, 병합되면 GitHub Actions가 갱신합니다.
+
+```bash
+python scripts/adr.py new "제목" --slug short-name --deciders 이름 --area risk --sprint S5 --jira ZP-00
+python scripts/adr.py lint
+```
+
+## 브랜치와 커밋 규칙
+
+- 결정이 바뀌는 PR에는 ADR을 함께 올리고 PR 설명에 번호를 적습니다.
+- 작업은 `feat/<이름>` 브랜치에서 하고 `system_integration`으로 PR을 올립니다.
+- 커밋 메시지: `FEAT#이슈번호: 제목`, `FIX#이슈번호: 제목`, `REFACTOR#이슈번호: 제목`
+- 병합은 "Create a merge commit"을 씁니다.
+- `.env`, `data/synthpai/`, 기준 집단 데이터, `runs/`는 커밋하지 않습니다.

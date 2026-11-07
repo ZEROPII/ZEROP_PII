@@ -1036,9 +1036,14 @@ window.DASH = {
    "source": "시뮬레이션 · k 계산 + 판정, LLM 제외 (발표 42p)"
   },
   "extraction": {
-   "recall": null,
-   "precision": null,
-   "f1": null,
+   "recall": 89.2,
+   "precision": 97.0,
+   "f1": 0.929,
+   "committed": {
+    "recall": 83.2,
+    "f1": 0.896
+   },
+   "source": "holdout_2 · 처음 보는 질의 환자 13명 · 팀 고정본 채점 (확정 값 기준 재현율 83.2% · F1 0.896)",
    "target": {
     "recall": 95,
     "precision": 90,
