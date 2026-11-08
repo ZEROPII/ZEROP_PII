@@ -91,7 +91,7 @@ python scripts/build_desktop.py --zip    # 다른 컴퓨터에 보낼 압축 파
 
 - 그 운영체제용 앱은 그 운영체제에서 만듭니다. Windows 창은 WebView2(Windows 10 · 11에 기본 설치)를 씁니다.
 - 앱 안에는 코드 · 화면 · 가상 EMR 원본 표 · Seed 표만 들어갑니다. DB · `.env` · `initial_accounts.txt` · `logs/medicloak-app.log`는 켤 때 데이터 폴더에 생깁니다. `MEDICLOAK_HOME` 환경변수로 다른 폴더를 줄 수 있습니다.
-- 서명하지 않은 앱입니다. 만든 Mac에서는 바로 열리고, 다른 Mac에 보내면 처음 한 번 Finder에서 오른쪽 클릭 → 열기를 누릅니다.
+- 서명하지 않은 앱입니다. 만든 Mac에서는 바로 열리고, 다른 Mac에서는 처음 한 번 macOS가 막습니다. macOS 15 이후는 경고에서 '완료'를 누른 뒤 시스템 설정 → 개인정보 보호 및 보안의 '그래도 열기'를, 그 전 버전은 Finder에서 오른쪽 클릭 → 열기를 누릅니다. '손상되었기 때문에 열 수 없습니다'가 나오면 `xattr -dr com.apple.quarantine MediCloak.app`을 실행한 뒤 다시 엽니다.
 - 묶은 앱에 명령을 주면 `python -m medicloak`과 같습니다. 예: `MediCloak.app/Contents/MacOS/MediCloak users list`.
 - 화면 글꼴과 아이콘은 앱 안에 있어 인터넷이 막힌 내부망에서도 같은 화면이 열립니다. 브라우저로 쓸 때는 https 주소(또는 `127.0.0.1`)에서 Chrome · Edge의 '앱 설치'로 창 하나짜리 앱처럼 쓸 수 있습니다.
 
