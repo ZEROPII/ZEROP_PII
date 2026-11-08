@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/FastAPI-서버-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI">
   <img src="https://img.shields.io/badge/React-18-0b7a75?style=flat-square&logo=react&logoColor=white" alt="React 18">
   <img src="https://img.shields.io/badge/HL7_FHIR-R4-0b7a75?style=flat-square" alt="FHIR R4">
-  <img src="https://img.shields.io/badge/tests-pytest_1030_·_vitest_102-16a374?style=flat-square" alt="pytest 1030 passed, vitest 102 passed">
+  <img src="https://img.shields.io/badge/tests-pytest_1033_·_vitest_104-16a374?style=flat-square" alt="pytest 1033 passed, vitest 104 passed">
   <a href="docs/adr/README.md"><img src="https://img.shields.io/badge/ADR-42건-5b5bf0?style=flat-square" alt="ADR 42건"></a>
 </p>
 
@@ -221,8 +221,8 @@ python scripts/build_desktop.py --zip # 묶은 앱: dist/desktop/MediCloak.app (
 **테스트**
 
 ```bash
-python -m pytest -q                   # 1030 passed, 3 skipped (LLM 호출은 가짜 HTTP 세션으로 대체)
-cd frontend && npm test               # vitest 102 passed
+python -m pytest -q                   # 1033 passed, 3 skipped (LLM 호출은 가짜 HTTP 세션으로 대체)
+cd frontend && npm test               # vitest 104 passed
 ```
 
 ---

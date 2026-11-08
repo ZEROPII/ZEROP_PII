@@ -3,7 +3,7 @@
 // (ADR-0034 · ADR-0036).
 
 import type { Clinician, EmrChart, EmrConsult, EmrGrant, EmrMe, LaunchProgress, VisitChoice, WorklistPatient } from '../types/domain';
-import { ApiError } from './types';
+import { ApiError, streamedFailure } from './types';
 import { API_BASE, FHIR_BASE, notifyUnauthorized } from './session';
 
 const EMR_OFF = 'EMR 연동은 MediCloak 운영 서버(python -m medicloak)에서만 쓸 수 있습니다.';
@@ -50,7 +50,10 @@ async function post<T>(url: string, body: unknown, fallback: string): Promise<T>
   }
   if (res.status === 401) notifyUnauthorized();
   if (!res.ok) throw new ApiError((await detailOf(res)) ?? `${fallback} (HTTP ${res.status}).`, res.status, res.headers.get('X-MediCloak-State') ?? undefined);
-  return (await res.json()) as T;
+  const out: unknown = await res.json();
+  const late = streamedFailure(out);                    // 오래 걸려 200으로 먼저 연 응답의 실패 (ADR-0044)
+  if (late) throw new ApiError(late.detail ?? `${fallback} (HTTP ${late.status}).`, late.status, late.flag);
+  return out as T;
 }
 
 export interface FhirCoding {

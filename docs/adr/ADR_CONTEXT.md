@@ -1,7 +1,7 @@
 # Zero PII 의사결정 요약 (AI · 새 팀원용)
 
 > 이 파일은 `python scripts/adr.py index`가 `docs/adr/*.md`에서 만든다. 직접 고치지 않는다.
-> ADR 43건 (유효 41 · 대체·폐기 2), 마지막 결정일 2026-11-08.
+> ADR 44건 (유효 42 · 대체·폐기 2), 마지막 결정일 2026-11-08.
 
 ## 읽는 법
 
@@ -1682,6 +1682,24 @@ PR 템플릿에 "이 PR이 바꾸는 결정과 ADR 번호" 칸을 둔다.
 - 시험: `test_final_review.py` 12건(보정 뒤 이 대화만 센 수 · 보정 없으면 한 번만 · 이 대화만 센 수가 작을 때 · 거꾸로 센 수 · 원장 없고 보정 없음 · 감싸기 한 번 · `k_global` · 말투 · 남은 문장 · 횟수 범위 · 답 형식 v2 · 시연 모드 남은 항목), `test_review_hardening.py` 시간 초과 문장 · 기본값 90, `test_triage_report.py` 보고서 경과 말, `test_medicloak.py` 말투 · 답 형식 · 재작성 번호 · 판정 규칙 버전. 앞단 `format.test.ts` 2건, `clinicianView.test.ts` 시간 초과 안내.
 - 답 형식 지문이 바뀌어 첫 답 나눠 쓰기 저장 키도 바뀐다 (처음 한 번은 새로 만든다).
 - 남은 한계: 원장 값과 이 대화 값이 맞지 않을 때, 원장 값 가운데 이 대화와 맞는 것만 골라 합쳐 세지는 않는다(이 대화 값만 센 수로 대신한다). 한 대화 안에서도 보정이 먼저 나온 값을 믿는 방향은 그대로다(거꾸로 센 수로 줄일 뿐). 대상 AI 입력 게이팅(`gate.InputGate`)은 원장 먼저 센 수를 그대로 쓴다(내보내기 전 판정이 다시 막는다). 이 셋은 보정 함수 쪽 일로 남긴다.
+- 연구 하네스(`medical/`) · 고정본(`medical/bundle/`)은 바꾸지 않았다.
+
+### ADR-0044. 오래 걸리는 POST(진료 지원 AI 열기 · 질문 · 사례 보고서)는 20초를 넘기면 공백으로 연결을 살려 두어 데스크톱 앱 창이 60초에 끊지 않게 한다
+
+- 승인 · 2026-11-08 · 결정 양승준 · S5 · 시스템·화면
+- 근거: `webdemo/backend/keepalive.py`, `webdemo/backend/app.py`, `frontend/src/api/types.ts`, `frontend/src/api/httpApi.ts`, `frontend/src/api/emrApi.ts`, `frontend/src/api/reportApi.ts`, `tests/medicloak/test_keepalive.py`, `frontend/src/api/streamed.test.ts`
+
+**결정**
+
+- `keepalive.run`: 진료 지원 AI 열기(`POST /api/emr/launch`), 질문(`POST /api/cases/{id}/messages`), 사례 보고서 만들기(`POST /api/clinic/report`)의 처리를 따로 돌린다. 20초 안에 끝나면 전과 같은 응답(상태 코드 · 머리글 그대로)이다.
+- 20초를 넘기면 200으로 먼저 열고(`X-MediCloak-Stream: 1`) 10초마다 공백 한 칸을 보낸 뒤 JSON 본문을 보낸다. JSON 앞의 공백은 읽는 쪽이 무시한다.
+- 이때 실패(멈춤 409, 대상 AI 오류 502 등)는 상태 코드 대신 본문 `{detail, _status, _state}`로 보낸다. 예상하지 못한 서버 오류는 고정 문장만 보낸다 (내부 오류 문장은 내보내지 않는다).
+- 앞단 `streamedFailure`가 그 본문을 알아보고 전과 같은 오류(같은 안내 문장 · 상태 · `X-MediCloak-State` 값)로 바꾼다 (`httpApi` · `emrApi` · `reportApi`).
+
+**결과와 영향**
+
+- 시험: `test_keepalive.py` 3건(빠른 요청은 전과 같음 · 느린 요청은 공백 뒤 JSON · 느린 실패는 본문으로, 내부 오류 문장은 숨김), 앞단 `streamed.test.ts` 2건. 점검 서버에서 대기 시간을 줄여 열기 · 질문 · 보고서가 모두 공백 응답으로 가게 하고 화면에서 답이 보이는 것을 확인했다.
+- 웹 브라우저에서도 같은 방식으로 돈다 (끊기지 않던 곳은 그대로).
 - 연구 하네스(`medical/`) · 고정본(`medical/bundle/`)은 바꾸지 않았다.
 
 ## 대체 · 폐기된 결정

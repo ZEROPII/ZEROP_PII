@@ -2,7 +2,7 @@
 // 서버 안내 문장(detail)에는 환자 기록이 들어 있지 않아 그대로 보여 준다.
 
 import type { CaseReport } from '../types/domain';
-import { ApiError } from './types';
+import { ApiError, streamedFailure } from './types';
 import { API_BASE, notifyUnauthorized } from './session';
 
 async function call<T>(url: string, init: RequestInit, fallback: string): Promise<T> {
@@ -24,7 +24,10 @@ async function call<T>(url: string, init: RequestInit, fallback: string): Promis
     }
     throw new ApiError(detail ?? `${fallback} (HTTP ${res.status}).`, res.status, res.headers.get('X-MediCloak-State') ?? undefined);
   }
-  return (await res.json()) as T;
+  const body: unknown = await res.json();
+  const late = streamedFailure(body);                   // ADR-0044
+  if (late) throw new ApiError(late.detail ?? `${fallback} (HTTP ${late.status}).`, late.status, late.flag);
+  return body as T;
 }
 
 export const reportApi = {

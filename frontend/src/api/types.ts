@@ -51,6 +51,17 @@ export interface ClinicalCaseApi {
   listHistory?(signal?: AbortSignal): Promise<ClinicHistoryItem[]>;
 }
 
+/**
+ * 오래 걸린 POST(진료 지원 AI 열기 · 질문 · 보고서)는 서버가 200으로 먼저 열고 공백으로 연결을 살려 두다가,
+ * 실패하면 상태 코드 대신 본문 { detail, _status, _state }로 알린다 (ADR-0044). 그 본문이면 실패 내용을, 아니면 null.
+ */
+export function streamedFailure(body: unknown): { status: number; detail: string | null; flag?: string } | null {
+  if (!body || typeof body !== 'object') return null;
+  const b = body as { _status?: unknown; detail?: unknown; _state?: unknown };
+  if (typeof b._status !== 'number' || b._status < 400) return null;
+  return { status: b._status, detail: typeof b.detail === 'string' ? b.detail : null, flag: typeof b._state === 'string' ? b._state : undefined };
+}
+
 export class ApiError extends Error {
   constructor(
     message: string,

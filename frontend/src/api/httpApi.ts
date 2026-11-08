@@ -7,7 +7,7 @@
 
 import type { CaseId, ClinicHistoryItem, ClinicMessage, PatientOption, SendQuestionRequest, SuggestedQuestion } from '../types/domain';
 import { notifyUnauthorized } from './session';
-import { ApiError, type ClinicalCaseApi } from './types';
+import { ApiError, type ClinicalCaseApi, streamedFailure } from './types';
 
 const STATUS_MESSAGE: Record<number, string> = {
   401: '로그인이 끝났습니다. 다시 로그인하세요.',
@@ -34,18 +34,25 @@ export function createHttpApi(baseUrl: string): ClinicalCaseApi {
       throw new ApiError('서버에 연결할 수 없습니다.');
     }
     if (response.status === 401) notifyUnauthorized();
-    if (!response.ok) {
-      // 본문에 의료 데이터가 들어 있을 수 있으므로 상태 코드에 맞춘 고정 문구만 보여 준다.
-      const flag = response.headers.get('X-MediCloak-State') ?? undefined;
-      const msg =
-        flag === 'no-conversation'
-          ? '내 담당 환자 목록에서 환자를 열어 주세요.'
-          : flag === 'stopped'
-            ? '질문을 멈췄습니다. 질문은 입력칸에 다시 넣었습니다.'
-            : STATUS_MESSAGE[response.status];
-      throw new ApiError(msg ?? `요청이 실패했습니다 (HTTP ${response.status}).`, response.status, flag);
+    if (!response.ok) throw failure(response.status, response.headers.get('X-MediCloak-State') ?? undefined);
+    const body: unknown = await response.json();
+    const late = streamedFailure(body);                 // 오래 걸려 200으로 먼저 연 응답의 실패 (ADR-0044)
+    if (late) {
+      if (late.status === 401) notifyUnauthorized();
+      throw failure(late.status, late.flag);
     }
-    return (await response.json()) as T;
+    return body as T;
+  }
+
+  /** 본문에 의료 데이터가 들어 있을 수 있으므로 상태 코드에 맞춘 고정 문구만 보여 준다. */
+  function failure(status: number, flag: string | undefined): ApiError {
+    const msg =
+      flag === 'no-conversation'
+        ? '내 담당 환자 목록에서 환자를 열어 주세요.'
+        : flag === 'stopped'
+          ? '질문을 멈췄습니다. 질문은 입력칸에 다시 넣었습니다.'
+          : STATUS_MESSAGE[status];
+    return new ApiError(msg ?? `요청이 실패했습니다 (HTTP ${status}).`, status, flag);
   }
 
   const c = (caseId: CaseId) => `/cases/${encodeURIComponent(caseId)}`;

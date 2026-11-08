@@ -45,7 +45,7 @@ from pydantic import BaseModel, Field
 from core.llm_client import LLMError
 from medical.config import ROOT
 from medical.terminology_api import terminology_router
-from webdemo.backend import case_report, redact
+from webdemo.backend import case_report, keepalive, redact
 from webdemo.backend.access import CONSULT_DAYS, FHIR_DEDUP, NOTE_MIN, REASON_KO, REVIEW_KO as GRANT_REVIEW_KO, EmrAccess, NotAssigned
 from webdemo.backend.assist import ReviewAssistant
 from webdemo.backend.autocheck import ACTOR as AUTO_ACTOR, AUTO_FUZZER, AUTO_PER_TYPE, AutoRedteam
@@ -479,7 +479,10 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
                        recheck="고친 답을 한 번 더 확인하는 중", rewriter="알아볼 수 있는 값을 고쳐 쓰는 중")
 
     @r.post("/cases/{case_id}/messages")
-    def ask(case_id: str, body: MessageIn, request: Request) -> dict[str, Any]:
+    def ask(case_id: str, body: MessageIn, request: Request) -> Response:
+        return keepalive.run(lambda: ask_now(case_id, body, request))   # 60초 넘는 답도 창이 끊지 않게 (ADR-0044)
+
+    def ask_now(case_id: str, body: MessageIn, request: Request) -> dict[str, Any]:
         if not body.question.strip():
             raise HTTPException(422, "질문이 비어 있습니다.")
         d = opened(request)
@@ -555,7 +558,10 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
         return dict(rep, regno=regno, pdfName=case_report.filename(rep, regno))
 
     @r.post("/clinic/report")
-    def make_report(request: Request) -> dict[str, Any]:
+    def make_report(request: Request) -> Response:
+        return keepalive.run(lambda: make_report_now(request))       # ADR-0044
+
+    def make_report_now(request: Request) -> dict[str, Any]:
         """
         지금 대화의 유사 사례 보고서를 만든다. 값은 답과 같은 판정을 거치고, 내보낸 값은 대화의 State · 공개 원장에 더한다
         (그래서 GET이 아니라 POST). 질문에 답하는 중이면 409. 숫자(후보 수)는 넣지 않는다.
@@ -935,7 +941,10 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
         return str(u.get("id") or u.get("username")) if u else "-"
 
     @r.post("/emr/launch")
-    def emr_launch(body: LaunchIn, request: Request) -> dict[str, Any]:
+    def emr_launch(body: LaunchIn, request: Request) -> Response:
+        return keepalive.run(lambda: emr_launch_now(body, request))   # 실제 LLM 첫 답은 60초를 넘길 수 있다 (ADR-0044)
+
+    def emr_launch_now(body: LaunchIn, request: Request) -> dict[str, Any]:
         outpatient_or_404(body.fhirId)
         v = emr_check(request, body.fhirId, "launch")
         tid = find_trial(eng(), body.fhirId, body.purpose)
