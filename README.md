@@ -23,7 +23,6 @@
   <a href="#바로-써-보기"><b>바로 써 보기</b></a> ·
   <a href="https://github.com/ZEROPII/ZEROP_PII/releases/latest">데스크톱 앱 내려받기</a> ·
   <a href="https://drive.google.com/file/d/1HUJPo0GUUjoJog1v-2vt1aLyHxIpSjFw/view?usp=sharing">시연 영상</a> ·
-  <a href="https://github.com/ZEROPII/ZEROP_PII/releases/download/v9.0/MediCloak_final.pdf">발표 자료 (PDF)</a> ·
   <a href="https://github.com/ZEROPII/ZEROP_PII/tree/dataset">데이터셋</a>
 </p>
 
@@ -413,13 +412,13 @@ SynthPAI(일반 게시글) 단계의 모듈(`target_llm/` · `qi_extractor/` · 
 
 ## 관련 문서
 
-- [발표 자료 (PDF)](https://github.com/ZEROPII/ZEROP_PII/releases/download/v9.0/MediCloak_final.pdf) · [시연 영상](https://drive.google.com/file/d/1HUJPo0GUUjoJog1v-2vt1aLyHxIpSjFw/view?usp=sharing): 최종 발표 자료와 데모 웹앱 실제 화면 녹화
+- [시연 영상](https://drive.google.com/file/d/1HUJPo0GUUjoJog1v-2vt1aLyHxIpSjFw/view?usp=sharing): 데모 웹앱 실제 화면 녹화 (4분 58초)
 - [medicloak/README.md](medicloak/README.md): 운영 모드의 옵션, 데스크톱 앱, 화면 흐름, API, 보안 동작, 운영 가이드
 - [docs/medical.md](docs/medical.md): 의료 시나리오 실험 코드와 기준 집단 사전 점검
 - [docs/adr/](docs/adr/README.md): 설계 결정 기록 44건
 - [docs/evaluation.md](docs/evaluation.md): 평가 통합 문서(evaluation_proto · eval-metrics)
 - [docs/rag_remeasure/](docs/rag_remeasure/README.md): RAG 기준 재측정 도구와 원본 대조 검증기
-- [dataset 브랜치](https://github.com/ZEROPII/ZEROP_PII/tree/dataset): 기준 집단 데이터(Synthea 576명 · SynthPAI)와 그 변화 과정
+- [dataset 브랜치](https://github.com/ZEROPII/ZEROP_PII/tree/dataset): 기준 집단 데이터(Synthea 환자 프로필 · 노드 · 사건연결표 v0.9, SynthPAI 300명 · 30만 명 프로필)와 그 변화 과정
 - [docs/README.md](docs/README.md): 나머지 문서 안내
 
 ---

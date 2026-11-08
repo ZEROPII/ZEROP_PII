@@ -10,7 +10,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
-# ── SynthPAI 원본 (정답 profile 포함, 커밋 금지) ──
+# ── SynthPAI 원본 (정답 profile 포함): main에는 커밋하지 않는다. 공개본은 dataset 브랜치의 data.zip ──
 data/synthpai/
 fuzzer/.env
 CLAUDE.md
