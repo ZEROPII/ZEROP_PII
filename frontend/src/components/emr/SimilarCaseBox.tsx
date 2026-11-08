@@ -1,4 +1,4 @@
-import { AlertCircle, ArrowLeft, ChevronRight, Loader2, RotateCw, Sparkles, Square } from 'lucide-react';
+import { AlertCircle, ArrowLeft, ChevronRight, RotateCw, Sparkles } from 'lucide-react';
 import { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { emrApi } from '../../api/emrApi';
@@ -296,13 +296,7 @@ export function SimilarCaseBox({ fhirId, identifier, purposes }: { fhirId: strin
             )}
             {busy && (
               <div role="status" aria-live="polite" className="mt-3">
-                <StageTrack step={progress?.active ? progress.step : undefined} first="사례 찾기" stopping={stopping || progress?.stopping} />
-                <div className="mt-2 flex justify-end">
-                  <button type="button" className="btn-ghost btn-sm h-7 gap-1.5 text-ink-2" onClick={() => void stop()} disabled={stopping}>
-                    {stopping ? <Loader2 className="h-3 w-3 animate-spin" aria-hidden /> : <Square className="h-3 w-3 fill-current" aria-hidden />}
-                    {stopping ? '멈추는 중' : '멈추기'}
-                  </button>
-                </div>
+                <StageTrack step={progress?.active ? progress.step : undefined} mode="launch" stopping={stopping || progress?.stopping} onStop={() => void stop()} />
               </div>
             )}
             <p className="mt-2 text-xs leading-5 text-ink-3">

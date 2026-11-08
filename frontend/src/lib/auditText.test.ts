@@ -82,4 +82,11 @@ describe('EMR 접근 기록 글 (ADR-0034)', () => {
     expect(detailOf(entry({ action: 'emr_assign', reset: true, assigned: 115, counts: { doctor1: 39 } }))).toBe('모두 지우고 다시 나눔 · doctor1 39명');
     expect(detailOf(entry({ action: 'emr_assign', change: 'add', clinician: '박준호 (doctor2)', patient_tag: 'P-0a1b2c' }))).toBe('박준호 (doctor2) · 담당으로 더함');
   });
+
+  it('유사 사례 보고서: 그대로 · 범위 · 비공개 값 수 (후보 수는 없다)', () => {
+    expect(ACTION_KO.clinic_report).toBe('유사 사례 보고서 만듦');
+    expect(detailOf(entry({ action: 'clinic_report', report: 'R1', shown: 22, ranged: 5, protected: 20 }))).toBe('그대로 22 · 범위 5 · 비공개 20');
+    expect(detailOf(entry({ action: 'clinic_report', report: 'R2', shown: 9, ranged: 0, protected: 0 }))).toBe('그대로 9');
+    expect(ACTION_KO.clinic_report_download).toBe('유사 사례 보고서 PDF 받음');
+  });
 });

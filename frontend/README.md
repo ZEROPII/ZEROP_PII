@@ -51,17 +51,19 @@ src/
     caseNote.ts            사례 노트: 속성 · 연결된 질문(백링크) · 같은 값이 나온 사례
     answerLines.ts         '사례N · [기록M] 항목: 값' 답을 표로 나누기
     clueGraph.ts           단서 그래프 만들기와 힘 배치 (난수 없음)
+    visits.ts              내원 달력: 해마다 묶기 · 달 칸 색 · 내원 없던 해 줄 · 그해 눈여겨볼 일
+    kindStyle.ts           기록 종류 색 · 환자 위험 등급 색 (클래스 이름을 글자 그대로, ADR-0040 · ADR-0041)
   components/
     layout/   AppLayout(역할별 틀), ClinicianShell(EMR 머리줄), TopBar · CommandPalette(관제), ProtectionBadge
     clinic/   PatientBanner('지금 보는 환자' 띠), EmrCaseList, ClinicalChat, ClinicalMessage, ClinicValue(범위 · 비공개), CaseNotePanel
-    emr/      ChartSummary(차트 요약 · 내원 흐름), SimilarCaseBox(유사 사례 찾기 · 진료 지원 AI 열기 · 멈추기), ConsultDialog(협진 의뢰 보내기), BreakGlassDialog(담당 외 환자 열기, 등록번호)
+    emr/      ChartSummary(차트 요약), VisitHistory(내원 이력: 해 × 달 달력, 고르면 그때 내원), SimilarCaseBox(유사 사례 찾기 · 진료 지원 AI 열기 · 멈추기), ConsultDialog(협진 의뢰 보내기), BreakGlassDialog(담당 외 환자 열기, 등록번호)
     chat/     ChatMessage, PrivacyHighlight, PrivacyExplanation (관제 쪽 숫자 있는 대화), ChatInput
     graph/    ClueGraph
     monitor/  QueueTable, SessionDetail(메시지 · 단서 그래프 · 질문 흐름), RevealDialog
     risk/     RiskPanel, RiskBar(로그 눈금), KValueBadge
     disclosure/ DisclosureHistoryPanel, DisclosureHistoryItem, PolicyDecisionModal
-    common/   Card, StatusViews(로딩/오류/빈 상태), MockBadge, ActionBadge
-  pages/      의료진: ClinicalAssistPage(3단 · 좁은 화면은 탭), HistoryPage, GuidePage
+    common/   Card, StatusViews(로딩/오류/빈 상태), MockBadge, ActionBadge, StageTrack(답 · 열기 진행: 배너 + 단계 막대)
+  pages/      의료진: EmrPage(내 담당 환자 · 위험 등급 · 차트), ClinicalAssistPage(3단 · 좁은 화면은 탭), CaseReportPage(유사 사례 보고서 · PDF), HistoryPage, GuidePage
               관제: MonitorPage, WatchPage(의료진 대화), ReportPage, AuditPage, TerminologyPage, PolicyPage
 ```
 
@@ -75,6 +77,8 @@ src/
 - **사례별 격리.** 대화·공개 이력·위험 상태·입력 초안 모두 caseId 키로 보관. 응답은 요청한 사례에만 반영하고, 위험 상태는 더 큰 `version`일 때만 덮어쓴다.
 - **사전 경고는 보조.** 전송 시 백엔드가 다시 검증한다는 전제다. 경고가 떠도 전송은 막지 않는다.
 - 인증은 쿠키 세션(`credentials: 'include'`) 전제. 토큰·응답 본문을 콘솔에 남기지 않는다.
+- **인터넷 없이 열린다.** 글꼴(Wanted Sans · Geist Mono)은 npm 꾸러미로 `src/main.tsx`에서 불러 빌드에 넣는다. 외부 CDN 링크를 두지 않는다 (병원 내부망 · 데스크톱 앱, ADR-0039).
+- **설치형 웹 앱.** `public/manifest.webmanifest`와 `public/icons/`(192 · 512 · 마스크용 · Apple 터치)가 빌드 루트에 복사된다. 아이콘 원본은 `packaging/icons/`의 SVG다.
 
 ## Mock 데이터
 

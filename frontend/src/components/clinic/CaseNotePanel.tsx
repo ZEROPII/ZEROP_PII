@@ -16,6 +16,7 @@ import {
 } from 'lucide-react';
 import { useEffect, useMemo } from 'react';
 import { buildCaseNote, type NoteValue } from '../../lib/caseNote';
+import { periodKo } from '../../lib/format';
 import { matchReasons } from '../../lib/caseOverview';
 import { useTermDetect, useTerms } from '../../state/TermContext';
 import { useSelectedCase, useWorkspace } from '../../state/WorkspaceContext';
@@ -58,7 +59,7 @@ function ValueText({ v, nodeId }: { v: NoteValue; nodeId: string | undefined }) 
         비공개
       </span>
     );
-  const text = v.text ?? '';
+  const text = periodKo(v.text ?? '');
   const body = nodeId ? (
     <button type="button" className="wikilink" onClick={() => openTerm(nodeId)} title="의료 용어 설명 보기">
       {text}

@@ -19,7 +19,8 @@ export function whyLine(t: PrivacyTransformation): string {
  * 표시 하나를 누르면 그 자리에서 무엇을 왜 바꿨는지 설명한다 (마우스를 올리는 title은 터치 화면에서 보이지 않는다).
  * 설명 창은 화면 기준(fixed)으로 띄워 답 카드 테두리에 잘리지 않게 하고, 바깥을 누르거나 Esc · 스크롤이면 닫는다.
  */
-function Explained({ trigger, title, lines, className }: { trigger: ReactNode; title: string; lines: string[]; className: string }) {
+/** 누르면 설명 상자가 뜨는 표시 ('비공개' · '범위'). 유사 사례 보고서도 같이 쓴다 */
+export function Explained({ trigger, title, lines, className }: { trigger: ReactNode; title: string; lines: string[]; className: string }) {
   const [at, setAt] = useState<{ top: number; left: number } | null>(null);
   const btn = useRef<HTMLButtonElement>(null);
   const box = useRef<HTMLSpanElement>(null);

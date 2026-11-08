@@ -45,7 +45,7 @@ from pydantic import BaseModel, Field
 from core.llm_client import LLMError
 from medical.config import ROOT
 from medical.terminology_api import terminology_router
-from webdemo.backend import redact
+from webdemo.backend import case_report, keepalive, redact
 from webdemo.backend.access import CONSULT_DAYS, FHIR_DEDUP, NOTE_MIN, REASON_KO, REVIEW_KO as GRANT_REVIEW_KO, EmrAccess, NotAssigned
 from webdemo.backend.assist import ReviewAssistant
 from webdemo.backend.autocheck import ACTOR as AUTO_ACTOR, AUTO_FUZZER, AUTO_PER_TYPE, AutoRedteam
@@ -479,7 +479,10 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
                        recheck="고친 답을 한 번 더 확인하는 중", rewriter="알아볼 수 있는 값을 고쳐 쓰는 중")
 
     @r.post("/cases/{case_id}/messages")
-    def ask(case_id: str, body: MessageIn, request: Request) -> dict[str, Any]:
+    def ask(case_id: str, body: MessageIn, request: Request) -> Response:
+        return keepalive.run(lambda: ask_now(case_id, body, request))   # 60초 넘는 답도 창이 끊지 않게 (ADR-0044)
+
+    def ask_now(case_id: str, body: MessageIn, request: Request) -> dict[str, Any]:
         if not body.question.strip():
             raise HTTPException(422, "질문이 비어 있습니다.")
         d = opened(request)
@@ -543,6 +546,66 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
             st["stop"].set()
             st["label"] = "질문을 멈추는 중"
         return dict(status="stopping")
+
+    # ── 유사 사례 보고서 (case_report.py, ADR-0042) ──
+    def report_regno(conv: Any) -> str | None:
+        fid = (getattr(conv.session, "launch", None) or {}).get("fhirId")
+        return state["access"].regno(fid) if fid and state.get("access") is not None else None
+
+    def report_view(rep: dict[str, Any], conv: Any) -> dict[str, Any]:
+        # pdfName: 내려받기 링크의 download 이름 (창마다 Content-Disposition을 읽는 때가 달라 화면이 같은 이름을 준다)
+        regno = report_regno(conv)
+        return dict(rep, regno=regno, pdfName=case_report.filename(rep, regno))
+
+    @r.post("/clinic/report")
+    def make_report(request: Request) -> Response:
+        return keepalive.run(lambda: make_report_now(request))       # ADR-0044
+
+    def make_report_now(request: Request) -> dict[str, Any]:
+        """
+        지금 대화의 유사 사례 보고서를 만든다. 값은 답과 같은 판정을 거치고, 내보낸 값은 대화의 State · 공개 원장에 더한다
+        (그래서 GET이 아니라 POST). 질문에 답하는 중이면 409. 숫자(후보 수)는 넣지 않는다.
+        """
+        d = opened(request)
+        with asking_lock:
+            if asking.get(launch_key(request)) is not None:
+                raise HTTPException(409, "답을 기다리는 중에는 보고서를 만들 수 없습니다. 답이 온 뒤 다시 누르세요.")
+        conv = d.current
+        u = user_of(request)
+        try:
+            with d.lock:                                 # 같은 의료진의 질문 · 새 대화 시작과 겹치지 않게
+                rep = case_report.build(conv, user=u)
+        except case_report.ReportError as exc:
+            raise HTTPException(409, str(exc)) from None
+        mon().log("clinic_report", conv.session, user=u, actor="의료진", report=rep["reportId"], shown=rep["counts"]["allow"],
+                  ranged=rep["counts"]["generalize"], protected=rep["counts"]["suppress"], **mon().subjects(conv.session))
+        d._changed(conv, "report")
+        return report_view(rep, conv)
+
+    @r.get("/clinic/report")
+    def get_report(request: Request) -> dict[str, Any]:
+        conv = cur(request)
+        rep = getattr(conv, "report", None)
+        if rep is None:
+            raise HTTPException(404, "아직 만든 보고서가 없습니다.")
+        return report_view(rep, conv)
+
+    @r.get("/clinic/report.pdf")
+    def report_pdf(request: Request) -> Response:
+        """마지막으로 만든 보고서를 PDF로 (새 판정 없음). 내려받기로 열리게 attachment로 보낸다 (데스크톱 창도 저장 창을 연다)."""
+        from urllib.parse import quote
+        conv = cur(request)
+        rep = getattr(conv, "report", None)
+        if rep is None:
+            raise HTTPException(404, "아직 만든 보고서가 없습니다. 보고서를 먼저 만드세요.")
+        regno = report_regno(conv)
+        data = case_report.pdf(rep, regno=regno)
+        name = case_report.filename(rep, regno)
+        mon().log("clinic_report_download", conv.session, user=user_of(request), actor="의료진", report=rep["reportId"],
+                  **mon().subjects(conv.session))
+        return Response(data, media_type="application/pdf", headers={
+            "Content-Disposition": f"attachment; filename=\"MediCloak-report.pdf\"; filename*=UTF-8''{quote(name)}",
+            "Cache-Control": "no-store"})
 
     @r.post("/cases/{case_id}/preflight")
     def preflight(case_id: str, body: PreflightIn, request: Request) -> dict[str, Any]:
@@ -724,7 +787,7 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
     @r.get("/emr/chart")
     def emr_chart(request: Request, fhirId: str = Query(..., min_length=1, max_length=64)) -> dict[str, Any]:
         """
-        환자 차트 요약 (진단 이력 · 처방 · 시술 · 관리 계획 · 최근 내원 · 내원 흐름)과 진료 지원 AI 목적.
+        환자 차트 요약 (내원 이력 · 진단 이력 · 처방 · 시술 · 관리 계획)과 진료 지원 AI 목적.
         담당 환자 · 예외 열람 중인 환자만. 열면 접근 기록에 남긴다 (같은 환자를 1분 안에 다시 열면 한 번으로).
         """
         outpatient_or_404(fhirId)
@@ -878,7 +941,10 @@ def create_app(engine: Engine | None = None, *, trial: str | None = None, simula
         return str(u.get("id") or u.get("username")) if u else "-"
 
     @r.post("/emr/launch")
-    def emr_launch(body: LaunchIn, request: Request) -> dict[str, Any]:
+    def emr_launch(body: LaunchIn, request: Request) -> Response:
+        return keepalive.run(lambda: emr_launch_now(body, request))   # 실제 LLM 첫 답은 60초를 넘길 수 있다 (ADR-0044)
+
+    def emr_launch_now(body: LaunchIn, request: Request) -> dict[str, Any]:
         outpatient_or_404(body.fhirId)
         v = emr_check(request, body.fhirId, "launch")
         tid = find_trial(eng(), body.fhirId, body.purpose)

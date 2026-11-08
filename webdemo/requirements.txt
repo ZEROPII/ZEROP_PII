@@ -2,3 +2,5 @@
 -r ../requirements.txt
 fastapi>=0.110
 uvicorn>=0.29
+# 유사 사례 보고서 PDF (ADR-0042). 글꼴은 webdemo/backend/fonts (Wanted Sans 일부, OFL)
+fpdf2>=2.7

@@ -23,6 +23,9 @@ export default {
         caution: { DEFAULT: v('caution'), text: v('caution-text'), tint: v('caution-tint') },
         danger: { DEFAULT: v('danger'), text: v('danger-text'), tint: v('danger-tint') },
         series: { 1: v('series-1'), 2: v('series-2'), 3: v('series-3') },
+        // 기록 종류 (진단 · 처방 · 시술 · 관리 · 내원만)와 환자 위험 등급 (1 위급 ~ 5 안정)
+        kind: Object.fromEntries(['dx', 'rx', 'px', 'care', 'visit'].flatMap((k) => [[k, v(`kind-${k}`)], [`${k}-text`, v(`kind-${k}-text`)], [`${k}-tint`, v(`kind-${k}-tint`)], [`${k}-on`, v(`kind-${k}-on`)]])),
+        tri: Object.fromEntries([1, 2, 3, 4, 5].flatMap((k) => [[`${k}`, v(`tri-${k}`)], [`${k}-text`, v(`tri-${k}-text`)], [`${k}-tint`, v(`tri-${k}-tint`)], [`${k}-on`, v(`tri-${k}-on`)]])),
         toast: { DEFAULT: v('toast'), text: v('toast-text') },
         scrim: v('scrim'),
         // 의료진 화면(EMR) 전용: 앱 머리줄, 환자 띠, 잠금 표시

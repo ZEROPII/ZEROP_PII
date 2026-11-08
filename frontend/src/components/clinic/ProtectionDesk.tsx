@@ -1,6 +1,5 @@
 import { Loader2, MailQuestion, MessageSquareReply, Send, ShieldCheck, X } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { useLocation } from 'react-router-dom';
 import { requestDraft } from '../../lib/clinicianCopy';
 import { formatTime } from '../../lib/format';
 import { REQUEST_STATE_KO, statusOf } from '../../lib/requests';
@@ -210,20 +209,17 @@ function DeskThread({ focusNonce }: { focusNonce: number }) {
 }
 
 /**
- * 개인정보 보호 담당자 창: 고객센터 상담 창처럼 화면 오른쪽 아래에 떠 있다.
- * - 진료 지원 AI 화면(넓은 화면)에는 오른쪽 아래 버튼과 새 메시지 수가 늘 보인다.
+ * 개인정보 보호 담당자 창: 고객센터 상담 창처럼 화면 오른쪽에 떠 있다.
+ * - 진료 지원 AI 화면에서는 환자 줄의 '보호 담당자에게 묻기'(DeskLauncher)와 새 메시지 수가 늘 보인다.
+ *   오른쪽 아래에 떠 있던 단추는 입력칸 아래 상태 줄 · 보내기 단추 · 사례 노트를 가려 환자 줄로 옮겼다 (ADR-0043).
  * - 머리줄 알림 · 대화 위 '답장하기' · 답 아래 안내는 requestOpen으로 이 창을 연다 (어느 화면에서든).
- * - 열린 환자가 없으면(메시지는 대화 하나에 묶인다) 버튼을 숨긴다.
+ * - 열린 환자가 없으면(메시지는 대화 하나에 묶인다) 창을 열지 않는다.
  */
 export function ProtectionDesk() {
   const msgs = useClinicMessages();
   const { state } = useWorkspace();
-  const { pathname } = useLocation();
   const [open, setOpen] = useState(false);
   const [focusNonce, setFocusNonce] = useState(0);
-  /** 미리 보기를 닫은 마지막 메시지 (새 메시지가 오면 다시 보인다) */
-  const [peekClosed, setPeekClosed] = useState<string | null>(null);
-  const launcher = useRef<HTMLButtonElement>(null);
   const { openPending, consumeOpen } = msgs;
   const available = msgs.supported === true && !state.noConversation;
 
@@ -244,7 +240,7 @@ export function ProtectionDesk() {
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') {
         setOpen(false);
-        launcher.current?.focus();
+        focusLauncher();
       }
     }
     document.addEventListener('keydown', onKey);
@@ -252,10 +248,6 @@ export function ProtectionDesk() {
   }, [open]);
 
   if (!available) return null;
-  const last = msgs.messages[msgs.messages.length - 1];
-  const peek = !open && msgs.unread > 0 && last?.sender === 'security' && last.messageId !== peekClosed ? last : null;
-  // 오른쪽 아래 버튼은 진료 지원 AI 화면의 넓은 화면에서만 (좁은 화면 · 다른 화면은 머리줄 알림으로 연다)
-  const showLauncher = pathname === '/';
 
   return (
     <>
@@ -264,7 +256,7 @@ export function ProtectionDesk() {
           role="dialog"
           aria-modal="false"
           aria-labelledby="desk-title"
-          className="fixed inset-x-2 bottom-2 top-[20vh] z-40 flex flex-col overflow-hidden rounded-overlay border border-line bg-surface shadow-overlay sm:inset-x-auto sm:right-5 sm:top-auto sm:h-[min(560px,calc(100dvh-140px))] sm:w-[372px] lg:bottom-[84px] lg:right-4 lg:w-[336px]"
+          className="fixed inset-x-2 bottom-2 top-[20vh] z-40 flex flex-col overflow-hidden rounded-overlay border border-line bg-surface shadow-overlay sm:inset-x-auto sm:right-5 sm:top-auto sm:h-[min(560px,calc(100dvh-140px))] sm:w-[372px] lg:bottom-auto lg:right-4 lg:top-[116px] lg:w-[336px]"
         >
           <header className="flex shrink-0 items-start gap-3 border-b border-line px-4 py-3">
             <span className="grid h-9 w-9 shrink-0 place-items-center rounded-full bg-iris text-iris-on">
@@ -282,7 +274,7 @@ export function ProtectionDesk() {
               aria-label="창 닫기"
               onClick={() => {
                 setOpen(false);
-                launcher.current?.focus();
+                focusLauncher();
               }}
             >
               <X className="h-4 w-4" aria-hidden />
@@ -291,53 +283,72 @@ export function ProtectionDesk() {
           <DeskThread focusNonce={focusNonce} />
         </section>
       )}
-      {showLauncher && (
-        <div className="fixed bottom-5 right-5 z-40 hidden flex-col items-end gap-2 lg:flex">
-          {peek && (
-            <div className="relative w-[280px]">
-              <button
-                type="button"
-                onClick={() => msgs.requestOpen(peek.caseId)}
-                className="w-full rounded-control border border-line bg-surface py-2.5 pl-3 pr-8 text-left shadow-overlay hover:border-iris"
-              >
-                <span className="flex items-center gap-1.5 text-[11px] font-semibold text-iris-text">
-                  <ShieldCheck className="h-3 w-3" aria-hidden />
-                  보호 담당자 · {peek.kindLabel}
-                </span>
-                {/* line-clamp는 display:-webkit-box라 block을 함께 쓰면 두 줄로 줄지 않는다 (승인 결과처럼 긴 메시지가 버튼을 덮음) */}
-                <span className="mt-0.5 line-clamp-2 text-[13px] leading-5 text-ink">{peek.text}</span>
-              </button>
-              <button
-                type="button"
-                aria-label="미리 보기 닫기"
-                onClick={() => setPeekClosed(peek.messageId)}
-                className="absolute right-1.5 top-1.5 grid h-6 w-6 place-items-center rounded-full text-ink-3 hover:bg-surface-2 hover:text-ink"
-              >
-                <X className="h-3.5 w-3.5" aria-hidden />
-              </button>
-            </div>
-          )}
+    </>
+  );
+}
+
+export const DESK_LAUNCHER_ID = 'desk-launcher';
+
+/** 창을 닫으면 여는 단추로 돌아간다 (단추가 없는 화면이면 그대로). */
+function focusLauncher() {
+  document.getElementById(DESK_LAUNCHER_ID)?.focus();
+}
+
+/**
+ * 진료 지원 AI 화면 환자 줄의 '보호 담당자에게 묻기' (ADR-0043).
+ * 새 메시지 수를 붙이고, 보호 담당자가 보낸 새 메시지는 단추 아래에 미리 보인다 (닫으면 다음 새 메시지까지 숨김).
+ */
+export function DeskLauncher() {
+  const msgs = useClinicMessages();
+  const { state } = useWorkspace();
+  /** 미리 보기를 닫은 마지막 메시지 (새 메시지가 오면 다시 보인다) */
+  const [peekClosed, setPeekClosed] = useState<string | null>(null);
+  if (msgs.supported !== true || state.noConversation) return null;
+  const last = msgs.messages[msgs.messages.length - 1];
+  const peek = msgs.unread > 0 && last?.sender === 'security' && last.messageId !== peekClosed ? last : null;
+  return (
+    <span className="relative">
+      <button
+        id={DESK_LAUNCHER_ID}
+        type="button"
+        aria-haspopup="dialog"
+        aria-label={msgs.unread ? `보호 담당자에게 묻기, 새 메시지 ${msgs.unread}건` : '보호 담당자에게 묻기'}
+        title="개인정보 보호 담당자에게 세부 정보 · 확인을 요청합니다"
+        onClick={() => msgs.requestOpen(null)}
+        className="relative inline-flex h-7 items-center gap-1 whitespace-nowrap rounded-full bg-iris px-2.5 text-xs font-semibold text-iris-on hover:brightness-110"
+      >
+        <ShieldCheck className="h-3.5 w-3.5" aria-hidden />
+        <span className="hidden sm:inline">보호 담당자에게 묻기</span>
+        {msgs.unread > 0 && (
+          <span className="num absolute -right-1.5 -top-1.5 grid h-4 min-w-4 place-items-center rounded-full bg-danger px-1 text-[10px] font-bold text-white ring-2 ring-page">
+            {msgs.unread}
+          </span>
+        )}
+      </button>
+      {peek && (
+        <div className="absolute right-0 top-full z-40 mt-2 w-[280px]">
           <button
-            ref={launcher}
             type="button"
-            aria-expanded={open}
-            aria-label={msgs.unread ? `개인정보 보호 담당자 창, 새 메시지 ${msgs.unread}건` : '개인정보 보호 담당자 창'}
-            onClick={() => {
-              if (open) setOpen(false);
-              else msgs.requestOpen(null); // 오른쪽 아래 단추: 고른 사례로
-            }}
-            className="relative inline-flex h-12 items-center gap-2 rounded-full bg-iris pl-3.5 pr-4 text-[13px] font-semibold text-iris-on shadow-overlay hover:brightness-110"
+            onClick={() => msgs.requestOpen(peek.caseId)}
+            className="w-full rounded-control border border-line bg-surface py-2.5 pl-3 pr-8 text-left shadow-overlay hover:border-iris"
           >
-            {open ? <X className="h-[18px] w-[18px]" aria-hidden /> : <ShieldCheck className="h-[18px] w-[18px]" aria-hidden />}
-            보호 담당자에게 묻기
-            {msgs.unread > 0 && (
-              <span className="num absolute -right-1 -top-1 grid h-5 min-w-5 place-items-center rounded-full bg-danger px-1 text-[11px] font-bold text-white ring-2 ring-page">
-                {msgs.unread}
-              </span>
-            )}
+            <span className="flex items-center gap-1.5 text-[11px] font-semibold text-iris-text">
+              <ShieldCheck className="h-3 w-3" aria-hidden />
+              보호 담당자 · {peek.kindLabel}
+            </span>
+            {/* line-clamp는 display:-webkit-box라 block을 함께 쓰면 두 줄로 줄지 않는다 (승인 결과처럼 긴 메시지가 버튼을 덮음) */}
+            <span className="mt-0.5 line-clamp-2 text-[13px] leading-5 text-ink">{peek.text}</span>
+          </button>
+          <button
+            type="button"
+            aria-label="미리 보기 닫기"
+            onClick={() => setPeekClosed(peek.messageId)}
+            className="absolute right-1.5 top-1.5 grid h-6 w-6 place-items-center rounded-full text-ink-3 hover:bg-surface-2 hover:text-ink"
+          >
+            <X className="h-3.5 w-3.5" aria-hidden />
           </button>
         </div>
       )}
-    </>
+    </span>
   );
 }

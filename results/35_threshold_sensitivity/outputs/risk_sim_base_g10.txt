@@ -1,0 +1,83 @@
+===== sim_base_5_3
+k_final consistency mismatches: 9890
+
+== C1S: 그대로 공개된 개인정보 단서 2286건 (턴 0~7)
+  single_identifying: 0 (0.0%)
+  cumulative_contributes: 0 (0.0%)
+  harmless_alone_and_cum: 2286 (100.0%)
+
+== C1: 그대로 공개된 개인정보 단서 3187건 (턴 0~7)
+  single_identifying: 0 (0.0%)
+  cumulative_contributes: 0 (0.0%)
+  harmless_alone_and_cum: 3187 (100.0%)
+
+== 재식별 확률 상한 1/k (case·turn 단위)
+  C0: n=6240 평균 1/k=13.95% 중앙값=3.23% 최대=100.0% k<5 비율=16.3%
+  C1S: n=7399 평균 1/k=4.54% 중앙값=0.81% 최대=100.0% k<5 비율=3.4%
+  C1: n=11839 평균 1/k=5.95% 중앙값=4.35% 최대=20.0% k<5 비율=0.0%
+
+== 턴별 최소 k 중앙값 (C1)
+  turn 0: median k=69  min=6
+  turn 1: median k=52.0  min=5
+  turn 2: median k=31.0  min=5
+  turn 3: median k=23.0  min=5
+  turn 4: median k=18.0  min=5
+  turn 5: median k=15.0  min=5
+  turn 6: median k=13.0  min=5
+  turn 7: median k=12.0  min=5
+===== sim_g10_s5
+k_final consistency mismatches: 10336
+
+== C1S: 그대로 공개된 개인정보 단서 2421건 (턴 0~7)
+  single_identifying: 0 (0.0%)
+  cumulative_contributes: 0 (0.0%)
+  harmless_alone_and_cum: 2421 (100.0%)
+
+== C1: 그대로 공개된 개인정보 단서 2787건 (턴 0~7)
+  single_identifying: 0 (0.0%)
+  cumulative_contributes: 0 (0.0%)
+  harmless_alone_and_cum: 2787 (100.0%)
+
+== 재식별 확률 상한 1/k (case·turn 단위)
+  C0: n=6240 평균 1/k=13.95% 중앙값=3.23% 최대=100.0% k<5 비율=16.3%
+  C1S: n=7959 평균 1/k=4.24% 중앙값=0.68% 최대=100.0% k<5 비율=3.3%
+  C1: n=11839 평균 1/k=4.02% 중앙값=3.45% 최대=12.5% k<5 비율=0.0%
+
+== 턴별 최소 k 중앙값 (C1)
+  turn 0: median k=74  min=11
+  turn 1: median k=56.0  min=10
+  turn 2: median k=36.0  min=10
+  turn 3: median k=29.0  min=10
+  turn 4: median k=24.0  min=10
+  turn 5: median k=21.0  min=10
+  turn 6: median k=19.0  min=10
+  turn 7: median k=18.0  min=8
+===== sim_g20_s10
+k_final consistency mismatches: 11018
+
+== C1S: 그대로 공개된 개인정보 단서 2688건 (턴 0~7)
+  single_identifying: 0 (0.0%)
+  cumulative_contributes: 0 (0.0%)
+  harmless_alone_and_cum: 2688 (100.0%)
+
+== C1: 그대로 공개된 개인정보 단서 2469건 (턴 0~7)
+  single_identifying: 0 (0.0%)
+  cumulative_contributes: 0 (0.0%)
+  harmless_alone_and_cum: 2469 (100.0%)
+
+== 재식별 확률 상한 1/k (case·turn 단위)
+  C0: n=6240 평균 1/k=13.95% 중앙값=3.23% 최대=100.0% k<5 비율=16.3%
+  C1S: n=8820 평균 1/k=3.23% 중앙값=0.61% 최대=100.0% k<5 비율=2.6%
+  C1: n=11834 평균 1/k=2.32% 중앙값=2.27% 최대=4.8% k<5 비율=0.0%
+
+== 턴별 최소 k 중앙값 (C1)
+  turn 0: median k=104  min=21
+  turn 1: median k=68.0  min=21
+  turn 2: median k=56  min=21
+  turn 3: median k=44.0  min=21
+  turn 4: median k=38.0  min=21
+  turn 5: median k=36.0  min=21
+  turn 6: median k=35.0  min=21
+  turn 7: median k=32.0  min=21
+
+[exited with code 0]

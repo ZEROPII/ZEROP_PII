@@ -576,8 +576,15 @@ class Session:
     def k_global(self, ref: str, arm: str = "C1") -> int:
         """원장(다른 대화)까지 합친 이 사례의 후보 수. 원장이 없으면 이 대화의 후보 수와 같다."""
         c = self.runs[arm].cases.get(ref)
-        ds = (self.prior(ref) if arm == "C1" else []) + (list(c.committed) if c else [])
-        return self.ctx.kc.k(ds)["k"] if ds else self.ctx.p_ref
+        own = list(c.committed) if c else []
+        pre = self.prior(ref) if arm == "C1" else []
+        if not own and not pre:
+            return self.ctx.p_ref
+        res = self.ctx.kc.k(pre + own)
+        # 묶음 보정이 일어났으면 이 대화 값만 센 수와 작은 쪽 (원장 잡음이 이 대화의 값을 밀어내 후보 수가 커지지 않게, ADR-0043)
+        if own and pre and any(str(f).startswith(("CONFLICT_DROPPED", "REGROUPED")) for f in res.get("flags") or []):
+            return min(res["k"], self.ctx.kc.k(own)["k"])
+        return res["k"]
 
     def _ledger_sync(self, kind: str, turn: int | None) -> None:
         """화면 갈래(C1) State에 새로 들어간 값을 원장에 적는다 (사례마다 앞서 적은 뒤의 것만)."""
@@ -1125,7 +1132,8 @@ class Session:
         return dict(self._summary(), arms=arms, steps=self.steps, rules=copy.deepcopy(self.rules), approvals=copy.deepcopy(self.approvals),
                     retrieval=[dict(ref=f"사례{i}", patient=p[:8], score=round(s, 4), sensitive=self._sensitive_labels(p))
                                for i, (p, s) in enumerate(self.prefix.retrieval, 1)],
-                    ledger=self.ledger_view(), gated=self.gated)
+                    ledger=self.ledger_view(), gated=self.gated,
+                    reports=copy.deepcopy(getattr(self, "reports", [])))      # 유사 사례 보고서: 언제 · 누가 · 사례마다 가린 · 넓힌 수 (ADR-0042)
 
     def _sensitive_labels(self, pid: str) -> list[str]:
         """이 과거 환자 기록에 든 민감 범주 이름 (민감도 정책을 켠 서버의 의료진 대화만, 관제 화면 표시용)."""

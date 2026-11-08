@@ -75,7 +75,7 @@ export function preflightStatusLine(status: PreflightStatus, a: PreflightRiskAss
 export function protectionNote(p: ProtectionResult): Notice | null {
   const mode = p.releaseMode ?? '';
   if (mode === 'REFUSAL_EXTRACTION_FAILED') return { tone: 'info', text: '답을 확인하지 못해 보내지 않았습니다. 질문을 조금 바꿔 다시 물어보세요.' };
-  if (mode === 'REFUSAL_TIMEOUT') return { tone: 'info', text: '정해진 시간 안에 답을 확인하지 못해 보내지 않았습니다. 잠시 뒤 다시 물어보세요.' };
+  if (mode === 'REFUSAL_TIMEOUT') return { tone: 'info', text: '확인하지 못한 답은 보내지 않으며, 공개한 값으로 세지 않습니다.' };
   if (mode.startsWith('REFUSAL')) return { tone: 'lock', text: '이 질문에는 개인정보 보호를 위해 답하지 않았습니다.' };
   if (mode === 'CASE_DROPPED') return { tone: 'lock', text: '환자를 알아볼 위험이 있는 사례는 이 답에서 뺐습니다.' };
   const sup = p.transformations.some((t) => t.action === 'suppress' && !t.purpose);
@@ -100,7 +100,7 @@ export function whyText(p: ProtectionResult, caseLabel: string): string[] {
   const dropped = joinNames(p.transformations.filter((t) => t.dropped && t.caseRef).map((t) => refLabel(t.caseRef!)));
   const out: string[] = [];
   if (p.releaseMode === 'REFUSAL_TIMEOUT')
-    out.push('답을 만들고 확인하는 데 정해진 시간을 넘겨, 확인하지 못한 답 대신 안내 문장을 보냈습니다.');
+    out.push('답을 고쳐 쓰고 다시 확인하는 데 정해진 시간을 넘겼습니다. 확인하지 못한 답은 내보내지 않으므로, 이번 질문으로 공개된 값은 없습니다.');
   else if ((p.releaseMode ?? '').startsWith('REFUSAL'))
     out.push('답을 고쳐도 개인을 알아볼 수 있는 내용이 남아, 답 대신 안내 문장을 보냈습니다.');
   if (dropped)

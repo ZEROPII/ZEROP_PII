@@ -10,7 +10,7 @@ __pycache__/
 *.pyc
 .pytest_cache/
 
-# ── SynthPAI 원본 (정답 profile 포함, 커밋 금지) ──
+# ── SynthPAI 원본 (정답 profile 포함): main에는 커밋하지 않는다. 공개본은 dataset 브랜치의 data.zip ──
 data/synthpai/
 fuzzer/.env
 CLAUDE.md
@@ -21,3 +21,38 @@ runs/
 
 # 의료 용어 DB (scripts/build_terminology_db.py로 다시 만듦)
 data/medical/terminology.db
+
+# 데스크톱 앱 묶음 (scripts/build_desktop.py)
+/build/
+/dist/
+
+# ── 내 컴퓨터에만 두는 것 (README '내 데이터가 밖으로 나가지 않게') ──
+# 다른 이름의 가상환경 · 패키지
+venv/
+env/
+node_modules/
+# .env 변형 (예시 파일만 올린다)
+.env.*
+!.env.example
+!frontend/.env.demo
+# 실행하면 생기는 DB · 계정 · 기록 · 앱 설정
+*.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite3
+*accounts*.txt
+desktop.json
+*.log
+# 인증서 · 키 파일
+*.pem
+*.key
+*.p12
+# 편집기 설정 (개인 경로가 들어감)
+.vscode/
+.idea/
+# 큰 파일 (영상은 Releases나 Drive에, 묶음 파일은 저장소 밖에)
+*.mp4
+*.mov
+*.bundle

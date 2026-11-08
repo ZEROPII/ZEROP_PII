@@ -266,6 +266,7 @@ class ClinicConversation:
         self.saved_turns: set[tuple[str, int]] = set()          # DB에 이미 넣은 턴 기록 (persist.py)
         self._preflights: collections.deque = collections.deque()    # 보내기 전 확인 시각 (사용 한도, ADR-0032)
         self.preflight_limited = 0                              # 한도를 넘겨 판정 없이 돌려준 수
+        self.report: dict[str, Any] | None = None               # 마지막 유사 사례 보고서 (case_report.build)
         self.save_lock = threading.Lock()                       # 저장 한 번(스냅숏 만들기 + DB 쓰기)을 대화마다 줄 세운다
         self.slots = {f"case-{i}": Slot(i) for i in range(1, len(session.prefix.docs) + 1)}
         rec0 = self._records()[0]
@@ -684,6 +685,9 @@ class ClinicConversation:
             explanation = self._explain(s, rec, tf, k_before)
             segments = ([dict(kind="text", text=text)] if mode.startswith("REFUSAL")
                         else mark_hidden(text, place_suppressed(text, segments_of(text, tf), tf, s.ref, len(self.slots)), tf, s.ref))
+            left = [] if self.live or mode.startswith("REFUSAL") else oracle_left(it, rec)
+            if left:
+                segments = [*segments, dict(kind="text", text="\n\n" + oracle_left_text(left))]
         acts = {t["action"] for t in tf if not t.get("duration")}
         decision = SUPPRESS if SUPPRESS in acts else GENERALIZE if GENERALIZE in acts else ALLOW
         k_after = self.k(s.case_id)
@@ -807,7 +811,8 @@ class ClinicConversation:
                              decision=self.policy_decision(cid), risk=self.risk_state(cid), narrowing=self.narrowing(cid)) for cid in self.slots}
             return dict(workspace_id=self.workspace_id, version=self.version, updated_at=self.updated_at, labels={cid: s.label for cid, s in self.slots.items()},
                         environment=self.environment(), policy=self.policy(), patient=self.patient_context(),
-                        cases=self.similar_cases(f"{self.workspace_id}:patient"), per_case=per)
+                        cases=self.similar_cases(f"{self.workspace_id}:patient"), per_case=per,
+                        report=copy.deepcopy(getattr(self, "report", None)))       # 마지막 유사 사례 보고서 (보호를 거친 값만, ADR-0042)
 
 
 class ArchivedConversation:
@@ -1057,3 +1062,18 @@ class DeskRegistry:
             desks = list(self.desks.values())
         return [c for d in desks for c in d.history.values()]
 
+
+def oracle_left(it: I.Intent, rec: dict[str, Any]) -> list[str]:
+    """
+    시연 모드(LLM 없음)는 질문 하나에 Seed 하나(단서 한두 가지)만 답한다 (ADR-0043). 질문에서 찾은 단서 가운데 답하지 않은 것.
+    진단은 '진단 당시 나이'처럼 다른 단서의 기준으로 쓰이는 일이 많고 사례 목록에 늘 보이므로 세지 않는다.
+    """
+    answered = {x.get("attribute") for p in rec.get("release_plans") or [] for x in p.get("decisions") or []}
+    return [a for a in it.attrs if a != "DX" and a not in answered]
+
+
+def oracle_left_text(left: list[str]) -> str:
+    names = " · ".join(I.ATTR_KO.get(a, a) for a in left)
+    last = names[-1]
+    josa = "은" if "가" <= last <= "힣" and (ord(last) - 0xAC00) % 28 else "는"
+    return f"시연 모드는 질문마다 정해 둔 항목만 답합니다. {names}{josa} 따로 물어 주세요."

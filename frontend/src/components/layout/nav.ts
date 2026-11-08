@@ -1,4 +1,4 @@
-import { BarChart3, BookOpen, FolderLock, History, ListChecks, MessagesSquare, Radar, ShieldCheck, Stethoscope, Users, type LucideIcon } from 'lucide-react';
+import { BarChart3, BookOpen, FileText, FolderLock, History, ListChecks, MessagesSquare, Radar, ShieldCheck, Stethoscope, Users, type LucideIcon } from 'lucide-react';
 
 export type Role = 'clinician' | 'security';
 
@@ -20,6 +20,7 @@ export const NAV: Record<Role, NavItem[]> = {
   clinician: [
     { to: '/emr', label: '내 환자', title: '내 담당 환자', icon: Users, productOnly: true },
     { to: '/', label: '사례 조회', title: '유사 사례 조회', icon: Stethoscope, end: true },
+    { to: '/case-report', label: '사례 보고서', title: '유사 사례 보고서', icon: FileText },
     { to: '/history', label: '조회 기록', title: '조회 기록', icon: History },
     { to: '/guide', label: '보호 안내', title: '개인정보 보호 안내', icon: ShieldCheck },
   ],
@@ -42,6 +43,6 @@ export const ROLE_LABEL: Record<Role, string> = { clinician: '의료진', securi
 export function roleOfPath(path: string): Role | null {
   // '/emr-access'(보안 담당자)가 '/emr'(의료진)로 시작하므로 보안 담당자 경로를 먼저 본다
   if (['/monitor', '/watch', '/report', '/emr-access', '/audit', '/terms', '/policy'].some((p) => path.startsWith(p))) return 'security';
-  if (path === '/' || path.startsWith('/history') || path.startsWith('/guide') || path === '/emr' || path.startsWith('/emr/')) return 'clinician';
+  if (path === '/' || path.startsWith('/case-report') || path.startsWith('/history') || path.startsWith('/guide') || path === '/emr' || path.startsWith('/emr/')) return 'clinician';
   return null;
 }

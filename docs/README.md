@@ -4,7 +4,7 @@
 
 | 문서 | 내용 |
 | --- | --- |
-| [adr/](adr/README.md) | 설계 결정 기록(ADR) 37건. 기준 · 구조 · 실험 방식을 바꾼 결정마다 배경, 결정, 대안, 영향을 남겼습니다 |
+| [adr/](adr/README.md) | 설계 결정 기록(ADR) 39건. 기준 · 구조 · 실험 방식을 바꾼 결정마다 배경, 결정, 대안, 영향을 남겼습니다 |
 | [medical.md](medical.md) | 의료 시나리오 실험 코드(`python -m medical`): 한 trial의 흐름, Defender 정책, 기준 집단 사전 점검, 모의 POC |
 | [medical/](medical/) | 팀에서 받은 명세: 대상 AI 하네스 · 평가 명세, 추출 · 정규화 명세, 설계 보고서 발췌 |
 | [evaluation.md](evaluation.md) | 평가 통합 문서: `evaluation_proto`와 `eval-metrics`의 역할, 데이터 흐름, 지표 정의, 통계 처리 원칙 |

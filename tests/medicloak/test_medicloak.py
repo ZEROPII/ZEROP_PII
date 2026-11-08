@@ -9,6 +9,7 @@ import stat
 import threading
 import time
 from pathlib import Path
+from urllib.parse import quote
 
 import pytest
 
@@ -27,6 +28,7 @@ from webdemo.backend.access import EmrAccess, subject_tag, tag_key  # noqa: E402
 from webdemo.backend.app import Product, create_app  # noqa: E402
 from webdemo.backend.auth import COOKIE, add_user, ensure_initial_accounts, hash_password, token_hash, verify_password  # noqa: E402
 from webdemo.backend.engine import Engine  # noqa: E402
+from webdemo.backend.ledger import DisclosureLedger  # noqa: E402
 from webdemo.backend.persist import Persist  # noqa: E402
 from webdemo.backend.live import ANSWER_STYLE, ANSWER_STYLE_ID  # noqa: E402
 from webdemo.backend.review import RELEASE_VERSION  # noqa: E402
@@ -1009,6 +1011,81 @@ def test_what_if_does_not_change_the_conversation(world):
         assert (len(s.runs["C1"].cases["사례1"].committed), s.current_k("C1", "사례1"), len(s.approvals)) == before
 
 
+def test_case_report_is_judged_like_an_answer_and_counts_as_disclosed(world):
+    """
+    유사 사례 보고서 (ADR-0042): 값마다 답과 같은 판정 (비공개 · 범위), 숫자 없는 의료진 계약, 내보낸 값은 그 사례 State · 원장에 더하고
+    다시 만들어도 한 번만, PDF는 내려받기로, 만들기 · 받기는 감사 기록에 남는다.
+    """
+    add_user(world["store"], "doctor_rpt", "보고서의사", "clinician", "내과", PW)
+    doc = login(world, "doctor_rpt")
+    r = doc.get("/api/clinic/report")
+    assert r.status_code == 409 and r.headers["X-MediCloak-State"] == "no-conversation"       # 연 환자가 없으면
+    ledger = DisclosureLedger()                     # 이 대화만 공개 원장을 켠다 (운영 서버 기본: 켬). 다른 시험의 대화에는 영향이 없다
+    world["eng"].ledger = ledger
+    try:
+        _, sid = launch(doc, "T0014")
+    finally:
+        world["eng"].ledger = None
+    assert doc.get("/api/clinic/report").status_code == 404
+    assert doc.get("/api/clinic/report.pdf").status_code == 404
+    sec = login(world, "privacy1")
+    w = current_conv(sec, "보고서의사")
+    s = world["eng"].sessions[w]
+    with world["eng"].lock:
+        before = sum(len(c.committed) for c in s.runs["C1"].cases.values())
+    r = doc.post("/api/clinic/report")
+    assert r.status_code == 200, r.text
+    rep = r.json()
+    text = json.dumps(rep, ensure_ascii=False)
+    assert not redact.leaked_numbers(rep) and "후보" not in text and '"k"' not in text
+    assert len(rep["cases"]) == len(s.prefix.docs) and rep["regno"] and rep["pdfName"].startswith(f"MediCloak-유사사례보고서-{rep['regno']}-")
+    values = []
+    for c in rep["cases"]:
+        vs = [c["profile"]["sex"], c["profile"]["age"], *c["others"], *(t["name"] for t in c["treatments"])]
+        if c["main"]:
+            vs += [c["main"]["value"], c["main"]["start"]]
+        values += [v for v in vs if v]
+        for t in c["treatments"]:
+            if t["name"]["action"] == "suppress":
+                assert t["name"]["text"] is None and t["course"] == []                       # 이름을 가리면 경과도 없다
+        assert c["hidden"] == sum(v["action"] == "suppress" for v in vs if v)
+    assert {v["action"] for v in values} <= {"allow", "generalize", "suppress"}
+    assert all((v["text"] is None) == (v["action"] == "suppress") for v in values)
+    assert all(v["why"] in rep["whyLabels"] for v in values if v["action"] != "allow")
+    assert sum(rep["counts"].values()) == len(values) and rep["counts"]["suppress"] > 0
+    # 내보낸 값(그대로 · 범위)은 사례 State에 더해졌다. 다시 만들어도 같은 값은 한 번만
+    with world["eng"].lock:
+        after = sum(len(c.committed) for c in s.runs["C1"].cases.values())
+        rpt = [x for c in s.runs["C1"].cases.values() for x in c.committed if ":RPT" in str(x.get("event_group"))]
+    assert 0 < len(rpt) <= after - before <= rep["counts"]["allow"] + rep["counts"]["generalize"]     # 사건이 없는 값(성별)은 묶음 이름 없이
+    # 공개 원장에도 '보고서'로 적혀, 같은 과거 환자를 다른 대화에서 열어도 이 값까지 합쳐 센다
+    pid = s.patient_of("사례1")
+    reported = [e for e in ledger.entries(pid) if e["kind"] == "report"]
+    assert reported and all(e["conv_id"] == w and e["node_id"] for e in reported)
+    assert any((e["event_label"] or "").startswith("RPT") for e in reported)
+    again = doc.post("/api/clinic/report").json()
+    with world["eng"].lock:
+        assert sum(len(c.committed) for c in s.runs["C1"].cases.values()) == after
+    assert again["reportId"] != rep["reportId"] and doc.get("/api/clinic/report").json()["reportId"] == again["reportId"]
+    # 보고서 뒤의 답은 보고서 값까지 합쳐 판정한다 (같은 사례의 State가 늘었으니 더 가려지거나 그대로, 덜 가려지지 않는다)
+    assert doc.post("/api/cases/case-1/messages", json=dict(sessionId=sid, question=Q_DRUG, clientMessageId="rpt1")).status_code == 200
+    # PDF: 내려받기 머리글 · 한글 파일 이름
+    pdf = doc.get("/api/clinic/report.pdf")
+    assert pdf.status_code == 200 and pdf.content.startswith(b"%PDF") and pdf.headers["content-type"] == "application/pdf"
+    cd = pdf.headers["content-disposition"]
+    assert cd.startswith("attachment;") and "filename*=UTF-8''MediCloak-" in cd and pdf.headers["cache-control"] == "no-store"
+    assert quote(again["pdfName"]) in cd                                                    # 화면 링크의 이름과 같다
+    # 감사 기록 · 보안 담당자 화면 (숫자는 보안 담당자 쪽에만)
+    audit = [a for a in sec.get("/api/monitor/audit").json() if a["action"] in ("clinic_report", "clinic_report_download") and a.get("session") == w]
+    assert [a["action"] for a in audit].count("clinic_report") == 2 and any(a["action"] == "clinic_report_download" for a in audit)
+    made = next(a for a in audit if a["action"] == "clinic_report")
+    assert made["protected"] == rep["counts"]["suppress"] or made["protected"] == again["counts"]["suppress"]
+    with world["eng"].lock:
+        assert [x["id"] for x in s.reports] == [rep["reportId"], again["reportId"]]
+    # 보안 담당자 계정은 의료진 보고서 API를 쓸 수 없다
+    assert sec.post("/api/clinic/report").status_code in (401, 403)
+
+
 def test_hidden_values_show_as_named_locks_in_the_chat_answer(world):
     """실제 LLM 답은 가린 값을 문장에서 지운다: 그 사례 단락 끝에 '시기 비공개' 자리 표시가 붙는다 (글 · 판정은 그대로)."""
     add_user(world["store"], "doctor_ph", "표시의사", "clinician", "내과", PW)
@@ -1272,10 +1349,10 @@ def test_live_rewrite_retry_is_told_what_was_left(world):
     prompts = [c["payload"]["messages"][-1]["content"] for c, r in zip(fake.calls[n0:], fake.roles()[n0:]) if r == "rewriter"]
     head = [x.rsplit("\n[바꿀 표현]\n", 1)[0] for x in prompts]
     assert len(head) == 2
-    assert "6. 바꿀 값은 그 자리만이 아니라 답 전체에서 고친다" in head[0] and "'cetirizine'(사례4)" in head[0] and "11. 앞서" not in head[0]
+    assert "6. 바꿀 값은 그 자리만이 아니라 답 전체에서 고친다" in head[0] and "'cetirizine'(사례4)" in head[0] and "12. 앞서" not in head[0]
     assert "10. 원래 답에 없던 원인 · 목적 · 진단을 짐작해 덧붙이지 않는다" in head[0]           # 짐작 금지 (ADR-0031)
     assert "8. 값을 빼서 내용이 없어진 줄" in head[0] and "9. 날짜를 빼더라도 기간" in head[0]
-    assert "11. 앞서 고친 답을 다시 확인하니" in head[1] and "남은 표현: 'cetirizine hydrochloride 5 mg oral tablet'" in head[1]
+    assert "12. 앞서 고친 답을 다시 확인하니" in head[1] and "남은 표현: 'cetirizine hydrochloride 5 mg oral tablet'" in head[1]
     sec = login(world, "privacy1")
     w = current_conv(sec, "재시도의사")
     assert sec.get(f"/api/monitor/sessions/{w}").json()["arms"]["C1"]["turns"][0]["mode"] == "REWRITTEN"
@@ -1509,7 +1586,7 @@ def test_residence_is_hidden_for_every_query_purpose(world):
     rec = world["eng"].sessions[w].logs["C1"][-1]
     region_d = [d for p in rec["release_plans"] for d in p["decisions"] if d["attribute"] == "REGION"]
     assert region_d and all(d["action"] == "suppress" and d.get("purpose") for d in region_d)
-    assert RELEASE_VERSION == world["eng"].sessions[w].runs["C1"].trial["versions"]["medicloak_release"] == "medicloak-release-v8"
+    assert RELEASE_VERSION == world["eng"].sessions[w].runs["C1"].trial["versions"]["medicloak_release"] == "medicloak-release-v9"
     hidden = sec.get(f"/api/monitor/sessions/{w}/hidden").json()
     items = hidden["items"] if isinstance(hidden, dict) else hidden
     assert not any(x["attribute"] == "REGION" for x in items)
@@ -1662,7 +1739,7 @@ def test_drop_cases_and_rewrite_rules_unit():
           dict(case_ref="사례5", attribute="MED", raw_value="fexofenadine hydrochloride 30 MG Oral Tablet", action="generalize")]
     r1, r2 = rewrite_rules(prompt, ch), rewrite_rules(prompt, ch, "- 사례2 환자를 알아볼 수 있는 표현이 아직 남았다.")
     assert r1.index("6. 바꿀 값은") < r1.rindex("\n[바꿀 표현]\n") and "'naproxen'(사례2)" in r1 and "fexofenadine'(" not in r1
-    assert "11. 앞서" not in r1 and r2.index("11. 앞서 고친 답을") < r2.rindex("\n[바꿀 표현]\n")
+    assert "12. 앞서" not in r1 and r2.index("12. 앞서 고친 답을") < r2.rindex("\n[바꿀 표현]\n")
     assert r1.index("10. 원래 답에 없던 원인") < r1.rindex("\n[바꿀 표현]\n")
     assert r1.endswith("[원 답변]\n원 답") and rewrite_rules("다른 지시문", ch) == "다른 지시문"
 
@@ -1881,15 +1958,15 @@ def test_extraction_guard_unit():
                       ("6개월 이상", "6개월 이상"), ("총 2년 이상", "총 1년 이상")]:
         assert G.coarsen_durations(raw)[0] == want, raw
     assert G.duration_mentions("사례1은 1년 이상 처방되었고 사례2는 3년 넘게 처방되었습니다.", 5) == [("사례1", "1년 이상"), ("사례2", "3년 넘게")]
-    # 기록 말투: '종료 기록이 없습니다' → '종료일 없이 계속 처방되었습니다' (처방을 복용으로 바꾸지 않는다)
+    # 기록 말투: '종료 기록이 없습니다' → '현재까지 계속 처방되고 있습니다' (처방을 복용으로 바꾸지 않는다, ADR-0043)
     text, ed = G.natural_wording("사례1의 simvastatin Oral Tablet은 종료 기록이 없습니다. metoprolol 100 MG Tablet도 종료 기록이 없으며 2~3회 처방되었습니다. "
                                  "A DRUGS는 총 10회 이상 처방되었으며 종료 기록이 없습니다.")
-    assert text == ("사례1의 simvastatin Oral Tablet은 종료일 없이 계속 처방되었습니다. metoprolol 100 MG Tablet도 종료일 없이 계속 처방되었으며 2~3회 처방되었습니다. "
-                    "A DRUGS는 총 10회 이상 처방되었으며 종료일 없이 이어졌습니다.")
+    assert text == ("사례1의 simvastatin Oral Tablet은 현재까지 계속 처방되고 있습니다. metoprolol 100 MG Tablet도 현재까지 계속 처방되고 있으며 2~3회 처방되었습니다. "
+                    "A DRUGS는 총 10회 이상 처방되었으며 현재까지 이어지고 있습니다.")
     assert [e["kind"] for e in ed] == ["wording"] * 3 and "복용" not in text
-    assert G.natural_wording("사례2의 관리 계획은 종료 기록이 없습니다.")[0] == "사례2의 관리 계획은 종료일 없이 계속 진행되었습니다."
+    assert G.natural_wording("사례2의 관리 계획은 종료 기록이 없습니다.")[0] == "사례2의 관리 계획은 현재까지 계속 진행되고 있습니다."
     out, edits = G.post_release("사례1의 simvastatin Oral Tablet은 약 2년 이상 처방되었고 종료 기록이 없습니다.", 5)
-    assert out == "사례1의 simvastatin Oral Tablet은 1년 이상 처방되었고 종료일 없이 이어졌습니다." and {e["kind"] for e in edits} == {"duration", "wording"}
+    assert out == "사례1의 simvastatin Oral Tablet은 1년 이상 처방되었고 현재까지 이어지고 있습니다." and {e["kind"] for e in edits} == {"duration", "wording"}
 
 
 def test_front_calls_do_not_wait_for_background_calls():
@@ -2171,8 +2248,9 @@ def test_approval_of_title_value_updates_card_and_says_how_it_was_hidden(world):
 def test_answer_style_and_rewriter_forbid_guessing_causes():
     """대상 AI 답 형식과 재작성기 지시에 '기록에 없는 원인 · 목적을 짐작하지 않는다'가 있다 (판정 규칙 v6, v7에서 출력 확인을 더함)."""
     from webdemo.backend.review import rewrite_rules
-    assert "짐작해 쓰지 않습니다" in ANSWER_STYLE and "'기록에 없음'" in ANSWER_STYLE
-    assert RELEASE_VERSION == "medicloak-release-v8"
+    assert "짐작해 쓰지 않습니다" in ANSWER_STYLE and "처방 사유가 적혀 있지 않습니다" in ANSWER_STYLE and "'기록에 없음'" not in ANSWER_STYLE
+    assert "종료일에 도달하지 않았습니다" in ANSWER_STYLE and "현재까지 계속 처방되고 있습니다" in ANSWER_STYLE   # 쓰지 말 말투와 쓸 말투 (ADR-0043)
+    assert RELEASE_VERSION == "medicloak-release-v9"
     out = rewrite_rules("지시\n[바꿀 표현]\n- 사례1 진단\n[원 답변]\n원 답", [dict(attribute="DX", action="generalize", case_ref="사례1")])
     assert "10. 원래 답에 없던 원인 · 목적 · 진단을 짐작해 덧붙이지 않는다" in out
 

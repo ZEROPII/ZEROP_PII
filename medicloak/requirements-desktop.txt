@@ -1,0 +1,5 @@
+# 데스크톱 앱 (ADR-0039): python -m medicloak app 의 창과 scripts/build_desktop.py 의 묶기에 쓴다
+#   pip install -r medicloak/requirements-desktop.txt
+-r ../webdemo/requirements.txt
+pywebview>=5.3
+pyinstaller>=6.10

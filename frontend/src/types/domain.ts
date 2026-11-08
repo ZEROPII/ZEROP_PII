@@ -406,12 +406,23 @@ export interface WorklistPatient {
   statusLabel: string;
   /** 진행 중인 진단 · 처방 · 관리 계획 수 (차트의 '진행 중'과 같다) */
   openItems: number;
-  /** 마지막 내원일 (차트의 최근 내원과 같은 날) */
+  /** 마지막 내원일 (차트 내원 이력의 마지막 날과 같은 날) */
   lastRecord: string | null;
+  /** 환자 위험 등급 (ADR-0041): 마지막 내원 때 진행 중인 진단 · 처방 · 나이로 센 참고 등급 */
+  risk?: PatientRisk;
   /** 이 의료진에게 열린 까닭: 담당 환자 · 협진 의뢰 · 담당 외 예외 열람 (ADR-0034 · ADR-0036). 로그인 없는 서버는 없음 */
   access?: EmrAccessVia;
   /** 협진 의뢰 · 예외 열람이면 사유 · 끝나는 시각 */
   grant?: EmrGrant | null;
+}
+
+/** 환자 위험 등급: 1 위급 · 2 높음 · 3 주의 · 4 낮음 · 5 안정. 응급도가 아니라 기록으로 센 진료 위험 (서버 triage.assess) */
+export interface PatientRisk {
+  level: 1 | 2 | 3 | 4 | 5;
+  label: string;
+  score: number;
+  /** 화면에 보일 까닭 (많아야 셋, 장기 미내원이면 한 줄 더) */
+  reasons: string[];
 }
 
 export type EmrAccessVia = 'assigned' | 'consult' | 'break_glass';
@@ -494,9 +505,12 @@ export interface EmrChart {
   medications: ChartGroup;
   procedures: ChartGroup;
   carePlans: ChartGroup;
-  /** 최근 내원: 진료마다 그날 기록된 것 (최근 것부터) */
-  visits: { date: string; items: { kind: 'problems' | 'medications' | 'procedures' | 'carePlans'; label: string }[] }[];
-  /** 해마다 내원한 날 수 (마지막 내원 해까지 최근 10년) */
+  /**
+   * 내원: 날마다 그날 기록된 것 (최근 것부터, 같은 날 진료는 합침). first: 이 환자 기록에 처음 나온 이름 (새 진단 · 첫 시술 · 첫 처방).
+   * 하루 항목이 많으면 줄이고 more에 남은 수. 아주 오래된 내원은 빠질 수 있다 (날짜는 visitDates에 모두 있음)
+   */
+  visits: { date: string; items: { kind: 'problems' | 'medications' | 'procedures' | 'carePlans'; label: string; first?: boolean }[]; more?: number }[];
+  /** 해마다 내원한 날 수 (마지막 내원 해까지 최근 10년). 지금 화면은 visitDates로 센다 */
   yearly: { year: number; visits: number }[];
   visitDays: number;
   firstRecord: string | null;
@@ -539,4 +553,51 @@ export interface ClinicHistoryItem {
   regno?: string | null;
   current: boolean;
   archived: boolean;
+}
+
+/**
+ * 유사 사례 보고서 (POST · GET /api/clinic/report, ADR-0042). 값마다 답과 같은 판정을 거쳤다.
+ * 그대로(allow)는 원래 글, 넓혀 적음(generalize)은 상위 범주 이름, 비공개(suppress)는 글이 없다. 후보 수 같은 숫자는 없다.
+ */
+export interface ReportValue {
+  text: string | null;
+  action: 'allow' | 'generalize' | 'suppress';
+  /** 넓히거나 가린 까닭 (CaseReport.whyLabels의 열쇠) */
+  why: 'count' | 'purpose' | 'rule' | 'floor' | 'strict' | null;
+}
+
+export interface ReportCase {
+  caseId: string;
+  ref: string;
+  label: string;
+  rank: number;
+  profile: { sex: ReportValue | null; age: ReportValue | null };
+  /** 주진단 (지금 환자의 주진단과 같은 진단) · 시작 시기 · 기록상 경과 (범위로 센 짧은 글) */
+  main: { value: ReportValue; start: ReportValue | null; course: string[] } | null;
+  /** 주진단 무렵 시작한 처방 · 시술 · 관리 계획과 그 기록상 경과. 이름이 비공개면 경과도 비어 있다 */
+  treatments: { kind: 'medications' | 'procedures' | 'carePlans'; kindLabel: string; name: ReportValue; course: string[] }[];
+  /** 동반 진단 */
+  others: ReportValue[];
+  summary: string;
+  hidden: number;
+  ranged: number;
+}
+
+export interface CaseReport {
+  reportId: string;
+  /** 초 */
+  createdAt: number;
+  conversationId: string;
+  createdBy: string | null;
+  purpose: string;
+  patient: { ageSex: string; primaryDiagnosis: string; visitDate: string | null };
+  target: string;
+  cases: ReportCase[];
+  notes: string[];
+  whyLabels: Record<string, string>;
+  counts: { allow: number; generalize: number; suppress: number };
+  /** 지금 보는 환자의 등록번호 (운영 모드) */
+  regno?: string | null;
+  /** PDF 파일 이름 (내려받기 링크의 download 값) */
+  pdfName?: string;
 }

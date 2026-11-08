@@ -449,6 +449,10 @@ export interface AuditEntry {
   ok?: boolean;
   /** 로그인 기록: 접속 주소 */
   client?: string;
+  /** 유사 사례 보고서(clinic_report): 보고서 번호 · 그대로 · 범위로 적은 값 수 (비공개 수는 protected) */
+  report?: string;
+  shown?: number;
+  ranged?: number;
   /** 규칙 기록: 단서 종류 */
   attribute?: string;
   /** 공개 승인: 공개한 항목 (값 없음) · 요청한 사례에서 이번에 공개하지 않은 단서 */

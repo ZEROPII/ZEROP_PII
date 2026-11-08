@@ -1,4 +1,4 @@
-import { ArrowLeft, Info, LockKeyhole, Search, Send, Stethoscope, Users } from 'lucide-react';
+import { ArrowDownUp, ArrowLeft, Info, LockKeyhole, Search, Send, Stethoscope, Users } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { emrApi } from '../api/emrApi';
@@ -9,10 +9,11 @@ import { ChartSummary } from '../components/emr/ChartSummary';
 import { ConsultDialog } from '../components/emr/ConsultDialog';
 import { SimilarCaseBox } from '../components/emr/SimilarCaseBox';
 import { useToast } from '../components/layout/Toast';
+import { TRI, TRI_KO, type TriageLevel } from '../lib/kindStyle';
 import { koreanNames } from '../lib/koTerms';
 import { dateTime, sinceDay, timeLeft } from '../lib/time';
 import { useWorkspace } from '../state/WorkspaceContext';
-import type { EmrChart, EmrConsult, EmrMe, WorklistPatient } from '../types/domain';
+import type { EmrChart, EmrConsult, EmrMe, PatientRisk, WorklistPatient } from '../types/domain';
 
 const SEX_KO = { male: '남', female: '여', unknown: '성별 미상' } as const;
 type Status = WorklistPatient['status'];
@@ -36,6 +37,50 @@ const STATUS_TITLE: Record<Status, (open: number) => string> = {
 function who(p: { sex: WorklistPatient['sex']; ageBand: string | null; ageYear?: number | null; status?: Status }): string {
   const age = p.ageBand && p.status === 'DORMANT' && p.ageYear ? `${p.ageBand}(${p.ageYear}년 기준)` : p.ageBand;
   return [SEX_KO[p.sex], age].filter(Boolean).join(' · ');
+}
+
+const LEVELS: TriageLevel[] = [1, 2, 3, 4, 5];
+const RISK_NOTE = '기록 기반 참고 등급이며 임상 판단을 대신하지 않습니다';
+const riskTitle = (r: PatientRisk) => `환자 위험 등급 ${r.level} ${r.label}: ${r.reasons.join(' · ')}. ${RISK_NOTE}.`;
+
+/** 목록 줄 왼쪽의 위험 등급 칸: 응급실 분류판처럼 등급 숫자와 이름을 색 칸에 */
+function RiskTile({ risk }: { risk?: PatientRisk }) {
+  if (!risk) return <span aria-hidden className="w-[34px]" />;
+  return (
+    <span className={`flex h-[44px] w-[34px] flex-col items-center justify-center rounded-[7px] ${TRI[risk.level].badge}`} title={riskTitle(risk)}>
+      <span className="sr-only">위험 등급 </span>
+      <span className="num text-[15px] font-extrabold leading-none">{risk.level}</span>
+      <span className="mt-1 text-[10px] font-bold leading-none">{risk.label}</span>
+    </span>
+  );
+}
+
+/** 다섯 등급 띠: 지금 등급만 진하게 (어느 쪽 끝에 가까운지 한눈에) */
+function RiskScale({ level }: { level: TriageLevel }) {
+  return (
+    <span aria-hidden className="inline-flex items-center gap-[3px]">
+      {LEVELS.map((l) => (
+        <span key={l} className={`rounded-[2px] ${TRI[l].bar} ${l === level ? 'h-3 w-[18px]' : 'h-2 w-3 opacity-30'}`} />
+      ))}
+    </span>
+  );
+}
+
+/** 차트 머리의 위험 등급 줄: 등급 · 까닭 · 참고 문구 */
+function RiskLine({ risk }: { risk: PatientRisk }) {
+  const t = TRI[risk.level];
+  return (
+    <div className={`mt-2.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 rounded-[8px] px-2.5 py-1.5 ${t.tint}`}>
+      <span className={`text-xs font-bold ${t.text}`}>환자 위험 등급</span>
+      <span className={`inline-flex h-6 items-center gap-1 rounded-[6px] px-2 text-[12.5px] font-bold ${t.badge}`}>
+        <span className="num">{risk.level}</span>
+        {risk.label}
+      </span>
+      <RiskScale level={risk.level} />
+      <span className="min-w-0 flex-1 basis-[240px] text-[12.5px] leading-5 text-ink">{risk.reasons.join(' · ')}</span>
+      <span className="text-[11px] leading-4 text-ink-2">{RISK_NOTE}</span>
+    </div>
+  );
 }
 
 /** 목록 · 차트에 보이는 환자 번호: 등록번호 (없으면 예전처럼 환자 번호 앞 8자리) */
@@ -141,24 +186,27 @@ function PatientRow({ p, active, current }: { p: WorklistPatient; active: boolea
       <Link
         to={`/emr/${encodeURIComponent(p.fhirId)}`}
         aria-current={active ? 'page' : undefined}
-        className={`block border-b border-line px-4 py-2.5 ${active ? 'bg-iris-tint shadow-[inset_3px_0_0_var(--zp-iris)]' : 'hover:bg-surface-2'}`}
+        className={`grid grid-cols-[34px_minmax(0,1fr)] gap-x-3 border-b border-line py-2.5 pl-3 pr-4 ${active ? 'bg-iris-tint shadow-[inset_3px_0_0_var(--zp-iris)]' : 'hover:bg-surface-2'}`}
       >
-        <span className="flex items-baseline gap-2">
-          <span className="num text-[13px] font-semibold text-ink" title={p.regno ? '등록번호' : '환자 번호'}>
-            {numberOf(p)}
+        <RiskTile risk={p.risk} />
+        <span className="min-w-0">
+          <span className="flex items-baseline gap-2">
+            <span className="num text-[13px] font-semibold text-ink" title={p.regno ? '등록번호' : '환자 번호'}>
+              {numberOf(p)}
+            </span>
+            {current && <span className="rounded-[5px] bg-iris px-1.5 py-px text-[10.5px] font-bold text-iris-on">AI 대화 중</span>}
+            <span className="num ml-auto text-[11.5px] text-ink-3" title="마지막 내원">
+              {p.lastRecord ?? '–'}
+            </span>
           </span>
-          {current && <span className="rounded-[5px] bg-iris px-1.5 py-px text-[10.5px] font-bold text-iris-on">AI 대화 중</span>}
-          <span className="num ml-auto text-[11.5px] text-ink-3" title="마지막 내원">
-            {p.lastRecord ?? '–'}
+          <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-3">
+            {who(p)}
+            <StatusTag status={p.status} label={p.statusLabel} openItems={p.openItems} />
+            <AccessTag p={p} />
           </span>
-        </span>
-        <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-ink-3">
-          {who(p)}
-          <StatusTag status={p.status} label={p.statusLabel} openItems={p.openItems} />
-          <AccessTag p={p} />
-        </span>
-        <span className="mt-1 block truncate text-[12.5px] text-ink-2" title={p.conditions.join(', ')}>
-          {p.conditions.slice(0, 2).join(', ') || '진단 기록 없음'}
+          <span className="mt-1 block truncate text-[12.5px] text-ink-2" title={p.conditions.join(', ')}>
+            {p.conditions.slice(0, 2).join(', ') || '진단 기록 없음'}
+          </span>
         </span>
       </Link>
     </li>
@@ -189,7 +237,7 @@ function ChartHeader({
     ['대표 진단', p.conditions.slice(0, 3).join(', ') || '없음'],
     [p.status === 'DORMANT' ? '마지막 내원 때 진행 중' : '진행 중', `진단 ${chart.problems.active} · 처방 ${chart.medications.active} · 관리 계획 ${chart.carePlans.active}`],
     ['마지막 내원', last ? `${last} (${sinceDay(last)})` : '–'],
-    ['내원', `${chart.visitDays}일${chart.firstRecord ? ` (${chart.firstRecord.slice(0, 4)}년부터)` : ''}`],
+    ['내원', `${chart.visitDays}회${chart.firstRecord ? ` (${chart.firstRecord.slice(0, 4)}년부터)` : ''}`],
   ];
   return (
     <header className="border-b border-line bg-emr-banner px-4 py-3 md:px-5">
@@ -227,6 +275,7 @@ function ChartHeader({
           </div>
         ))}
       </dl>
+      {p.risk && <RiskLine risk={p.risk} />}
       {via === 'break_glass' && grant && (
         <p className="mt-2 text-xs leading-5 text-ink-2">
           {grant.reasonLabel}: {grant.note} · 이 열람은 감사 기록에 남고 보안 담당자가 검토합니다.
@@ -276,6 +325,8 @@ export function EmrPage() {
   const [error, setError] = useState<string | null>(null);
   const [q, setQ] = useState('');
   const [tab, setTab] = useState<StatusTab>('ACTIVE');
+  const [level, setLevel] = useState<TriageLevel | null>(null);
+  const [byRisk, setByRisk] = useState(false);
   const [chart, setChart] = useState<{ id: string; data: EmrChart | null; error: ApiError | Error | null } | null>(null);
   const [glassOpen, setGlassOpen] = useState(false);
   const [consultOpen, setConsultOpen] = useState(false);
@@ -322,17 +373,23 @@ export function EmrPage() {
     const n = (s: Status) => mine.filter((p) => p.status === s).length;
     return { ACTIVE: n('ACTIVE'), RESOLVED: n('RESOLVED'), DORMANT: n('DORMANT'), ALL: mine.length };
   }, [mine]);
+  const inTab = useMemo(() => (tab === 'ALL' ? mine : mine.filter((p) => p.status === tab)), [mine, tab]);
+  // 위험 등급마다 환자 수 (지금 진료 상태 탭 안에서)
+  const levelCounts = useMemo(() => LEVELS.map((l) => inTab.filter((p) => p.risk?.level === l).length), [inTab]);
   const shown = useMemo(() => {
     const t = q.trim().toLowerCase();
-    const inTab = tab === 'ALL' ? mine : mine.filter((p) => p.status === tab);
-    if (!t) return inTab;
+    const byLevel = level ? inTab.filter((p) => p.risk?.level === level) : inTab;
     // 진단 이름이 영어라 한국어 이름(기관지염 · 치은염 …)도 함께 찾는다
-    return inTab.filter((p) =>
-      [p.regno ?? '', p.regno?.replace('-', '') ?? '', p.identifier, ...p.conditions, ...p.purposes.map((x) => `${x.mainDx ?? ''} ${x.item ?? ''} ${x.purposeLabel}`)].some((s) =>
-        `${s} ${koreanNames(s)}`.toLowerCase().includes(t),
-      ),
-    );
-  }, [mine, q, tab]);
+    const found = !t
+      ? byLevel
+      : byLevel.filter((p) =>
+          [p.regno ?? '', p.regno?.replace('-', '') ?? '', p.identifier, ...p.conditions, ...p.purposes.map((x) => `${x.mainDx ?? ''} ${x.item ?? ''} ${x.purposeLabel}`)].some((s) =>
+            `${s} ${koreanNames(s)}`.toLowerCase().includes(t),
+          ),
+        );
+    // 위험 높은 순: 등급(1 위급 먼저) → 같은 등급은 최근 내원 먼저. 아니면 서버 순서 그대로
+    return byRisk ? [...found].sort((a, b) => (a.risk?.level ?? 9) - (b.risk?.level ?? 9) || (b.lastRecord ?? '').localeCompare(a.lastRecord ?? '')) : found;
+  }, [inTab, q, level, byRisk]);
 
   const row = list?.find((p) => p.fhirId === picked) ?? null;
   const isCurrent = (p: WorklistPatient) => p.purposes.some((x) => x.trialId === currentTrial);
@@ -384,9 +441,19 @@ export function EmrPage() {
     <div className="grid h-full min-h-0 grid-cols-1 lg:grid-cols-[300px_minmax(0,1fr)]">
       <aside aria-label="내 담당 환자" className={`${picked ? 'hidden lg:flex' : 'flex'} min-h-0 flex-col border-line bg-surface lg:border-r`}>
         <header className="border-b border-line px-4 pb-3 pt-3.5">
-          <h2 className="flex items-baseline gap-2 text-[15px] font-bold text-ink">
+          <h2 className="flex items-center gap-2 text-[15px] font-bold text-ink">
             내 담당 환자
             {list && <span className="num text-[13px] font-semibold text-ink-3">{mine.length}명</span>}
+            <button
+              type="button"
+              aria-pressed={byRisk}
+              onClick={() => setByRisk((b) => !b)}
+              className={`ml-auto inline-flex h-7 shrink-0 items-center gap-1 whitespace-nowrap rounded-[7px] border px-2 text-[11.5px] font-semibold ${byRisk ? 'border-ink bg-ink text-surface' : 'border-line bg-surface text-ink-2 hover:bg-surface-2'}`}
+              title="위험 등급이 높은 환자부터 (같은 등급은 최근 내원 먼저)"
+            >
+              <ArrowDownUp className="h-3 w-3" aria-hidden />
+              위험 높은 순
+            </button>
           </h2>
           <label className="relative mt-2.5 block">
             <span className="sr-only">담당 환자 찾기</span>
@@ -413,6 +480,26 @@ export function EmrPage() {
               </button>
             ))}
           </div>
+          <div role="group" aria-label="환자 위험 등급으로 거르기" className="mt-2 grid grid-cols-5 gap-1">
+            {LEVELS.map((l, i) => {
+              const on = level === l;
+              return (
+                <button
+                  key={l}
+                  type="button"
+                  aria-pressed={on}
+                  disabled={!levelCounts[i] && !on}
+                  onClick={() => setLevel(on ? null : l)}
+                  title={`위험 등급 ${l} ${TRI_KO[l]} 환자만 보기`}
+                  className={`flex h-[30px] items-center justify-center gap-1 rounded-[7px] border text-[11px] font-semibold disabled:opacity-40 ${on ? `${TRI[l].badge} border-transparent` : `border-line ${TRI[l].tint} ${TRI[l].text} hover:border-line-input`}`}
+                >
+                  <span aria-hidden className={`h-2 w-2 rounded-full ${on ? 'bg-current' : TRI[l].bar}`} />
+                  {TRI_KO[l]}
+                  <span className="num font-normal">{levelCounts[i]}</span>
+                </button>
+              );
+            })}
+          </div>
         </header>
         {error ? (
           <ErrorState message={error} />
@@ -438,7 +525,14 @@ export function EmrPage() {
                 병원 관리자에게 담당 배정을 요청하세요.
               </p>
             ) : shown.length === 0 ? (
-              <p className="px-4 py-8 text-center text-[13px] text-ink-3">맞는 환자가 없습니다.</p>
+              <p className="px-4 py-8 text-center text-[13px] text-ink-3">
+                맞는 환자가 없습니다.
+                {level && (
+                  <button type="button" className="mt-2 block w-full text-xs font-semibold text-iris-text hover:underline" onClick={() => setLevel(null)}>
+                    위험 등급 거르기 풀기
+                  </button>
+                )}
+              </p>
             ) : (
               <ul>
                 {shown.map((p) => (
@@ -466,7 +560,7 @@ export function EmrPage() {
             <div className="max-w-[360px]">
               <Stethoscope className="mx-auto h-7 w-7 text-ink-3" aria-hidden />
               <p className="mt-3 text-[14px] font-semibold text-ink">환자를 고르면 차트 요약이 나옵니다</p>
-              <p className="mt-1.5 text-[13px] leading-6 text-ink-2">진단 이력, 처방, 시술, 관리 계획, 최근 내원을 본 뒤 필요하면 같은 화면에서 유사 사례를 찾습니다.</p>
+              <p className="mt-1.5 text-[13px] leading-6 text-ink-2">내원 이력, 진단 이력, 처방, 시술, 관리 계획을 본 뒤 필요하면 같은 화면에서 유사 사례를 찾습니다.</p>
               <p className="mt-4 flex items-start justify-center gap-1.5 text-left text-xs leading-5 text-ink-3">
                 <Info className="mt-[3px] h-3.5 w-3.5 shrink-0" aria-hidden />
                 <span>비슷한 과거 사례는 이 목록에서 찾지 않습니다. 진료 지원 AI는 병원의 과거 기록 환자에서 찾고, 그 기록은 MediCloak을 거쳐서만 보입니다.</span>

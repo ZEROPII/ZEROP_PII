@@ -3,7 +3,7 @@ import { useMemo, useRef, useState } from 'react';
 import { parseAnswer, type AnswerBlock, type Inline } from '../../lib/answerLines';
 import { answerPlainText, attrName, chartCopyText, protectionNote, refLabel, requestDraft, whyText } from '../../lib/clinicianCopy';
 import { latestRequest, REQUEST_STATE_KO } from '../../lib/requests';
-import { formatTime } from '../../lib/format';
+import { formatTime, periodKo } from '../../lib/format';
 import { useClinicMessages } from '../../state/ClinicMessages';
 import { useTermDetect } from '../../state/TermContext';
 import type { CaseSummary, ChatMessage, MessageSegment, PrivacyTransformation, ProtectionResult } from '../../types/domain';
@@ -86,21 +86,26 @@ function Pieces({ run, tf, mentions, named = true }: { run: Inline[]; tf: Map<st
 function Block({ b, tf, mentions, showCase }: { b: AnswerBlock; tf: Map<string, PrivacyTransformation>; mentions: (TermMention[] | undefined)[]; showCase: boolean }) {
   const run = (r: Inline[], named = true) => <Pieces run={r} tf={tf} mentions={mentions} named={named} />;
   switch (b.kind) {
-    case 'fact':
+    case 'fact': {
+      // 값 하나뿐인 날짜('1998' · '1998-12')는 '1998년' · '1998년 12월'로 (ADR-0043). 범위로 넓힌 날짜 표시도 같다
+      const one = b.value.length === 1 ? b.value[0] : null;
+      const value = one ? [{ ...one, seg: { ...one.seg, text: periodKo(one.seg.text) } }] : b.value;
+      const no = b.source ? /^기록\s*(\d+)$/.exec(b.source)?.[1] : undefined;
       return (
         <div className="grid grid-cols-1 gap-x-4 gap-y-0.5 border-b border-line py-2 last:border-b-0 sm:grid-cols-[minmax(150px,38%)_minmax(0,1fr)]">
           <div className="flex min-w-0 flex-wrap items-center gap-1.5 text-[13px] text-ink-2">
             {showCase && <span className="rounded-[5px] bg-surface-2 px-1.5 text-xs font-semibold text-ink">{refLabel(b.caseRef)}</span>}
             <span>{b.field}</span>
             {b.source && (
-              <span className="text-[11px] text-ink-3" title="사례 기록 안에서 이 값이 나온 곳">
-                {b.source.replace(/^기록\s*(\d+)$/, '기록 $1')}
+              <span className="text-[11px] text-ink-3" title={no ? `이 사례의 ${no}번째 기록에서 나온 값입니다` : '사례 기록 안에서 이 값이 나온 곳'}>
+                {no ? `${no}번 기록` : b.source}
               </span>
             )}
           </div>
-          <div className="min-w-0 break-words font-medium">{run(b.value, false)}</div>
+          <div className="min-w-0 break-words font-medium">{run(value, false)}</div>
         </div>
       );
+    }
     case 'heading':
       return b.level <= 2 ? (
         <h4 className="mb-1 mt-3 text-[15px] font-bold text-ink first:mt-0">{run(b.content)}</h4>

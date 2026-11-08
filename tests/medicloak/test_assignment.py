@@ -155,9 +155,21 @@ def test_chart_summary(store):
         assert all(x["ended"] is None for x in items if x["active"])
     assert c["problems"]["total"] == len({r["code_node"] for r in store.q(
         "SELECT code_node FROM emr_event WHERE patient_id = ? AND event_type = 'CONDITION'", (f,))})
-    assert len(c["visits"]) <= 8 and [v["date"] for v in c["visits"]] == sorted((v["date"] for v in c["visits"]), reverse=True)
-    assert 1 <= len(c["yearly"]) <= 10 and c["yearly"][-1]["year"] == int(c["visits"][0]["date"][:4])
-    assert c["visitDays"] >= len(c["visits"]) and c["firstRecord"] <= c["visits"][-1]["date"]
+    vs = c["visits"]
+    dates = [v["date"] for v in vs]
+    # 내원 이력(ADR-0038): 날마다 한 줄(같은 날 진료는 합침), 최근 것부터 VISITS_MAX번까지. 날짜는 visitDates에 모두 있다
+    assert dates == sorted(set(dates), reverse=True) and len(vs) == min(c["visitDays"], emr.VISITS_MAX) and set(dates) <= set(c["visitDates"])
+    assert 1 <= len(c["yearly"]) <= 10 and c["yearly"][-1]["year"] == int(dates[0][:4])
+    assert c["visitDays"] == len(c["visitDates"]) and c["firstRecord"] == c["visitDates"][0] <= dates[-1]
+    seen: set[tuple[str, str]] = set()
+    for v in reversed(vs):                                                 # 오래된 날부터
+        assert len(v["items"]) <= emr.VISIT_ITEMS_MAX and v["more"] >= 0
+        flags = [x["first"] for x in v["items"]]
+        assert flags == sorted(flags, reverse=True)                        # 처음 나온 것 먼저
+        for x in v["items"]:
+            assert not (x["first"] and (x["kind"], x["label"]) in seen)    # '처음'은 그 이름이 처음 나온 날에만
+            seen.add((x["kind"], x["label"]))
+    assert any(x["first"] for v in vs for x in v["items"])
     # 진료 지원 AI 목적이 없는 외래 환자도 연령대를 낼 수 있다
     assert all(e.age_band(x) for x in acc.outpatients()[:10])
 
