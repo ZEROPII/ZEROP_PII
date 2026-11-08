@@ -121,27 +121,38 @@ def plan_facts(doc: dict[str, Any], data: Any, main_node: str) -> tuple[list[_Fa
 
 
 def _course_main(data: Any, pid: str, ev: dict[str, Any] | None) -> tuple[list[str], list[str]]:
-    """주진단의 기록상 경과: (표에 적을 짧은 글, 요약 문장). 종료까지 기간 · 같은 진단 기록 수 (범위로만)."""
+    """주진단의 기록상 경과: (표에 적을 짧은 글, 요약 문장). 끝나기까지 기간 · 같은 진단 기록 수 (범위로만)."""
     if not ev:
         return [], []
     labels, sents = [], []
     s, t = ev.get("start"), ev.get("stop")
     if t:
         phrase = span_phrase(str(s)[:10], str(t)[:10])
-        labels.append(f"시작부터 {phrase} 뒤 종료" if phrase else "종료 기록 있음")
-        sents.append(f"주진단은 시작부터 {phrase} 뒤 종료 기록이 있습니다." if phrase else "주진단은 종료 기록이 있습니다.")
+        labels.append(_ended(phrase))
+        sents.append(f"주진단은 {_ended(phrase, sentence=True)}")
     else:
-        labels.append("종료 기록 없음")
-        sents.append("주진단은 종료 기록 없이 마지막 기록까지 이어졌습니다.")
+        labels.append("현재까지 이어짐")
+        sents.append("주진단은 현재까지 이어지고 있습니다.")
     n = sum(1 for e in data.by_pat.get(pid, []) if e["event_type"] == "CONDITION" and e["code_node"] == ev["code_node"])
     if n > 1:
         labels.append(f"같은 진단 기록 {count_bucket(n)}")
-        sents.append(f"같은 진단 기록은 {count_bucket(n)}입니다.")
+        sents.append(f"같은 진단으로 {count_bucket(n)} 기록되었습니다.")
     return labels, sents
 
 
+def _ended(phrase: str | None, *, sentence: bool = False) -> str:
+    """끝난 기록을 진료 화면 말로 (ADR-0043). phrase는 span_phrase 글('3일 이내' · '약 1~2주' · '3년 넘게')."""
+    if not phrase:
+        return "끝난 것으로 기록되어 있습니다." if sentence else "끝난 기록 있음"
+    if phrase.endswith("넘게"):
+        return f"{phrase} 이어진 뒤 끝났습니다." if sentence else f"{phrase} 이어진 뒤 끝남"
+    if phrase.endswith("이내"):
+        return f"시작하고 {phrase}에 끝났습니다." if sentence else f"{phrase}에 끝남"
+    return f"시작하고 {phrase} 만에 끝났습니다." if sentence else f"{phrase} 만에 끝남"
+
+
 def _course_item(data: Any, pid: str, attr: str, ev: dict[str, Any] | None) -> list[str]:
-    """처방 · 시술 · 관리 계획의 경과: 횟수 범위 · 기간 범위 · 종료 여부 (날짜는 쓰지 않는다)."""
+    """처방 · 시술 · 관리 계획의 경과: 횟수 범위 · 기간 범위 · 끝났는지 (날짜는 쓰지 않는다)."""
     if not ev:
         return []
     code = ev["code_node"]
@@ -153,24 +164,24 @@ def _course_item(data: Any, pid: str, attr: str, ev: dict[str, Any] | None) -> l
             out.append(f"처방 {count_bucket(len(es))}")
         if es and all(e.get("stop") for e in es):
             phrase = span_phrase(str(es[0]["start"])[:10], max(str(e["stop"])[:10] for e in es))
-            out.append(f"{phrase} 동안 처방" if phrase else "처방 종료 기록 있음")
+            out.append(f"처방 기간 {phrase}" if phrase else "처방이 끝난 기록 있음")
         else:
-            out.append("종료일 없이 계속 처방")
+            out.append("현재까지 계속 처방 중")
     elif attr == "PROC":
         dated = [e for e in es if e.get("start")]
         if len(dated) > 1:
             out.append(f"시행 {count_bucket(len(dated))}")
             phrase = span_phrase(str(dated[0]["start"])[:10], str(dated[-1]["start"])[:10])
             if phrase:
-                out.append(f"처음부터 마지막까지 {phrase}")
+                out.append(f"처음부터 마지막 시행까지 {phrase}")
         else:
             out.append("한 번 시행")
     else:
         if ev.get("stop"):
             phrase = span_phrase(str(ev["start"])[:10], str(ev["stop"])[:10])
-            out.append(f"시작부터 {phrase} 뒤 종료" if phrase else "종료 기록 있음")
+            out.append(_ended(phrase))
         else:
-            out.append("종료일 없이 계속 진행")
+            out.append("현재까지 진행 중")
     return out
 
 

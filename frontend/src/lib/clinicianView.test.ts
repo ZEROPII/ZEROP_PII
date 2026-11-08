@@ -291,9 +291,9 @@ describe('연구자 검토 보강 (ADR-0032)', () => {
 
   it('시간 초과로 거절한 답: 질문 탓이 아니라 시간 탓이라고 알린다', () => {
     const p = protection({ releaseMode: 'REFUSAL_TIMEOUT', transformations: [] });
-    expect(protectionNote(p)).toEqual({ tone: 'info', text: '정해진 시간 안에 답을 확인하지 못해 보내지 않았습니다. 잠시 뒤 다시 물어보세요.' });
+    expect(protectionNote(p)).toEqual({ tone: 'info', text: '확인하지 못한 답은 보내지 않으며, 공개한 값으로 세지 않습니다.' });
     const why = whyText(p, '사례 1');
-    expect(why[0]).toBe('답을 만들고 확인하는 데 정해진 시간을 넘겨, 확인하지 못한 답 대신 안내 문장을 보냈습니다.');
+    expect(why[0]).toBe('답을 고쳐 쓰고 다시 확인하는 데 정해진 시간을 넘겼습니다. 확인하지 못한 답은 내보내지 않으므로, 이번 질문으로 공개된 값은 없습니다.');
     expect(why.join(' ')).not.toMatch(RISK_NUMBER);
   });
 });

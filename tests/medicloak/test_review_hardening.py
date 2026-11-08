@@ -21,7 +21,7 @@ from webdemo.backend.engine import Engine
 from webdemo.backend.gate import GATE_NOTE, InputGate, span_phrase
 from webdemo.backend.ledger import DisclosureLedger
 from webdemo.backend.persist import Persist
-from webdemo.backend.review import REFUSAL_TIMEOUT
+from webdemo.backend.review import REFUSAL_TIMEOUT, TIMEOUT_TEXT
 from webdemo.backend.sensitivity import categories, grade, minor_sud_patients
 from webdemo.backend.store import Store
 from webdemo.backend.textguard import count_bucket, post_release
@@ -333,6 +333,7 @@ def test_answer_over_time_budget_is_refused_and_state_is_unchanged(hard):
     assert prot["releaseMode"] == REFUSAL_TIMEOUT
     text = "".join(x["text"] for x in b["assistantMessage"]["segments"])
     assert DATE not in text and DRUG not in text
+    assert text == TIMEOUT_TEXT and "식별 위험" not in text                 # 막은 까닭은 시간이다 (ADR-0043)
     assert {ref: len(c.committed) for ref, c in run.cases.items()} == before   # 확인하지 못한 답은 State에 넣지 않는다
     assert len(hard["store"].ledger_entries()) == n_ledger
     att = s.logs["C1"][-1]["release_attempts"]
@@ -370,11 +371,11 @@ def test_serve_turns_the_hardening_on_by_default():
     ap = argparse.ArgumentParser()
     _serve_args(ap)
     a = ap.parse_args([])
-    assert (a.ledger, a.ledger_window_days, a.input_gate, a.answer_budget, a.sensitivity, a.strict_k) == ("on", 90.0, "on", 45.0, "on", 10)
+    assert (a.ledger, a.ledger_window_days, a.input_gate, a.answer_budget, a.sensitivity, a.strict_k) == ("on", 90.0, "on", 90.0, "on", 10)
     a = ap.parse_args(["--ledger", "off", "--input-gate", "off", "--answer-budget", "0", "--sensitivity", "off"])
     assert (a.ledger, a.input_gate, a.answer_budget, a.sensitivity) == ("off", "off", 0.0, "off")
     d = _defaults(argparse.Namespace())
-    assert (d.ledger, d.input_gate, d.answer_budget, d.sensitivity) == ("on", "on", 45.0, "on")
+    assert (d.ledger, d.input_gate, d.answer_budget, d.sensitivity) == ("on", "on", 90.0, "on")
 
 
 def test_policy_shows_the_hardening(hard):

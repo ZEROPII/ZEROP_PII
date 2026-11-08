@@ -13,7 +13,7 @@ function itemNote(x: ChartItem, ongoing: boolean, what: string): string {
   return parts.filter(Boolean).join(' · ');
 }
 
-const NO_END_HINT = '종료일이 기록되지 않았지만, 마지막 기록이 마지막 내원보다 1년 넘게 앞서 진행 중으로 세지 않았습니다.';
+const NO_END_HINT = '끝난 날짜는 기록되지 않았지만, 마지막 기록이 마지막 내원보다 1년 넘게 앞서 있어 진행 중으로 보지 않았습니다.';
 
 /** 기록 종류 하나 (진단 · 처방 · 시술 · 관리). 제목 앞 띠 · 진행 중 점 · 진행 중 글자는 내원 달력과 같은 기록 종류 색 */
 function Section({ kind, title, group, empty, ongoing = true, what = '기록' }: { kind: ChartKind; title: string; group: ChartGroup; empty: string; ongoing?: boolean; what?: string }) {

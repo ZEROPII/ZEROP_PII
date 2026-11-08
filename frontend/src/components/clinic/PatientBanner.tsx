@@ -6,6 +6,7 @@ import { useWorkspace } from '../../state/WorkspaceContext';
 import type { PatientContext, PatientOption } from '../../types/domain';
 import { MockBadge } from '../common/MockBadge';
 import { useToast } from '../layout/Toast';
+import { DeskLauncher } from './ProtectionDesk';
 
 /** 바깥을 누르거나 Esc를 누르면 닫는다 */
 function useDismiss(open: boolean, box: RefObject<HTMLDivElement | null>, close: () => void) {
@@ -235,6 +236,7 @@ export function PatientBanner() {
                     <Users className="h-3.5 w-3.5" aria-hidden />
                     <span className="hidden sm:inline">내 환자</span>
                   </NavLink>
+                  {pathname === '/' && <DeskLauncher />}
                 </>
               ) : (
                 <DemoPatientSwitcher />

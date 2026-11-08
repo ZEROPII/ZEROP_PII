@@ -48,7 +48,7 @@ CASE_DROPPED = "CASE_DROPPED"                 # 통과하지 못한 사례를 �
 ROUNDED = "ROUNDED"
 #: 조회 목적마다 진료 판단에 쓰지 않는 단서 (실제 LLM 갈래에서 늘 가림)
 PURPOSE_UNNEEDED: dict[str, frozenset[str]] = {q: frozenset({"REGION"}) for q in ("PRESCRIPTION", "TREATMENT_PROCEDURE", "COURSE_CARE")}                           # 나이 · 날짜를 최소 공개 단위로만 바꾼 답 (재작성기 없이)
-RELEASE_VERSION = "medicloak-release-v8"       # v7(내보낼 글 다듬기, ADR-0032) + 날짜 값 바로잡기: 날짜 자리에 설명을 쓴 추출을 근거 문장의 날짜로 (ADR-0033)
+RELEASE_VERSION = "medicloak-release-v9"       # v8(날짜 값 바로잡기, ADR-0033) + 묶음 보정이 일어나면 이 대화 값만 센 후보 수와 작은 쪽(OwnStateKC) · 뜻을 잃은 문장 정리 · 진료 화면 말 (ADR-0043)
 
 # 최소 공개 단위: 이 노드보다 자세한 값은 내지 않는다 (온톨로지 노드 이름 규칙: AGE_Y93 · AGE5_90 · AGE10_90, …_DAY_ · _MONTH_ …)
 FLOOR_ATTRS = ("AGE", "PERIOD")
@@ -69,6 +69,52 @@ def same_text(raw: str | None, label: str | None) -> bool:
     return bool(raw) and norm(raw) == norm(label)
 
 
+class OwnStateKC:
+    """
+    Defender가 쓰는 후보 수 계산을 감싼다 (ADR-0043). 사건 묶음 보정(medical/grouping.py)은 공개 묶음이 서로 맞지 않으면(후보 0명)
+    먼저 나온 값을 믿고 뒤에 온 값을 빼거나 묶음을 나눈다. 그래서 값이 더해졌는데 후보 수가 오히려 커질 수 있었다.
+      - 원장(ADR-0032)에서 온 값(prior 표시)을 앞에 둔 차례는 그대로 센다 (앞 묶음의 보정 결과를 기억해 두어 빠르다).
+        보정이 일어났으면 이 대화의 값(State · 새 값)만으로도 세어 작은 쪽을 쓴다. 다른 대화의 추출 잡음(틀린 달 · 묶음)과
+        맞지 않는 이 대화의 새 값이 보정에서 빠지면, 이 대화만으로 후보 1명인 값을 후보 4명으로 보고 그대로 냈다 (2026-11-08 점검).
+      - 이 대화 값만 셀 때도 보정이 일어났으면 새것부터 둔 차례로도 세어 작은 쪽을 쓴다.
+      - 이 대화 값을 앞에 두고 원장을 뒤에 붙여 세는 차례는 쓰지 않는다: 이 대화 값이 바뀔 때마다 원장 묶음 보정을 처음부터 다시 해
+        진료 지원 AI 열기가 7초에서 52초로 늘었다 (같은 DB 사본, 시연 모드).
+    판정을 더 보수적으로만 바꾼다. 보정이 없으면 감싸기 전과 같다.
+    """
+
+    def __init__(self, base: Any) -> None:
+        self.base = base
+
+    def __getattr__(self, name: str) -> Any:
+        if name == "base":
+            raise AttributeError(name)
+        return getattr(self.base, name)
+
+    @staticmethod
+    def _repaired(res: dict[str, Any]) -> bool:
+        return any(str(f).startswith(("CONFLICT_DROPPED", "REGROUPED")) for f in res.get("flags") or [])
+
+    def _least(self, own: list[dict[str, Any]]) -> dict[str, Any]:
+        res = self.base.k(own)
+        if len(own) > 1 and self._repaired(res):
+            alt = self.base.k(own[::-1])
+            if alt["k"] < res["k"]:
+                res = alt
+        return res
+
+    def k(self, disclosures: list[dict[str, Any]]) -> dict[str, Any]:
+        prior = [d for d in disclosures if d.get("prior")]
+        own = [d for d in disclosures if not d.get("prior")]
+        if not prior:
+            return self._least(own)
+        res = self.base.k(prior + own)
+        if own and self._repaired(res):
+            mine = self._least(own)
+            if mine["k"] < res["k"]:
+                res = mine
+        return res
+
+
 class RuleDefender:
     """
     MedicalDefender를 감싼다. blocked(ref)가 주는 단서 종류는 그 사례에서 늘 가림(SUPPRESS)으로 정한다.
@@ -78,6 +124,9 @@ class RuleDefender:
     def __init__(self, inner: Any, blocked: Callable[[str], set[str]], *, floors: bool = False,
                  strict: Callable[[str], bool] | None = None, strict_k: int = 10) -> None:
         self.inner = inner
+        kc = getattr(inner, "kc", None)
+        if kc is not None and not isinstance(kc, OwnStateKC):
+            inner.kc = OwnStateKC(kc)                   # 보정이 일어나면 이 대화 값만 센 수와 작은 쪽 (ADR-0043)
         self.blocked = blocked
         self.floors = floors
         self.strict, self.strict_k = strict, strict_k    # 민감 값(sensitivity.py 등급 2): 내보낸 뒤 후보가 strict_k명 이상일 때만 (ADR-0032)
@@ -208,8 +257,10 @@ def rewrite_rules(prompt: str, changes: list[dict[str, Any]], retry: str | None 
     add.append("9. 날짜를 빼더라도 기간(며칠 · 몇 주 · 몇 달)은 '약 1~2주'처럼 범위로 남겨도 된다. 정확한 날짜와 일수는 쓰지 않는다.")
     add.append("10. 원래 답에 없던 원인 · 목적 · 진단을 짐작해 덧붙이지 않는다. 값을 빼거나 범위로 바꾼 자리를 '…로 보입니다', "
                "'아마 …', '일반적으로 …'처럼 그럴듯한 설명으로 채우지 않는다.")
+    add.append("11. 값을 빼서 문장이 뜻을 잃으면('사례1 환자는 거주했습니다', '…부터 시작하여'만 남음) 그 문장은 "
+               "'사례1의 거주 지역은 비공개입니다'처럼 무엇을 가렸는지만 밝히는 문장으로 바꾼다. 가린 값을 다른 말로 짐작하게 하지 않는다.")
     if retry:
-        add.append("11. 앞서 고친 답을 다시 확인하니 아래가 남아 통과하지 못했다. 이번에는 이것까지 고친다.\n" + retry)
+        add.append("12. 앞서 고친 답을 다시 확인하니 아래가 남아 통과하지 못했다. 이번에는 이것까지 고친다.\n" + retry)
     return prompt[:at] + "\n" + "\n".join(add) + prompt[at:]
 
 
@@ -366,6 +417,8 @@ class AnswerBudgetExceeded(Exception):
 
 REFUSAL_TIMEOUT = "REFUSAL_TIMEOUT"           # 시간 예산 안에 안전하게 확인하지 못해 거절 문장으로 막은 답 (ADR-0032)
 POST_EMPTY_TEXT = "질문하신 내용 가운데 기록으로 확인할 수 없는 부분은 답에서 뺐습니다."
+# 시간 예산을 넘긴 답의 본문 (ADR-0043): 막은 까닭이 환자 식별이 아니라 확인 시간이므로 식별 위험 거절 문장(REFUSAL_TEXT)을 쓰지 않는다
+TIMEOUT_TEXT = "답을 안전하게 확인하는 데 시간이 오래 걸려 이번 답은 보내지 않았습니다. 같은 질문을 다시 보내거나, 묻는 내용을 나눠 물어 주세요."
 
 
 class RuledArmRun(ArmRun):
@@ -408,7 +461,8 @@ class RuledArmRun(ArmRun):
         if self.prior is not None:
             pre = self.prior(ref)
             if pre:
-                return list(pre) + base
+                # 원장 값에 표시를 붙인다: 묶음 보정이 일어나면 이 대화 값만으로도 센다 (OwnStateKC, ADR-0043)
+                return [dict(x, prior=True) for x in pre] + base
         return base
 
     # ── 시간 예산 (ADR-0032) ──
@@ -432,8 +486,8 @@ class RuledArmRun(ArmRun):
         plans = [p.as_dict() for p in getattr(d, "last_plans", []) or []]
         changes = list(getattr(d, "last_changes", []) or [])
         n = sum(len(p["decisions"]) for p in plans)
-        return Release(REFUSAL_TEXT, _empty_view(), REFUSAL_TIMEOUT, plans, changes,
-                       [dict(mode=REFUSAL_TIMEOUT, text=REFUSAL_TEXT, ok=False, checks=[dict(ref=None, reason="TIME_BUDGET", ok=False)])],
+        return Release(TIMEOUT_TEXT, _empty_view(), REFUSAL_TIMEOUT, plans, changes,
+                       [dict(mode=REFUSAL_TIMEOUT, text=TIMEOUT_TEXT, ok=False, checks=[dict(ref=None, reason="TIME_BUDGET", ok=False)])],
                        0.0 if n else None, 0)
 
     @property

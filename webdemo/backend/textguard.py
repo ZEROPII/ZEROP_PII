@@ -461,6 +461,7 @@ def count_bucket(n: int) -> str:
 
 _CNT = re.compile(r"(?<![\d.~∼\-])(총\s*)?(\d{1,3})\s*(회|번|차례)(?![\d가-힣]*\s*(?:간격|마다|째))")
 _FREQ_BEFORE = re.compile(r"(?:하루|매일|매주|매달|매월|\d+\s*일|\d+\s*주|\d+\s*달|\d+\s*개월|\d+\s*시간|주|달|월|일)\s*(?:에\s*)?$")
+_CNT_BOUND = re.compile(r"\s*(?P<low>이상|넘게|초과)|\s*(?P<high>이하|미만|이내)")
 _INTERVAL = re.compile(r"(?<![\d.~∼\-])(?:(약|대략)\s*)?(\d{1,3})\s*(일|주|개월|달|년)\s*(간격|마다|주기|에\s*한\s*번)")
 
 
@@ -474,11 +475,23 @@ def coarsen_counts(text: str, n_cases: int) -> tuple[str, list[dict[str, Any]]]:
             n = int(m.group(2))
             if n <= 1 or _FREQ_BEFORE.search(text[max(a, m.start() - 8):m.start()]):
                 continue
-            new = f"{m.group(1) or ''}{count_bucket(n)}"
-            old = text[m.start():m.end()]
+            lead, end = m.group(1) or "", m.end()
+            bound = _CNT_BOUND.match(text, end)
+            if bound is not None and bound.group("low"):
+                # '5회 이상' → '4회 이상' (범위의 아래 끝으로, '이상'을 두 번 쓰지 않는다)
+                new, end = f"{lead}{2 if n <= 3 else 4 if n <= 9 else 10}회 이상", bound.end()
+            elif bound is not None and bound.group("high"):
+                if n > 9:
+                    continue                             # '12회 이하'처럼 넓힐 위 끝이 없으면 그대로
+                new, end = f"{lead}{3 if n <= 3 else 9}회 이하", bound.end()
+            else:
+                new = f"{lead}{count_bucket(n)}"
+            old = text[m.start():end]
+            if old.replace(" ", "") == new.replace(" ", ""):
+                continue
             out.append(text[pos:m.start()])
             out.append(new)
-            pos = m.end()
+            pos = end
             edits.append(dict(kind="count", before=old, after=new))
     if not edits:
         return text, []
@@ -687,40 +700,98 @@ def unexplained_terms(text: str, docs: list[dict[str, Any]], n_cases: int, data:
     return uniq[:20]
 
 
-# ── 기록 말투를 진료 화면 말로 (ADR-0035) ─────────────────────────
+# ── 기록 말투를 진료 화면 말로 (ADR-0035 · ADR-0043) ─────────────────────────
+# 사례 문서의 '종료 기록 없음'은 그 약 · 관리 계획 · 진단이 기록 끝까지 이어진다는 뜻이다. 대상 AI가 '종료 기록이 없습니다',
+# '종료일에 도달하지 않았습니다'처럼 옮기면 무엇이 없는지 알기 어렵다 (2026-11-08 팀 검토). 지금도 이어지는 일로 쓴다:
+#   '1998년 12월부터 처방되어 종료 기록이 없습니다' → '1998년 12월부터 현재까지 계속 처방되고 있습니다'
+#   '10회 이상 처방되었으며 종료 기록이 없습니다'   → '10회 이상 처방되었으며 현재까지 이어지고 있습니다'
+#   '관리 계획은 종료 기록이 없습니다'             → '관리 계획은 현재까지 계속 진행되고 있습니다'
+# 처방을 복용으로 바꾸지 않는다 (기록에는 처방만 있다).
 
-_NO_END = re.compile(r"(?:처방\s*)?종료\s*(?:일\s*)?(?:기록|날짜)\s*(?:이|은|도|가)?\s*"
-                     r"(?P<end>없(?:습니다|어요|는\s*상태입니다|으며|고|음)|없이)")
+_NOEND_NOUN = r"(?:처방\s*)?종료\s*(?:일|(?:일\s*)?(?:기록|날짜))"
+_NOEND_PRED = _NOEND_NOUN + r"\s*(?:이|은|도|가)?\s*(?P<end>없(?:습니다|어요|는\s*상태입니다|으며|고))"
+_NO_END_A = re.compile(r"(?:처방되어|처방돼|시작하여|시작해|시작되어|시작돼)\s*" + _NOEND_PRED)
+_NO_END_B = re.compile(r"(?P<done>(?:처방|진행)(?:되었|받았|됐)(?:으며|고)\s*)" + _NOEND_PRED)
+_NO_END_C = re.compile(_NOEND_PRED)
+_NO_END_D = re.compile(_NOEND_NOUN + r"\s*없이\s*(?:지속적으로\s*|계속(?:해서)?\s*)?(?P<v>처방|진행|이어)(?:되었|됐|졌)(?P<t>습니다|으며|고)")
+_NO_END_E = re.compile(_NOEND_NOUN + r"\s*없이")
+_NO_END_F = re.compile(_NOEND_NOUN + r"\s*없음")
+_NO_END_G = re.compile(r"(?:종료일(?:이|에)\s*도달하지|(?:아직\s*)?종료되지)\s*않았(?P<t>습니다|으며|고)")
 _PLAN_CTX = re.compile(r"관리\s*계획|계획은|계획도|계획이")
-_MED_CTX = re.compile(r"처방|약|MG|Tablet|Capsule|Injection|Spray|Gel|Solution|Patch|Inhaler", re.I)
-_DONE_CTX = re.compile(r"(?:처방|진행)(?:되었|받았|됐)(?:으며|고)\s*$")
+_MED_CTX = re.compile(r"처방|약|MG|Tablet|Capsule|Injection|Spray|Gel|Solution|Patch|Inhaler|DRUGS?", re.I)
+_SUBJ_MED = re.compile(r"처방(?:은|는|이|가|도)\s*$")       # 바로 앞 주어가 '처방'이면 동사를 '이어지고'로
 _NO_END_TAIL = {"없습니다": "습니다", "없어요": "습니다", "없는상태입니다": "습니다", "없으며": "으며", "없고": "고"}
 
 
 def natural_wording(text: str) -> tuple[str, list[dict[str, Any]]]:
-    """
-    '종료 기록이 없습니다' → '종료일 없이 계속 처방되었습니다' (과거 사례의 기록이라 지난 일로 쓴다. 처방을 복용으로 바꾸지 않는다).
-    앞에 '처방되었으며'가 있으면 '종료일 없이 이어졌습니다', 관리 계획 문장이면 '계속 진행되었습니다'. 바꾼 것을 편집 목록으로.
-    """
+    """위 설명대로 '종료 기록' 말을 지금 이어지는 일로 바꾼다. (바꾼 글, 편집 목록)."""
     edits: list[dict[str, Any]] = []
 
-    def rep(m: re.Match[str]) -> str:
-        start = max(text.rfind("\n", 0, m.start()), text.rfind(". ", 0, m.start()))
-        ctx = text[start + 1:m.start()]
-        plan = bool(_PLAN_CTX.search(ctx)) and not _MED_CTX.search(ctx)
-        end = re.sub(r"\s+", "", m.group("end"))
-        if end == "없이":
-            new = "종료일 없이"
-        elif end == "없음":
-            new = f"종료일 없음(계속 {'진행' if plan else '처방'})"
-        elif _DONE_CTX.search(ctx):
-            new = "종료일 없이 이어졌" + _NO_END_TAIL.get(end, "습니다")
-        else:
-            new = f"종료일 없이 계속 {'진행되었' if plan else '처방되었'}" + _NO_END_TAIL.get(end, "습니다")
+    def kind_at(pos: int) -> str:
+        start = max(text.rfind("\n", 0, pos), text.rfind(". ", 0, pos))
+        ctx = text[start + 1:pos]
+        if _MED_CTX.search(ctx):
+            return "med"
+        return "plan" if _PLAN_CTX.search(ctx) else "other"
+
+    def going(kind: str, tail: str, pos: int | None = None) -> str:
+        verb = {"med": "계속 처방되고", "plan": "계속 진행되고"}.get(kind, "이어지고")
+        if pos is not None and _SUBJ_MED.search(text[:pos]):
+            verb = "이어지고"                                     # '처방은 … 계속 처방되고'처럼 겹치지 않게
+        return f"현재까지 {verb} 있{tail}"
+
+    def note(m: re.Match[str], new: str) -> str:
         edits.append(dict(kind="wording", before=m.group(0), after=new))
         return new
 
-    return _NO_END.sub(rep, text), edits
+    def tail_of(m: re.Match[str]) -> str:
+        return _NO_END_TAIL.get(re.sub(r"\s+", "", m.group("end")), "습니다")
+
+    out = text
+    for rx, make in (
+        (_NO_END_A, lambda m: going(kind_at(m.start()) if kind_at(m.start()) != "other" else "med", tail_of(m))),
+        (_NO_END_B, lambda m: f"{m.group('done')}현재까지 이어지고 있{tail_of(m)}"),
+        (_NO_END_D, lambda m: going({"처방": "med", "진행": "plan"}.get(m.group("v"), "other"), m.group("t"))),
+        (_NO_END_G, lambda m: going(kind_at(m.start()), m.group("t"), m.start())),
+        (_NO_END_C, lambda m: going(kind_at(m.start()), tail_of(m), m.start())),
+        (_NO_END_F, lambda m: {"med": "현재까지 계속 처방 중", "plan": "현재까지 진행 중"}.get(kind_at(m.start()), "현재까지 이어짐")),
+        (_NO_END_E, lambda m: "현재까지"),
+    ):
+        text = out
+        out = rx.sub(lambda m, make=make: note(m, make(m)), out)
+    return out, edits
+
+
+# 값을 빼고 남은 말 다듬기 (ADR-0043): 재작성기가 날짜 · 지역을 빼면서 문장 앞뒤가 끊긴 곳
+_DANGLING_START = re.compile(r"(?m)(^|[:：]\s*)시작하여\s+")
+_LOST_REGION = re.compile(r"(?P<who>(?:사례\s*\d+(?:의)?\s*)?환자)(?:는|가|은)\s*(?:거주했습니다|거주합니다|거주하고\s*있습니다|살았습니다|삽니다|살고\s*있습니다)")
+_NOTE_ONLY = re.compile(r"^\s*기록에\s*없음\.?\s*(?=\S)")
+_NOTE_ALONE = re.compile(r"^\s*기록에\s*없음\.?\s*$")
+
+
+def tidy_gaps(text: str) -> tuple[str, list[dict[str, Any]]]:
+    """빼고 남은 말: ': 시작하여 …'의 '시작하여', 지역을 뺀 '사례1 환자는 거주했습니다', 맨 앞의 '기록에 없음.' 꼬리표."""
+    edits: list[dict[str, Any]] = []
+
+    def rep_start(m: re.Match[str]) -> str:
+        edits.append(dict(kind="gap", before=m.group(0).strip()))
+        return m.group(1)
+
+    def rep_region(m: re.Match[str]) -> str:
+        who = re.sub(r"의\s*환자$", " 환자", m.group("who").strip())
+        new = f"{who}의 거주 지역은 비공개입니다"
+        edits.append(dict(kind="gap", before=m.group(0), after=new))
+        return new
+
+    text = _DANGLING_START.sub(rep_start, text)
+    text = _LOST_REGION.sub(rep_region, text)
+    if _NOTE_ALONE.match(text):
+        edits.append(dict(kind="gap", before=text.strip(), after="기록에 없습니다."))
+        text = "기록에 없습니다."
+    elif _NOTE_ONLY.match(text):
+        edits.append(dict(kind="gap", before="기록에 없음."))
+        text = _NOTE_ONLY.sub("", text)
+    return text, edits
 
 
 def post_release(text: str, n_cases: int, docs: list[dict[str, Any]] | None = None, data: Any = None) -> tuple[str, list[dict[str, Any]]]:
@@ -733,6 +804,8 @@ def post_release(text: str, n_cases: int, docs: list[dict[str, Any]] | None = No
     text, ed = coarsen_counts(text, n_cases)
     edits += ed
     text, ed = natural_wording(text)
+    edits += ed
+    text, ed = tidy_gaps(text)
     edits += ed
     text, ed = _rewrite_sentences(text, n_cases, _fix_absence)
     edits += ed

@@ -8,7 +8,7 @@
   <img src="https://img.shields.io/badge/FastAPI-서버-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI">
   <img src="https://img.shields.io/badge/React-18-0b7a75?style=flat-square&logo=react&logoColor=white" alt="React 18">
   <img src="https://img.shields.io/badge/HL7_FHIR-R4-0b7a75?style=flat-square" alt="FHIR R4">
-  <img src="https://img.shields.io/badge/tests-pytest_1018_·_vitest_100-16a374?style=flat-square" alt="pytest 1018 passed, vitest 100 passed">
+  <img src="https://img.shields.io/badge/tests-pytest_1030_·_vitest_102-16a374?style=flat-square" alt="pytest 1030 passed, vitest 102 passed">
   <a href="docs/adr/README.md"><img src="https://img.shields.io/badge/ADR-42건-5b5bf0?style=flat-square" alt="ADR 42건"></a>
 </p>
 
@@ -179,7 +179,7 @@ python scripts/verify_result3.py runs/medical/sim_staged                        
 - **담당 환자만 열기.** 외래 환자도 담당 의료진만 목록, 차트, 진료 지원 AI, FHIR로 열 수 있습니다. 담당이 아닌 환자는 담당 의료진이 보낸 협진 의뢰로 열거나, 등록번호와 사유를 적어야 12시간 동안 열리고, 그 열람은 감사 기록에 남아 보안 담당자가 검토합니다. 등록번호는 무작위 네 자리라 번호를 차례로 넣어 열어 볼 수 없습니다. 서버 옵션 `--break-glass off`로 예외 열람을 끌 수 있습니다(협진 의뢰는 그대로).
 - **과거 기록 환자.** 검색 대상 461명은 FHIR로 조회할 수 없고, 진료 지원 AI의 답과 MediCloak 판정을 거쳐서만 보입니다.
 - **민감 정보.** 물질 사용, 정신 건강, 생식, HIV 관련 값은 후보가 10명 이상일 때만 공개하고, 미성년 시기에 물질 사용 장애가 있던 환자는 검색 대상에서 제외합니다.
-- **답변 시간 한도.** 45초 안에 확인을 마치지 못한 답은 내보내지 않고 안내 문장으로 대신합니다.
+- **답변 시간 한도.** 90초 안에 확인을 마치지 못한 답은 내보내지 않고, 시간이 걸려 보내지 않았다는 안내 문장으로 대신합니다 (ADR-0043).
 - **API 키.** `.env`에서만 읽으며 화면, 로그, 감사 기록, 오류 문구에 남기지 않습니다.
 
 자세한 동작과 실제 운영 시 정해야 할 사항(외부 LLM으로 전송되는 데이터, 승인 담당자 당직, 감사 기록 보관 기간)은 [medicloak/README.md](medicloak/README.md)에 있습니다.
@@ -221,8 +221,8 @@ python scripts/build_desktop.py --zip # 묶은 앱: dist/desktop/MediCloak.app (
 **테스트**
 
 ```bash
-python -m pytest -q                   # 1018 passed, 3 skipped (LLM 호출은 가짜 HTTP 세션으로 대체)
-cd frontend && npm test               # vitest 100 passed
+python -m pytest -q                   # 1030 passed, 3 skipped (LLM 호출은 가짜 HTTP 세션으로 대체)
+cd frontend && npm test               # vitest 102 passed
 ```
 
 ---

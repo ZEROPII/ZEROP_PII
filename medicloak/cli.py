@@ -377,8 +377,8 @@ def _serve_args(p: argparse.ArgumentParser, top: bool = False) -> None:
                    help="공개 원장에서 합쳐 볼 기간(일, 기본 90). 0이면 기간 없이 모두")
     p.add_argument("--input-gate", choices=("on", "off"), **(kw or dict(default="on")),
                    help="on: 대상 AI에 지금 공개할 수 있는 값만 넣는다 (나머지는 넓히거나 '(비공개)', 기본). off: 사례 문서 원문 그대로 (예전 동작)")
-    p.add_argument("--answer-budget", type=float, **(kw or dict(default=45.0)),
-                   help="한 답의 공개 처리 시간 예산(초, 기본 45). 넘기면 재작성 · 다시 확인을 멈추고 답 대신 안내 문장을 보낸다. 0이면 끔")
+    p.add_argument("--answer-budget", type=float, **(kw or dict(default=90.0)),
+                   help="한 답의 공개 처리 시간 예산(초, 기본 90). 넘기면 재작성 · 다시 확인을 멈추고 답 대신 안내 문장을 보낸다. 0이면 끔 (ADR-0043)")
     p.add_argument("--sensitivity", choices=("on", "off"), **(kw or dict(default="on")),
                    help="on: 정신 건강 · 물질 사용 · 생식 · HIV 값은 후보가 --strict-k명 이상일 때만 내고, 미성년 시기 물질 사용 장애 "
                         "과거 환자는 유사 사례 검색에서 뺀다 (기본). off: 예전 동작")
@@ -392,7 +392,7 @@ def _defaults(a: argparse.Namespace) -> argparse.Namespace:
     for k, v in dict(host="127.0.0.1", port=8000, llm="real", env_file=None, llm_concurrency=1, extract_parallel=4, build=False,
                      no_compare=False, keep=12, cookie_secure=False, no_rule_extract=False, answer_style="on",
                      extractor_model=None, rewriter_model=None, auto_redteam="change", auto_redteam_daily=None,
-                     prefetch="on", visit="recent", ledger="on", ledger_window_days=90.0, input_gate="on", answer_budget=45.0,
+                     prefetch="on", visit="recent", ledger="on", ledger_window_days=90.0, input_gate="on", answer_budget=90.0,
                      sensitivity="on", strict_k=10, break_glass="on").items():
         if not hasattr(a, k):
             setattr(a, k, v)

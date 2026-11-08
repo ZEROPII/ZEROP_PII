@@ -576,8 +576,15 @@ class Session:
     def k_global(self, ref: str, arm: str = "C1") -> int:
         """원장(다른 대화)까지 합친 이 사례의 후보 수. 원장이 없으면 이 대화의 후보 수와 같다."""
         c = self.runs[arm].cases.get(ref)
-        ds = (self.prior(ref) if arm == "C1" else []) + (list(c.committed) if c else [])
-        return self.ctx.kc.k(ds)["k"] if ds else self.ctx.p_ref
+        own = list(c.committed) if c else []
+        pre = self.prior(ref) if arm == "C1" else []
+        if not own and not pre:
+            return self.ctx.p_ref
+        res = self.ctx.kc.k(pre + own)
+        # 묶음 보정이 일어났으면 이 대화 값만 센 수와 작은 쪽 (원장 잡음이 이 대화의 값을 밀어내 후보 수가 커지지 않게, ADR-0043)
+        if own and pre and any(str(f).startswith(("CONFLICT_DROPPED", "REGROUPED")) for f in res.get("flags") or []):
+            return min(res["k"], self.ctx.kc.k(own)["k"])
+        return res["k"]
 
     def _ledger_sync(self, kind: str, turn: int | None) -> None:
         """화면 갈래(C1) State에 새로 들어간 값을 원장에 적는다 (사례마다 앞서 적은 뒤의 것만)."""

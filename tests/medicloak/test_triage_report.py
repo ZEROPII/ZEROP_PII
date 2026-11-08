@@ -87,11 +87,14 @@ def test_report_course_is_written_in_ranges_without_dates():
     data = FakeData(EVENTS)
     ev = {e["event_id"]: e for e in EVENTS}
     labels, sents = case_report._course_main(data, "P1", ev["C1"])
-    assert labels[0].startswith("시작부터 ") and labels[0].endswith(" 뒤 종료") and labels[1].startswith("같은 진단 기록 ")
+    assert labels[0].endswith(("만에 끝남", "에 끝남", "이어진 뒤 끝남")) and labels[1].startswith("같은 진단 기록 ")
+    assert "종료" not in " ".join(labels)                                    # 진료 화면 말로 (ADR-0043)
     med = case_report._course_item(data, "P1", "MED", ev["M1"])
-    assert med[-1].endswith(" 동안 처방")
+    assert med[-1].startswith("처방 기간 ")
+    for phrase, want in [("3일 이내", "3일 이내에 끝남"), ("약 1~2주", "약 1~2주 만에 끝남"), ("3년 넘게", "3년 넘게 이어진 뒤 끝남"), (None, "끝난 기록 있음")]:
+        assert case_report._ended(phrase) == want
     assert case_report._course_item(data, "P1", "PROC", ev["P1"]) == ["한 번 시행"]
-    assert case_report._course_item(data, "P1", "PLAN", ev["L1"]) == ["종료일 없이 계속 진행"]
+    assert case_report._course_item(data, "P1", "PLAN", ev["L1"]) == ["현재까지 진행 중"]
     for t in labels + sents + med:
         assert not re.search(r"\d{4}-\d{2}|\d{4}년", t), t                                # 날짜는 쓰지 않는다
 
@@ -121,7 +124,7 @@ def test_report_pdf_has_korean_font_and_a_download_name():
         notes=list(case_report.NOTES), whyLabels=dict(case_report.WHY_KO), counts=dict(allow=3, generalize=1, suppress=2),
         cases=[dict(caseId="case-1", ref="사례1", label="사례 1", rank=1, hidden=2, ranged=1,
                     profile=dict(sex=v("여성"), age=v("70~74세", "generalize", "floor")),
-                    main=dict(value=v("Otitis media"), start=v(None, "suppress", "count"), course=["시작부터 약 1~2주 뒤 종료"]),
+                    main=dict(value=v("Otitis media"), start=v(None, "suppress", "count"), course=["약 1~2주 만에 끝남"]),
                     treatments=[dict(kind="medications", kindLabel="처방", name=v("amoxicillin 500 MG"), course=["약 1~2주 동안 처방"]),
                                 dict(kind="procedures", kindLabel="시술", name=v(None, "suppress", "count"), course=[])],
                     others=[v("Chronic sinusitis")], summary="Otitis media 진단 무렵 처방 1개를 시작했습니다.")])
