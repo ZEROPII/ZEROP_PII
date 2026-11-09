@@ -122,7 +122,7 @@ python -m medicloak check-llm      # 연결 확인 (키 값은 출력하지 않�
 python -m medicloak serve --build
 ```
 
-질문 하나에 LLM을 3~4번(최악 8번) 부르고, claude-haiku-4.5 실측으로 평균 약 19초가 걸립니다. 서버 옵션은 [medicloak/README.md](medicloak/README.md#서버-옵션)에 있습니다. 로그인 없이 화면만 보려면 `python -m webdemo --build`를 실행합니다.
+서버 옵션은 [medicloak/README.md](medicloak/README.md#서버-옵션)에 있습니다. 로그인 없이 화면만 보려면 `python -m webdemo --build`를 실행합니다.
 
 **4. 팀원 · 휴대폰에서 열기**
 
