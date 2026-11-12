@@ -189,6 +189,9 @@ class ArmRun:
         decisions = [x for p in plans for x in p.decisions]
         changes = d.change_lines(plans)
         plan_dicts = [p.as_dict() for p in plans]
+        # 이미 위험 상태(누적 k ≤ g)인데 이번 답변에 고칠 새 공개가 없으면 원문을 내보내지 않는다 (거절)
+        if any(p.risky and not p.decisions for p in plans):
+            return Release(REFUSAL_TEXT, _empty_view(), "REFUSAL", plan_dicts, [], [], 0.0, 0)
         if not changes:
             return Release(raw, raw_view, "RAW", plan_dicts, [], [], 1.0 if decisions else None, 0)
         util = round(sum(x.utility for x in decisions) / len(decisions), 4)

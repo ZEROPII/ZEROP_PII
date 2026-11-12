@@ -91,7 +91,8 @@ class MedicalDefender:
         k = lambda ds: self.kc.k(ds)["k"]
         k_before = k(basis) if basis else len(self.kc.by_pat)
         k_proj = k(basis + new) if new else k_before
-        plan = CasePlan(ref, k_before, k_proj, risky=bool(new) and self.risky(k_proj))
+        # 누적 상태 기준: 새 공개가 없어도 이미 k ≤ g면 위험 (k_proj는 new가 없으면 k_before와 같다)
+        plan = CasePlan(ref, k_before, k_proj, risky=self.risky(k_proj))
         if not plan.risky:
             plan.decisions = [Decision(d, s, ALLOW, d["node_id"], k_proj, 0, self.data.depth(d["node_id"])) for d, s in zip(new, sources)]
             plan.k_final = k_proj
