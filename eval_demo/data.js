@@ -1024,16 +1024,16 @@ window.DASH = {
    "ours": 44.5,
    "single": 25.6,
    "fixed": 2.3,
-   "source": "SynthPAI 30명 · 실제 LLM · 위반 0% 조건 (발표 39p)"
+   "source": "미측정 · 발표 문구 그대로 (발표 39p) · 실행 결과 아님"
   },
   "normalPass": {
    "value": 98.9,
-   "source": "SynthPAI 정상 질문 6턴 · 30만 명 기준 (발표 37p)"
+   "source": "미측정 · 발표 문구 그대로 (발표 37p) · 실행 결과 아님"
   },
   "latency": {
    "meanSec": 0.011,
    "p95Sec": 0.037,
-   "source": "시뮬레이션 · k 계산 + 판정, LLM 제외 (발표 42p)"
+   "source": "미측정 · 발표 문구 그대로 (발표 42p) · 실행 결과 아님"
   },
   "extraction": {
    "recall": 89.2,

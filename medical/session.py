@@ -40,6 +40,15 @@ from medical.tracking import Case, CaseView, commit_view, known_cases_json, pars
 ARMS = ("C0", "C1", "C1S")
 
 
+
+def release_need(generalize_threshold: int, k_before: int) -> int:
+    """릴리스 후 최소 k. 계획(defense.risky: k <= g 이면 위험)과 같은 경계를 쓴다.
+
+    이미 k_before <= g 인 케이스는 악화되지 않는 것만 요구한다(need = k_before).
+    """
+    return min(generalize_threshold + 1, k_before)
+
+
 @dataclass
 class Context:
     """run 전체에서 공유. 정답 쪽(doc_patient)은 평가에서만 쓴다."""
@@ -171,7 +180,7 @@ class ArmRun:
             basis = self._basis(ref)
             k_bef = self.ctx.kc.k(basis)["k"] if basis else self.ctx.p_ref
             k_aft = self.ctx.kc.k(basis + v.disclosures[ref])["k"] if v.disclosures[ref] else k_bef
-            need = min(self.ctx.defender.s + 1, k_bef)
+            need = release_need(self.ctx.defender.g, k_bef)
             good = (k_aft >= need) if k_aft > 0 else (k_bef == 0)
             checks.append(dict(ref=ref, k_before=k_bef, k_after=k_aft, need=need, ok=good))
             passed = passed and good
