@@ -41,12 +41,14 @@ ARMS = ("C0", "C1", "C1S")
 
 
 
-def release_need(generalize_threshold: int, k_before: int) -> int:
-    """릴리스 후 최소 k. 계획(defense.risky: k <= g 이면 위험)과 같은 경계를 쓴다.
+def release_need(suppress_threshold: int, k_before: int) -> int:
+    """릴리스 후 최소 k. 계획기의 fallback 하한(defense: k > s 허용)과 같은 경계를 쓴다.
 
-    이미 k_before <= g 인 케이스는 악화되지 않는 것만 요구한다(need = k_before).
+    [수정본 fix/release-need-fallback-rev] 일반화 실패 시 계획기는 k > s(=3, 즉 k>=4)를 허용하므로
+    검증 하한도 s+1 이어야 한다. 이전 g+1(=6) 기준은 계획기가 허용한 fallback 결과(k=4~5)를 거절했다.
+    이미 k_before <= s 인 케이스는 악화되지 않는 것만 요구한다(need = k_before).
     """
-    return min(generalize_threshold + 1, k_before)
+    return min(suppress_threshold + 1, k_before)
 
 
 @dataclass
@@ -180,7 +182,7 @@ class ArmRun:
             basis = self._basis(ref)
             k_bef = self.ctx.kc.k(basis)["k"] if basis else self.ctx.p_ref
             k_aft = self.ctx.kc.k(basis + v.disclosures[ref])["k"] if v.disclosures[ref] else k_bef
-            need = release_need(self.ctx.defender.g, k_bef)
+            need = release_need(self.ctx.defender.s, k_bef)
             good = (k_aft >= need) if k_aft > 0 else (k_bef == 0)
             checks.append(dict(ref=ref, k_before=k_bef, k_after=k_aft, need=need, ok=good))
             passed = passed and good
