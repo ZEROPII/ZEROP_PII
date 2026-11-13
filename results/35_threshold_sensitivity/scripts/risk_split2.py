@@ -2,8 +2,10 @@ import csv, json, sys, collections, statistics as st
 sys.path.insert(0, '/home/claude/zerop_pii')
 from medical.bundle.kcalc import KCalc
 import sys as _s; RUN = _s.argv[1]
-NODES = "/home/claude/zerop_pii/data/medical/노드_v0.9.csv"
-EVENTS = "/home/claude/zerop_pii/data/medical/사건연결표_v0.9.csv"
+# [수정본] 실행 기록(run_meta.json)의 온톨로지는 v0.10이다 (nodes sha256 332981c0…, events a12736f7…).
+# 기존 v0.9를 읽으면 같은 공개 상태에서 k가 달라져 mismatch가 생긴다.
+NODES = "/home/claude/zerop_pii/data/medical/노드_v0.10.csv"
+EVENTS = "/home/claude/zerop_pii/data/medical/사건연결표_v0.10.csv"
 store = {r['patient_id'] for r in csv.DictReader(open(f"{RUN}/코호트분리.csv", encoding='utf-8-sig')) if r['split'] == 'STORE'}
 kc = KCalc(NODES, EVENTS, patients=store)
 PRIV = {"AGE", "SEX", "REGION", "PERIOD"}
