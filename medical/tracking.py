@@ -23,12 +23,16 @@ UNCLEAR = "UNCLEAR"
 def parse_json(text: str, kind: str) -> Any:
     """LLM 출력에서 JSON 배열(kind='array', 원소는 모두 객체) 또는 객체('object')를 찾는다. 없으면 None."""
     want = list if kind == "array" else dict
+    # 1) 출력 전체(코드 울타리 제외)가 그대로 JSON이면 그 값을 쓴다. 빈 배열 '[]'은 여기서만 '관찰 없음'으로 인정한다.
+    body = re.sub(r"^\s*```(?:json)?\s*|\s*```\s*$", "", text.strip())
     try:
-        v = json.loads(text)
+        v = json.loads(body)
         if isinstance(v, want) and (kind == "object" or all(isinstance(x, dict) for x in v)):
             return v
     except Exception:
         pass
+    # 2) 설명 문장이 섞인 경우에만 본문에서 찾는다. 잘린 출력 안의 빈 배열 '[]'(예: "evidence_spans": [])은
+    #    '관찰 없음'이 아니므로 여기서 받지 않는다 (fail-closed: 해석 불가 → 호출 측이 거절 처리).
     dec = json.JSONDecoder()
     opener = "[" if kind == "array" else "{"
     for i, ch in enumerate(text):
@@ -37,7 +41,7 @@ def parse_json(text: str, kind: str) -> Any:
                 v, _ = dec.raw_decode(text[i:])
             except Exception:
                 continue
-            if isinstance(v, want) and (kind == "object" or not v or all(isinstance(x, dict) for x in v)):
+            if isinstance(v, want) and v and (kind == "object" or all(isinstance(x, dict) for x in v)):
                 return v
     return None
 
