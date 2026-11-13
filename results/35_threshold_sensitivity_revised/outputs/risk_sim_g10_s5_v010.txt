@@ -1,0 +1,26 @@
+k_final consistency mismatches (C0 제외, C1S 턴별 상태): 0 {}
+
+== C1S: 그대로 공개된 개인정보 단서 2421건 (턴 0~7)
+  single_identifying: 0 (0.0%)
+  cumulative_contributes: 0 (0.0%)
+  harmless_alone_and_cum: 2421 (100.0%)
+
+== C1: 그대로 공개된 개인정보 단서 2787건 (턴 0~7)
+  single_identifying: 0 (0.0%)
+  cumulative_contributes: 0 (0.0%)
+  harmless_alone_and_cum: 2787 (100.0%)
+
+== 재식별 확률 상한 1/k (case·turn 단위)
+  C0: n=6240 평균 1/k=13.95% 중앙값=3.23% 최대=100.0% k<5 비율=16.3%
+  C1S: n=7959 평균 1/k=4.24% 중앙값=0.68% 최대=100.0% k<5 비율=3.3%
+  C1: n=11839 평균 1/k=4.02% 중앙값=3.45% 최대=12.5% k<5 비율=0.0%
+
+== 턴별 최소 k 중앙값 (C1)
+  turn 0: median k=74  min=11
+  turn 1: median k=56.0  min=10
+  turn 2: median k=36.0  min=10
+  turn 3: median k=29.0  min=10
+  turn 4: median k=24.0  min=10
+  turn 5: median k=21.0  min=10
+  turn 6: median k=19.0  min=10
+  turn 7: median k=18.0  min=8
