@@ -64,6 +64,8 @@ for arm in ('C1S', 'C1'):
 print("\n== 재식별 확률 상한 1/k (case·turn 단위)")
 for arm in ('C0', 'C1S', 'C1'):
     vals = [k for t in range(8) for k in kvals[(arm, t)]]
+    if not vals:  # [수정본] 이 실행에 없는 arm(예: C0 미실행)은 건너뛴다
+        continue
     inv = [1/k for k in vals if k > 0]
     viol = sum(1 for k in vals if 1 <= k < 5)
     print(f"  {arm}: n={len(vals)} 평균 1/k={st.mean(inv)*100:.2f}% 중앙값={st.median(inv)*100:.2f}% 최대={max(inv)*100:.1f}% k<5 비율={viol/len(vals)*100:.1f}%")
