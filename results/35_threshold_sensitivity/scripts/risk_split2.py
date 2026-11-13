@@ -12,7 +12,7 @@ by = collections.defaultdict(list)
 for r in rows: by[(r['trial_id'], r['arm'])].append(r)
 
 cue_stats = collections.Counter(); cue_by_arm = collections.Counter()
-mismatch = 0; kvals = collections.defaultdict(list); alone_k = {}
+mismatch = 0; mismatch_by_arm = collections.Counter(); kvals = collections.defaultdict(list); alone_k = {}
 for (trial, arm), rs in sorted(by.items()):
     rs.sort(key=lambda r: r['turn'])
     cum = collections.defaultdict(list)           # case_ref -> disclosures so far
@@ -21,6 +21,10 @@ for (trial, arm), rs in sorted(by.items()):
         plans = {p['ref']: p for p in r.get('release_plans', [])}
         for ref in sorted(set(list(r['cases'].keys()))):
             k_log = plans[ref]['k_final'] if ref in plans else r['cases'][ref]['k']
+            # [수정본] C1S(단일 응답 방어)는 턴 사이 상태를 잇지 않는다(defense.plan_case: basis 빈 목록).
+            # 따라서 턴마다 이번 턴의 공개만으로 k를 다시 계산해야 계획기와 같은 기준이 된다.
+            if arm == 'C1S':
+                cum[ref] = []
             # cumulative disclosure for this case
             if ref in plans:
                 for d in plans[ref]['decisions']:
@@ -29,7 +33,12 @@ for (trial, arm), rs in sorted(by.items()):
                     elif d['action'] == 'generalize' and d.get('to_node'):
                         cum[ref].append({'attribute': d['attribute'], 'node_id': d['to_node'], 'event_group': d.get('event_group')})
             k_now = kc.k(cum[ref])['k'] if cum[ref] else len(store)
-            if k_now != k_log: mismatch += 1
+            # [수정본] C0는 방어 계획이 없어서 공개 상태를 재구성할 수 없으므로 검사에서 뺀다.
+            # [수정본] C1S는 이번 턴에 계획이 없는 사례의 k를 계획기가 기록하지 않으므로, 계획이 있는 사례만 검사한다.
+            check = arm != 'C0' and not (arm == 'C1S' and ref not in plans)
+            if check and k_now != k_log:
+                mismatch += 1
+                mismatch_by_arm[arm] += 1
             kvals[(arm, r['turn'])].append(k_log)
             # per-cue split for privacy cues that were allowed this turn
             if ref in plans:
@@ -43,7 +52,7 @@ for (trial, arm), rs in sorted(by.items()):
                         if ka < 5: cue_stats[(arm, 'single_identifying')] += 1
                         elif k_log < 5: cue_stats[(arm, 'cumulative_contributes')] += 1
                         else: cue_stats[(arm, 'harmless_alone_and_cum')] += 1
-print("k_final consistency mismatches:", mismatch)
+print("k_final consistency mismatches (C0 제외, C1S 턴별 상태):", mismatch, dict(mismatch_by_arm))
 for arm in ('C1S', 'C1'):
     n = cue_by_arm[(arm, 'cue')]
     print(f"\n== {arm}: 그대로 공개된 개인정보 단서 {n}건 (턴 0~7)")
