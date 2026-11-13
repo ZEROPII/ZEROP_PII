@@ -41,14 +41,12 @@ ARMS = ("C0", "C1", "C1S")
 
 
 
-def release_need(k_req: int, k_before: int) -> int:
-    """릴리스 후 최소 k. 위반 판정(1 <= k < k_req)과 같은 경계를 쓴다.
+def release_need(generalize_threshold: int, k_before: int) -> int:
+    """릴리스 후 최소 k. 계획(defense.risky: k <= g 이면 위험)과 같은 경계를 쓴다.
 
-    k_req 미만으로 내보내는 릴리스는 허용하지 않는다. 계획기의 k > s fallback 결과가
-    k_req 미만이면 검증에서 거절되고, 재작성 · 결정적 fallback 경로를 거쳐 거절(REFUSAL)된다.
-    이미 k_before < k_req 인 케이스는 악화되지 않는 것만 요구한다.
+    이미 k_before <= g 인 케이스는 악화되지 않는 것만 요구한다(need = k_before).
     """
-    return min(k_req, k_before)
+    return min(generalize_threshold + 1, k_before)
 
 
 @dataclass
@@ -182,7 +180,7 @@ class ArmRun:
             basis = self._basis(ref)
             k_bef = self.ctx.kc.k(basis)["k"] if basis else self.ctx.p_ref
             k_aft = self.ctx.kc.k(basis + v.disclosures[ref])["k"] if v.disclosures[ref] else k_bef
-            need = release_need(self.ctx.cfg.k_req, k_bef)
+            need = release_need(self.ctx.defender.g, k_bef)
             good = (k_aft >= need) if k_aft > 0 else (k_bef == 0)
             checks.append(dict(ref=ref, k_before=k_bef, k_after=k_aft, need=need, ok=good))
             passed = passed and good
