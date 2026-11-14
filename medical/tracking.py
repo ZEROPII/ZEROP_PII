@@ -67,6 +67,7 @@ class CaseView:
     partial: dict[str, bool]
     order: list[str]                                   # 답변에서 처음 언급된 순서
     unclear_mappable: bool = False                     # UNCLEAR 중 사례에 귀속하면 MAPPED(k 입력)가 될 질의 외 정보가 있는가
+    unmapped_sensitive: bool = False                   # 사례에 귀속됐지만 정규화에 실패(UNMAPPED)한 질의 외 관찰이 있는가 (k에 안 들어감)
 
     @property
     def case_refs(self) -> list[str]:
@@ -106,12 +107,37 @@ def unattributed_sensitive(view: CaseView) -> bool:
     return view.unclear_mappable
 
 
+LIST_SEP = re.compile(r"\s*[,;]\s*")
+
+
+def split_list_observation(o: dict[str, Any], response: str) -> list[dict[str, Any]]:
+    """[수정본] 쉼표·세미콜론으로 나열된 목록 값을 항목별 관찰로 나눈다 (개발자 확인: 턴 2 진단 목록이 한 값으로 묶여 UNMAPPED).
+
+    항목마다 다시 정규화하므로, 나눈 뒤에도 안 맞는 항목은 unmapped_sensitive로 막힌다.
+    나눌 게 없으면 원래 관찰 하나를 그대로 돌려준다.
+    """
+    raw = str(o.get("raw_value") or "")
+    parts = [p.strip() for p in LIST_SEP.split(raw) if p.strip()]
+    if len(parts) < 2:
+        return [o]
+    return [dict(o, raw_value=p, evidence_spans=[p] if p in response else [], split_from=raw) for p in parts]
+
+
+def unmapped_attributed(view: CaseView) -> bool:
+    """[수정본] 사례에 귀속됐지만 정규화에 실패(UNMAPPED)한 질의 외 관찰이 있으면 True. 이런 공개는 k에 안 들어가므로 내보내지 않는다.
+
+    subject=OTHER(질의 환자 본인 정보)는 막지 않는다.
+    """
+    return view.unmapped_sensitive
+
+
 def view_of(observations: list[dict[str, Any]], response: str, query: str, nz: Normalizer) -> CaseView:
     by_case: dict[str, list[dict[str, Any]]] = collections.OrderedDict()
     for o in observations:
         ref = case_ref_of(o)
         o = fix_subject(dict(o, case_ref=ref) if ref != UNCLEAR else o, ref, query)
-        by_case.setdefault(ref, []).append(o)
+        pieces = split_list_observation(o, response) if ref != UNCLEAR and o.get("subject") != "OTHER" else [o]
+        by_case.setdefault(ref, []).extend(pieces)
     normalized, disclosures, sources, partial = {}, {}, {}, {}
     for ref, os_ in by_case.items():
         norm = [nz.normalize(o, response, query) for o in os_]
@@ -127,7 +153,9 @@ def view_of(observations: list[dict[str, Any]], response: str, query: str, nz: N
     mappable = any(o.get("subject") != "OTHER" and
                    nz.normalize(dict(o, case_ref="사례0"), response, query).get("mapping_status") == "MAPPED"
                    for o in normalized.get(UNCLEAR, []))
-    return CaseView(normalized, disclosures, sources, partial, list(by_case), mappable)
+    unmapped = any(o.get("mapping_status") == "UNMAPPED" and o.get("subject") != "OTHER"
+                   for ref, os_ in normalized.items() if ref != UNCLEAR for o in os_)
+    return CaseView(normalized, disclosures, sources, partial, list(by_case), mappable, unmapped)
 
 
 def commit_view(view: CaseView, cases: dict[str, Case], order: list[str]) -> None:

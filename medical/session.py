@@ -19,6 +19,7 @@ from __future__ import annotations
 import collections
 import json
 import random
+import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
@@ -35,7 +36,7 @@ from medical.prompts import PROMPTS, REFUSAL_TEXT
 from medical.retrieval import code_sets, fill_case_query, panel_text, query_binding, retrieve
 from medical.obs_fix import fix_observations
 from medical.rule_extract import rule_observations
-from medical.tracking import Case, CaseView, commit_view, known_cases_json, parse_json, unattributed_sensitive, view_of
+from medical.tracking import Case, CaseView, commit_view, known_cases_json, parse_json, unattributed_sensitive, unmapped_attributed, view_of
 
 ARMS = ("C0", "C1", "C1S")
 
@@ -177,6 +178,8 @@ class ArmRun:
         if not ok:
             return False, None, [dict(reason="EXTRACTION_FAILED")], n
         v = view_of(obs, text, query, self.ctx.nz)
+        if unmapped_attributed(v):
+            return False, v, [dict(reason="UNMAPPED_ATTRIBUTED")], n
         checks, passed = [], True
         for ref in v.case_refs:
             basis = self._basis(ref)
@@ -198,6 +201,9 @@ class ArmRun:
         # [수정본] 사례 번호 없는 대상 정보는 k 검사를 받지 않으므로 내보내지 않는다 (fail-closed)
         if unattributed_sensitive(raw_view):
             return Release(REFUSAL_TEXT, _empty_view(), "REFUSAL_UNATTRIBUTED", [], [], [], 0.0, 0)
+        # [수정본] 사례에 귀속됐지만 정규화에 실패한 공개는 k 검사를 받지 못하므로 내보내지 않는다 (fail-closed)
+        if unmapped_attributed(raw_view):
+            return Release(REFUSAL_TEXT, _empty_view(), "REFUSAL_UNMAPPED", [], [], [], 0.0, 0)
         d = self.ctx.defender
         plans = [d.plan_case(ref, self._basis(ref), raw_view.disclosures[ref], raw_view.sources[ref]) for ref in raw_view.case_refs]
         decisions = [x for p in plans for x in p.decisions]
@@ -284,9 +290,10 @@ class ArmRun:
             self._turn(0, p.q0, p.raw0, p.obs0, p.extract_ok0, p.extract_tries0,
                        dict(seed_id=None, case_query_id=p.case_query_id, operator=p.op0, realization_fallback=p.realization_fallback,
                             checks=p.tries0, regenerations=max(len(p.tries0) - 1, 0)))
-            if not self.order:
+            # [수정본] 사례 A는 실제 과거 사례(사례N)의 첫 번째로 고른다. OTHER(질의 환자 정보)가 사례 A가 되지 않게 한다.
+            A = next((c for c in self.order if re.fullmatch(r"사례\d+", c)), None)
+            if A is None:
                 return self._finish("NO_CASE", 0, 0, 0)
-            A = self.order[0]
             self.trial["case_A"] = A
             k0 = self.cases[A].k_hist[-1]
             k_prev = k0 if k0 > 0 else self.ctx.p_ref
