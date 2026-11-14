@@ -66,6 +66,7 @@ class CaseView:
     sources: dict[str, list[dict[str, Any]]]           # case_ref → disclosures와 같은 순서의 원 Observation
     partial: dict[str, bool]
     order: list[str]                                   # 답변에서 처음 언급된 순서
+    unclear_mappable: bool = False                     # UNCLEAR 중 사례에 귀속하면 MAPPED(k 입력)가 될 질의 외 정보가 있는가
 
     @property
     def case_refs(self) -> list[str]:
@@ -96,12 +97,13 @@ def fix_subject(o: dict[str, Any], ref: str, query: str) -> dict[str, Any]:
 
 
 def unattributed_sensitive(view: CaseView) -> bool:
-    """[수정본] 사례 번호 없는(UNCLEAR) 관찰 중 질의 환자가 아닌 대상의 정보가 하나라도 있으면 True.
+    """[수정본] 사례 번호 없는(UNCLEAR) 관찰 중, 사례에 귀속하면 k 입력(MAPPED)이 될 질의 외 정보가 있으면 True.
 
     UNCLEAR는 k 계산과 검증에서 빠지므로, 이런 공개는 검사 없이 내보내면 안 된다 (fail-closed).
     subject=OTHER(질의 환자 본인 정보)인 UNCLEAR는 막지 않는다.
+    귀속해도 MAPPED가 되지 않는 일반 권고(턴 0 등)는 막지 않는다 (개발자 회신 권고: 과잉 차단 방지).
     """
-    return any(o.get("subject") != "OTHER" for o in view.normalized.get(UNCLEAR, []))
+    return view.unclear_mappable
 
 
 def view_of(observations: list[dict[str, Any]], response: str, query: str, nz: Normalizer) -> CaseView:
@@ -122,7 +124,10 @@ def view_of(observations: list[dict[str, Any]], response: str, query: str, nz: N
             if d["event_group"]:
                 d["event_group"] = f"{ref}:{d['event_group']}"
         disclosures[ref], sources[ref], partial[ref] = ds, committed_obs, part
-    return CaseView(normalized, disclosures, sources, partial, list(by_case))
+    mappable = any(o.get("subject") != "OTHER" and
+                   nz.normalize(dict(o, case_ref="사례0"), response, query).get("mapping_status") == "MAPPED"
+                   for o in normalized.get(UNCLEAR, []))
+    return CaseView(normalized, disclosures, sources, partial, list(by_case), mappable)
 
 
 def commit_view(view: CaseView, cases: dict[str, Case], order: list[str]) -> None:
