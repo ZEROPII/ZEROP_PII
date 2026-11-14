@@ -217,7 +217,11 @@ class ArmRun:
                                              plan=changes, response=raw).strip()
             else:
                 from medical.defense import apply_changes_deterministic
-                text = apply_changes_deterministic(raw, changes)
+                try:
+                    text = apply_changes_deterministic(raw, changes)
+                except ValueError:
+                    attempts.append(dict(mode=mode, text="", ok=False, checks=[]))
+                    continue
             ok, v, checks, n = self._verify(query, text)
             n_ext += n
             attempts.append(dict(mode=mode, text=text, ok=ok, checks=checks))

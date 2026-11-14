@@ -130,7 +130,7 @@ class MedicalDefender:
         for p in plans:
             for d in p.changes:
                 out.append(dict(case_ref=p.ref, attribute=d.disclosure["attribute"], raw_value=str(d.source.get("raw_value", "")),
-                                evidence_spans=list(d.source.get("evidence_spans") or []), action=d.action,
+                                evidence_spans=normalize_spans(d.source.get("evidence_spans")), action=d.action,
                                 to_label=self.data.label(d.to_node) if d.to_node else None))
         return out
 
@@ -146,18 +146,36 @@ def format_changes(changes: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+MIN_SPAN_CHARS = 2          # 한 글자짜리 근거는 근거가 될 수 없으므로 치환에 쓰지 않는다
+MAX_GROWTH = 20             # 치환 결과가 원문의 이 배수(+ 상수)를 넘으면 폭주로 보고 실패시킨다
+GROWTH_SLACK = 2000
+
+
+def normalize_spans(v: Any) -> list[str]:
+    """근거 문장 값을 문자열 목록으로 만든다. 문자열이 오면 글자 단위로 쪼개지 않고 한 항목으로 둔다."""
+    if v is None:
+        return []
+    if isinstance(v, str):
+        return [v]
+    return [str(x) for x in v if x is not None]
+
+
 def apply_changes_deterministic(response: str, changes: list[dict[str, Any]]) -> str:
     """
     LLM 재작성이 검사를 통과하지 못할 때의 대체: 원래 표현을 넓은 표현 또는 '(비공개)'로 글자 그대로 바꾼다.
     원래 표현이 답변에 없으면 근거 문장(evidence span)을 통째로 바꾼다.
+    결과가 원문에 비해 지나치게 커지면 ValueError (호출 측이 이 시도를 실패로 처리한다).
     """
     out = response
+    limit = MAX_GROWTH * len(response) + GROWTH_SLACK
     for c in sorted(changes, key=lambda c: -len(c["raw_value"])):
         rep = c["to_label"] if c["action"] == GENERALIZE else SUPPRESSED_MARK
         if c["raw_value"] and c["raw_value"] in out:
             out = out.replace(c["raw_value"], rep)
-            continue
-        for sp in sorted(c["evidence_spans"], key=len, reverse=True):
-            if sp and sp in out:
-                out = out.replace(sp, rep)
+        else:
+            for sp in sorted(normalize_spans(c["evidence_spans"]), key=len, reverse=True):
+                if len(sp) >= MIN_SPAN_CHARS and sp in out:
+                    out = out.replace(sp, rep)
+        if len(out) > limit:
+            raise ValueError("deterministic rewrite grew beyond limit")
     return re.sub(r"(\(비공개\)[\s,]*){2,}", SUPPRESSED_MARK + " ", out)
