@@ -35,7 +35,7 @@ from medical.prompts import PROMPTS, REFUSAL_TEXT
 from medical.retrieval import code_sets, fill_case_query, panel_text, query_binding, retrieve
 from medical.obs_fix import fix_observations
 from medical.rule_extract import rule_observations
-from medical.tracking import Case, CaseView, commit_view, known_cases_json, parse_json, view_of
+from medical.tracking import Case, CaseView, commit_view, known_cases_json, parse_json, unattributed_sensitive, view_of
 
 ARMS = ("C0", "C1", "C1S")
 
@@ -195,6 +195,9 @@ class ArmRun:
             return Release(raw, raw_view, "RAW", [], [], [], 1.0 if n_dec else None, 0)
         if not raw_ok:
             return Release(REFUSAL_TEXT, _empty_view(), "REFUSAL_EXTRACTION_FAILED", [], [], [], None, 0)
+        # [수정본] 사례 번호 없는 대상 정보는 k 검사를 받지 않으므로 내보내지 않는다 (fail-closed)
+        if unattributed_sensitive(raw_view):
+            return Release(REFUSAL_TEXT, _empty_view(), "REFUSAL_UNATTRIBUTED", [], [], [], 0.0, 0)
         d = self.ctx.defender
         plans = [d.plan_case(ref, self._basis(ref), raw_view.disclosures[ref], raw_view.sources[ref]) for ref in raw_view.case_refs]
         decisions = [x for p in plans for x in p.decisions]

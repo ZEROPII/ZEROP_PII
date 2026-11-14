@@ -8,7 +8,6 @@ import pytest
 from medical.tracking import view_of
 
 
-@pytest.mark.xfail(strict=True, reason="UNCLEAR 민감 공개 fail-closed 미구현 (버그). 구현 후 xfail 제거")
 def test_unattributed_diagnosis_is_flagged(nz):
     from medical.tracking import unattributed_sensitive
     resp = "이 환자는 Diabetes mellitus type 2 진단을 받았습니다."

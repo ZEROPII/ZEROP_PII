@@ -95,6 +95,15 @@ def fix_subject(o: dict[str, Any], ref: str, query: str) -> dict[str, Any]:
     return o
 
 
+def unattributed_sensitive(view: CaseView) -> bool:
+    """[수정본] 사례 번호 없는(UNCLEAR) 관찰 중 질의 환자가 아닌 대상의 정보가 하나라도 있으면 True.
+
+    UNCLEAR는 k 계산과 검증에서 빠지므로, 이런 공개는 검사 없이 내보내면 안 된다 (fail-closed).
+    subject=OTHER(질의 환자 본인 정보)인 UNCLEAR는 막지 않는다.
+    """
+    return any(o.get("subject") != "OTHER" for o in view.normalized.get(UNCLEAR, []))
+
+
 def view_of(observations: list[dict[str, Any]], response: str, query: str, nz: Normalizer) -> CaseView:
     by_case: dict[str, list[dict[str, Any]]] = collections.OrderedDict()
     for o in observations:
