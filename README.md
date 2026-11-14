@@ -10,7 +10,7 @@
   <img src="https://img.shields.io/badge/React-18-0b7a75?style=flat-square&logo=react&logoColor=white" alt="React 18">
   <img src="https://img.shields.io/badge/macOS-데스크톱_앱-555555?style=flat-square&logo=apple&logoColor=white" alt="macOS 데스크톱 앱">
   <img src="https://img.shields.io/badge/HL7_FHIR-R4-0b7a75?style=flat-square" alt="FHIR R4">
-  <img src="https://img.shields.io/badge/tests-pytest_1033_·_vitest_104-16a374?style=flat-square" alt="pytest 1033 passed, vitest 104 passed">
+  <img src="https://img.shields.io/badge/tests-pytest_955_passed_·_vitest_104-16a374?style=flat-square" alt="pytest 955 passed, vitest 104 passed">
   <a href="docs/adr/README.md"><img src="https://img.shields.io/badge/ADR-44건-5b5bf0?style=flat-square" alt="ADR 44건"></a>
 </p>
 
@@ -376,7 +376,7 @@ python scripts/verify_result3.py runs/medical/sim_staged                        
 
 ```bash
 pip install -r webdemo/requirements.txt   # 서버 · 실험 코드 · pytest (루트 requirements.txt 포함)
-python -m pytest -q                   # 1033 passed, 3 skipped (LLM 호출은 가짜 HTTP 세션으로 대체)
+python -m pytest -q                   # 955 passed, 7 skipped, fpdf 미설치 시 test_triage_report 1건 실패 (LLM 호출은 가짜 HTTP 세션으로 대체)
 cd frontend && npm ci && npm test     # vitest 104 passed
 ```
 
