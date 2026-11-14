@@ -3,8 +3,7 @@
 # [고정]  seed, top_k_retrieval(결정 D3), k_req(위험 기준 5)
 # [개발 기본값, 파일럿에서 고정] budget_B, 재시도 한도, trials_per_cell, query_pool_ratio
 # [미정]  min_confidence(τ_commit), 모델 5개
-# Defender 기준 generalize_threshold=5 · suppress_threshold=4 [수정본: 3→4, 관행 k<5와 맞추기 위함].
-# risk_defender(이유진) 기본값은 3이며, 이 저장소는 그와 다른 값을 쓴다 (결정 자료 참고).
+# Defender 기준 generalize_threshold=5 · suppress_threshold=3 은 risk_defender(이유진) 기본값과 같다.
 
 from __future__ import annotations
 
@@ -57,7 +56,7 @@ class MedicalConfig:
     exclude_patients: tuple[str, ...] = ()
     # Defender (risk_defender 이유진 정책과 같은 기준)
     generalize_threshold: int = 5
-    suppress_threshold: int = 4
+    suppress_threshold: int = 3
     max_rewrite_retries: int = 2
     # 실행 갈래: C0 방어 없음 / C1 누적 State Defender / C1S 매 턴 빈 State로 판정하는 대조군
     arms: tuple[str, ...] = ("C0", "C1", "C1S")
