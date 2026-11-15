@@ -43,6 +43,11 @@ def parse_json(text: str, kind: str) -> Any:
                 continue
             if isinstance(v, want) and v and (kind == "object" or all(isinstance(x, dict) for x in v)):
                 return v
+    # 3) [수정본] 설명 문장이 붙은 경우라도, 닫힌 코드 울타리 안의 빈 배열(```json [] ```)은 '관찰 없음'으로 받는다.
+    #    (개발자 확인: 추출기가 빈 배열 뒤에 설명을 붙여 REFUSAL_EXTRACTION_FAILED가 났다.)
+    #    울타리가 닫히지 않았거나 "evidence_spans": [] 같은 본문 속 빈 배열은 여기서도 받지 않는다.
+    if kind == "array" and re.search(r"```(?:json)?\s*\[\s*\]\s*```", text):
+        return []
     return None
 
 
