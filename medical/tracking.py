@@ -128,6 +128,36 @@ def split_list_observation(o: dict[str, Any], response: str) -> list[dict[str, A
     return [dict(o, raw_value=p, evidence_spans=[p] if p in response else [], split_from=raw) for p in parts]
 
 
+# [수정본] 단독으로는 뜻이 없는 수식어 조각(예: "Acute pharyngitis, unspecified"의 unspecified, "…, 지속"의 지속).
+# 이런 조각은 앞 조각에 다시 붙여, 이름이 쪼개져 차단되지 않게 한다.
+MODIFIER_PIECES = {"unspecified", "nos", "other", "지속", "지속적", "초기", "unknown"}
+
+
+def merge_modifier_pieces(pieces: list[dict[str, Any]], response: str) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for p in pieces:
+        raw = str(p.get("raw_value") or "")
+        if out and raw.lower() in MODIFIER_PIECES:
+            prev = out[-1]
+            joined = f"{prev.get('raw_value')}, {raw}"
+            out[-1] = dict(prev, raw_value=joined, evidence_spans=[joined] if joined in response else [])
+        else:
+            out.append(p)
+    return out
+
+
+def split_if_unmapped(o: dict[str, Any], response: str, query: str, nz: Normalizer) -> list[dict[str, Any]]:
+    """[수정본] 값 전체를 먼저 정규화한다. 전체가 MAPPED(또는 UNMAPPED가 아님)이면 나누지 않는다.
+    전체가 UNMAPPED일 때만 나누고, 수식어 조각은 앞 조각에 붙인다.
+    """
+    raw = str(o.get("raw_value") or "")
+    # 값 전체의 정규화 결과는 값 자체를 근거로 본다 (응답 속 문장과 쉼표 표기가 다를 수 있어 응답 검사로 PENDING이 되는 것을 피함)
+    whole = nz.normalize(dict(o, evidence_spans=[raw]), raw, query)
+    if whole.get("mapping_status") != "UNMAPPED":
+        return [o]
+    return merge_modifier_pieces(split_list_observation(o, response), response)
+
+
 def unmapped_attributed(view: CaseView) -> bool:
     """[수정본] 사례에 귀속됐지만 정규화에 실패(UNMAPPED)한 질의 외 관찰이 있으면 True. 이런 공개는 k에 안 들어가므로 내보내지 않는다.
 
@@ -141,7 +171,7 @@ def view_of(observations: list[dict[str, Any]], response: str, query: str, nz: N
     for o in observations:
         ref = case_ref_of(o)
         o = fix_subject(dict(o, case_ref=ref) if ref != UNCLEAR else o, ref, query)
-        pieces = split_list_observation(o, response) if ref != UNCLEAR and o.get("subject") != "OTHER" else [o]
+        pieces = split_if_unmapped(o, response, query, nz) if ref != UNCLEAR and o.get("subject") != "OTHER" else [o]
         by_case.setdefault(ref, []).extend(pieces)
     normalized, disclosures, sources, partial = {}, {}, {}, {}
     for ref, os_ in by_case.items():
