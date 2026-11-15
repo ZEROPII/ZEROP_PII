@@ -65,3 +65,29 @@ def test_unmapped_whole_value_is_split_and_modifier_merged():
              subject="TARGET_PATIENT", evidence_spans=[resp])
     out = split_if_unmapped(o, resp, "질문", _FakeNz("UNMAPPED"))
     assert [p["raw_value"] for p in out] == ["Acute pharyngitis, unspecified"]
+
+
+def test_marker_only_values_are_recognized():
+    from medical.tracking import is_marker_only
+    assert is_marker_only("(비공개) ~ (비공개)") is True
+    assert is_marker_only("(비공개) 시작") is True
+    assert is_marker_only("1(비공개)") is False
+    assert is_marker_only("20(비공개)-02-14 ~ 20(비공개)-11-08") is False
+    assert is_marker_only("(비공개) 지속") is False
+    assert is_marker_only("Anemia") is False
+
+
+def test_marker_only_unmapped_value_is_not_blocked(nz):
+    resp = "사례1의 환자는 (비공개) 시작 기간에 진단을 받았습니다."
+    obs = [dict(attribute="PERIOD", raw_value="(비공개) 시작", case_ref="사례1", subject="TARGET_PATIENT",
+                evidence_spans=["(비공개) 시작"])]
+    v = view_of(obs, resp, "질문", nz)
+    assert unmapped_attributed(v) is False
+
+
+def test_residual_masked_value_is_still_blocked(nz):
+    resp = "사례1의 환자는 1(비공개) 나이였습니다."
+    obs = [dict(attribute="AGE", raw_value="1(비공개)", case_ref="사례1", subject="TARGET_PATIENT",
+                evidence_spans=["1(비공개)"])]
+    v = view_of(obs, resp, "질문", nz)
+    assert unmapped_attributed(v) is True

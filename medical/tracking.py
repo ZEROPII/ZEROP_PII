@@ -158,6 +158,24 @@ def split_if_unmapped(o: dict[str, Any], response: str, query: str, nz: Normaliz
     return merge_modifier_pieces(split_list_observation(o, response), response)
 
 
+SUPPRESSED_MARKER = "(비공개)"
+CONNECTOR_WORDS = ("시작", "이후", "부터", "~")
+
+
+def is_marker_only(raw: Any) -> bool:
+    """[수정본] 값이 방어의 숨김 표시와 연결어만으로 이루어졌으면 True (가린 뒤 정보가 남지 않음).
+
+    예: "(비공개) ~ (비공개)", "(비공개) 시작" → True.
+    "1(비공개)", "20(비공개)-02-14 ~ 20(비공개)-11-08", "(비공개) 지속" → False (숫자나 글자가 남음).
+    """
+    s = str(raw or "")
+    if SUPPRESSED_MARKER not in s:
+        return False
+    for w in (SUPPRESSED_MARKER, *CONNECTOR_WORDS):
+        s = s.replace(w, "")
+    return not any(ch.isalnum() for ch in s)
+
+
 def unmapped_attributed(view: CaseView) -> bool:
     """[수정본] 사례에 귀속됐지만 정규화에 실패(UNMAPPED)한 질의 외 관찰이 있으면 True. 이런 공개는 k에 안 들어가므로 내보내지 않는다.
 
@@ -189,6 +207,7 @@ def view_of(observations: list[dict[str, Any]], response: str, query: str, nz: N
                    nz.normalize(dict(o, case_ref="사례0"), response, query).get("mapping_status") == "MAPPED"
                    for o in normalized.get(UNCLEAR, []))
     unmapped = any(o.get("mapping_status") == "UNMAPPED" and o.get("subject") != "OTHER"
+                   and not is_marker_only(o.get("raw_value"))
                    for ref, os_ in normalized.items() if ref != UNCLEAR for o in os_)
     return CaseView(normalized, disclosures, sources, partial, list(by_case), mappable, unmapped)
 
