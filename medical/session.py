@@ -30,7 +30,7 @@ from medical.bundle.kcalc import KCalc
 from medical.bundle.normalize_bridge import Normalizer
 from medical.config import MedicalConfig
 from medical.data import MedicalData
-from medical.defense import MedicalDefender, format_changes
+from medical.defense import GENERALIZE, MedicalDefender, format_changes
 from medical.llm import RoleLLM
 from medical.prompts import PROMPTS, REFUSAL_TEXT
 from medical.retrieval import code_sets, fill_case_query, panel_text, query_binding, retrieve
@@ -50,6 +50,20 @@ def release_need(suppress_threshold: int, k_before: int) -> int:
     이미 k_before <= s 인 케이스는 악화되지 않는 것만 요구한다(need = k_before).
     """
     return min(suppress_threshold + 1, k_before)
+
+
+def _add_planned(v: CaseView, text: str, planned: list[tuple[str, str, dict[str, Any], dict[str, Any]]]) -> CaseView:
+    """답변 안에 계획된 범주어가 있으면 그 계획된 공개를 사례의 공개에 더한다 (k는 계획된 노드로 센다).
+    정규화기가 범주어를 못 읽어도 공개가 빠지지 않게 하고, 더해진 공개는 State에도 들어가 다음 턴 k에 반영된다.
+    공개를 더하면 k는 줄거나 같으므로 항상 보수적이다. 이미 같은 속성·노드가 있으면 다시 더하지 않는다."""
+    for ref, label, dis, src in planned:
+        if ref not in v.disclosures or label not in text:
+            continue
+        if any(x["attribute"] == dis["attribute"] and x["node_id"] == dis["node_id"] for x in v.disclosures[ref]):
+            continue
+        v.disclosures[ref].append(dis)
+        v.sources[ref].append(dict(src, raw_value=label, evidence_spans=[label], case_ref=ref))
+    return v
 
 
 @dataclass
@@ -174,12 +188,16 @@ class ArmRun:
         return []          # C1S: 빈 State. (C0은 게이트를 거치지 않는다)
 
     def _verify(self, query: str, text: str) -> tuple[bool, CaseView | None, list[dict[str, Any]], int]:
+        # planned: (사례, 범주어, 계획된 공개, 원 Observation) — 방어가 이번 답변에 넣기로 정한 넓힌 공개 (release가 채운다)
+        planned = getattr(self, "_planned", [])
+        allowed = frozenset((ref, label) for ref, label, _, _ in planned)
         obs, ok, n = extract(self.ctx, query, text, known_cases_json(self.cases, self.order), self.p.docs)
         if not ok:
             return False, None, [dict(reason="EXTRACTION_FAILED")], n
-        v = view_of(obs, text, query, self.ctx.nz)
+        v = view_of(obs, text, query, self.ctx.nz, allowed)
         if unmapped_attributed(v):
             return False, v, [dict(reason="UNMAPPED_ATTRIBUTED")], n
+        v = _add_planned(v, text, planned)
         checks, passed = [], True
         for ref in v.case_refs:
             basis = self._basis(ref)
@@ -207,6 +225,10 @@ class ArmRun:
         d = self.ctx.defender
         plans = [d.plan_case(ref, self._basis(ref), raw_view.disclosures[ref], raw_view.sources[ref]) for ref in raw_view.case_refs]
         decisions = [x for p in plans for x in p.decisions]
+        # [수정본] 방어가 넓히기로 정한 공개 (범주어 · 계획된 노드). 검증이 이 범주어를 막지 않고, k는 계획된 노드로 센다
+        planned = [(p.ref, self.ctx.data.label(x.to_node), dict(x.disclosure, node_id=x.to_node), x.source)
+                   for p in plans for x in p.decisions if x.action == GENERALIZE]
+        self._planned = planned
         changes = d.change_lines(plans)
         plan_dicts = [p.as_dict() for p in plans]
         # 이미 위험 상태(누적 k ≤ g)인데 이번 답변에 고칠 새 공개가 없으면 원문을 내보내지 않는다 (거절)

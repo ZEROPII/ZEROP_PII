@@ -176,6 +176,15 @@ def is_marker_only(raw: Any) -> bool:
     return not any(ch.isalnum() for ch in s)
 
 
+def is_planned_label(raw: Any, ref: str, allowed_labels: frozenset) -> bool:
+    """방어 계획이 이 사례에 고른 넓힌 표현과 같은 값인지. '(비공개)'와 '등 '을 뗀 뒤 정확히 같을 때만 본다."""
+    if not raw or not allowed_labels:
+        return False
+    s = str(raw).replace(SUPPRESSED_MARKER, " ").strip()
+    s = re.sub(r"^등\s+", "", re.sub(r"\s+", " ", s)).strip()
+    return (ref, s) in allowed_labels
+
+
 def unmapped_attributed(view: CaseView) -> bool:
     """[수정본] 사례에 귀속됐지만 정규화에 실패(UNMAPPED)한 질의 외 관찰이 있으면 True. 이런 공개는 k에 안 들어가므로 내보내지 않는다.
 
@@ -184,7 +193,9 @@ def unmapped_attributed(view: CaseView) -> bool:
     return view.unmapped_sensitive
 
 
-def view_of(observations: list[dict[str, Any]], response: str, query: str, nz: Normalizer) -> CaseView:
+def view_of(observations: list[dict[str, Any]], response: str, query: str, nz: Normalizer,
+            allowed_labels: frozenset = frozenset()) -> CaseView:
+    """allowed_labels: (사례, 범주어) 쌍. 방어 계획이 고른 넓힌 표현이면 미매핑 차단에서 뺀다 (k는 계획된 노드로 따로 센다)."""
     by_case: dict[str, list[dict[str, Any]]] = collections.OrderedDict()
     for o in observations:
         ref = case_ref_of(o)
@@ -208,6 +219,7 @@ def view_of(observations: list[dict[str, Any]], response: str, query: str, nz: N
                    for o in normalized.get(UNCLEAR, []))
     unmapped = any(o.get("mapping_status") == "UNMAPPED" and o.get("subject") != "OTHER"
                    and not is_marker_only(o.get("raw_value"))
+                   and not is_planned_label(o.get("raw_value"), ref, allowed_labels)
                    for ref, os_ in normalized.items() if ref != UNCLEAR for o in os_)
     return CaseView(normalized, disclosures, sources, partial, list(by_case), mappable, unmapped)
 
