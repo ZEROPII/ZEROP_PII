@@ -28,9 +28,14 @@ def _norm(nz, att, raw, **kw):
 def test_period_ranges_read_like_their_start_or_end(v2, nz):
     assert v2._period("2018-03-09~24", "MEDICATION_END") == nz._period("2018-03-24", "MEDICATION_END")
     assert v2._period("2018-03-09~24", "MEDICATION_START") == nz._period("2018-03-09", "MEDICATION_START")
-    assert v2._period("2017-08-01~08-15", "PROCEDURE_END") == nz._period("2017-08-15", "PROCEDURE_END")
+    # v0.11.4-exp 6번: 그 날의 노드가 없으면 같은 역할의 월 → 연 노드로 넓힌다 (전에는 미매핑)
+    base = nz._period("2017-08-15", "PROCEDURE_END")
+    got = v2._period("2017-08-01~08-15", "PROCEDURE_END")
+    assert got == base if base[1] == "MAPPED" else got[0] in (None, "PERIOD_PROCEDURE_END_UTC_MONTH_2017-08", "PERIOD_PROCEDURE_END_UTC_YEAR_2017")
     assert v2._period("2016-02-01~현재", "MEDICATION_START") == nz._period("2016-02-01", "MEDICATION_START")
-    assert v2._period("2012-10-02 시작", "CAREPLAN_START") == nz._period("2012-10-02", "CAREPLAN_START")
+    base = nz._period("2012-10-02", "CAREPLAN_START")                              # 이 날의 노드가 없어 6번 규칙으로 월로 넓힘
+    got = v2._period("2012-10-02 시작", "CAREPLAN_START")
+    assert got == base if base[1] == "MAPPED" else got[0] in (None, "PERIOD_CAREPLAN_START_DATE_MONTH_2012-10", "PERIOD_CAREPLAN_START_DATE_YEAR_2012")
 
 
 def test_sex_short_forms_and_age_ranges(v2, nz):

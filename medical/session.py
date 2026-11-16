@@ -30,13 +30,13 @@ from medical.bundle.kcalc import KCalc
 from medical.bundle.normalize_bridge import Normalizer
 from medical.config import MedicalConfig
 from medical.data import MedicalData
-from medical.defense import GENERALIZE, MedicalDefender, format_changes
+from medical.defense import GENERALIZE, SUPPRESS, MedicalDefender, format_changes
 from medical.llm import RoleLLM
 from medical.prompts import PROMPTS, REFUSAL_TEXT
 from medical.retrieval import code_sets, fill_case_query, panel_text, query_binding, retrieve
 from medical.obs_fix import fix_observations
 from medical.rule_extract import rule_observations
-from medical.tracking import Case, CaseView, commit_view, known_cases_json, parse_json, unattributed_sensitive, unmapped_attributed, view_of
+from medical.tracking import UNCLEAR, Case, CaseView, commit_view, known_cases_json, parse_json, unattributed_sensitive, unmapped_attributed, view_of
 
 ARMS = ("C0", "C1", "C1S")
 
@@ -197,6 +197,9 @@ class ArmRun:
         v = view_of(obs, text, query, self.ctx.nz, allowed)
         if unmapped_attributed(v):
             return False, v, [dict(reason="UNMAPPED_ATTRIBUTED")], n
+        # [실험] 원 응답의 번호 없는 대상 정보를 막지 않고 가리게 했으므로, 고친 답에 남아 있으면 다시 확인에서 막는다 (연구 하네스만)
+        if type(self) is ArmRun and unattributed_sensitive(v):
+            return False, v, [dict(reason="UNATTRIBUTED_LEFT")], n
         v = _add_planned(v, text, planned)
         checks, passed = [], True
         for ref in v.case_refs:
@@ -209,6 +212,76 @@ class ArmRun:
             passed = passed and good
         return passed, v, checks, n
 
+    def _mask_list(self, v: CaseView, text: str, query: str, why: str) -> list[dict[str, Any]]:
+        """[실험] k 검사를 받을 수 없는 값을 '(비공개)'로 바꿀 변경 목록으로 만든다.
+        UNMAPPED: 사례에 귀속됐지만 정규화 안 된 질의 외 값 ('(비공개)'만 남은 값 제외).
+        UNATTRIBUTED: 사례 번호 없는(UNCLEAR) 질의 외 값 중 사례에 귀속하면 k 입력이 될 값."""
+        from medical.tracking import is_marker_only
+        out, seen = [], set()
+        if why == "UNMAPPED":
+            items = [(ref, o) for ref, os_ in v.normalized.items() if ref not in ("OTHER", UNCLEAR) for o in os_
+                     if o.get("mapping_status") == "UNMAPPED" and o.get("subject") != "OTHER" and not is_marker_only(o.get("raw_value"))]
+        else:
+            items = [("사례 미지정", o) for o in v.normalized.get(UNCLEAR, [])
+                     if o.get("subject") != "OTHER"
+                     and self.ctx.nz.normalize(dict(o, case_ref="사례0"), text, query).get("mapping_status") == "MAPPED"]
+        for ref, o in items:
+            raw = str(o.get("raw_value") or "").strip()
+            if len(raw) < 2 or raw in seen or "(비공개)" in raw:
+                continue
+            seen.add(raw)
+            out.append(dict(case_ref=ref, attribute=o.get("attribute"), raw_value=raw, evidence_spans=o.get("evidence_spans") or [],
+                            action=SUPPRESS, to_label=None, mask=why))
+        return out
+
+    def _leftover_changes(self, plans, v: CaseView, checks: list[dict[str, Any]], text: str = "", query: str = "") -> list[dict[str, Any]]:
+        """[실험] 다시 확인이 실패한 까닭이 된 값을 고른다 (그 값을 '(비공개)'로 바꿀 변경 목록).
+        - 귀속된 미매핑(UNMAPPED_ATTRIBUTED): 사례에 귀속됐지만 정규화되지 않은 값 (계획 범주어 · '(비공개)'만 남은 값 제외)
+        - k 미달 사례: 계획이 내보내도 된다고 한 노드(허용 · 넓힌 노드)와 같거나 그보다 넓은 값이 아닌 것
+          (빼기로 정한 값이 남은 것, 넓히기로 정했는데 원래 값 그대로인 것, 다시 추출에서 새로 잡힌 계획 밖 값)
+        """
+        from medical.tracking import is_marker_only
+        out, seen = [], set()
+
+        def add(src):
+            raw = str(src.get("raw_value") or "").strip()
+            if len(raw) < 2 or raw in seen or "(비공개)" in raw:
+                return
+            seen.add(raw)
+            out.append(dict(case_ref=src.get("case_ref"), attribute=src.get("attribute"), raw_value=raw,
+                            evidence_spans=src.get("evidence_spans") or [], action=SUPPRESS, to_label=None))
+
+        if any(c.get("reason") == "UNATTRIBUTED_LEFT" for c in checks):
+            for m in self._mask_list(v, text, query, "UNATTRIBUTED"):
+                add(m)
+            return out
+        if any(c.get("reason") == "UNMAPPED_ATTRIBUTED" for c in checks):
+            planned = {(r, lbl) for r, lbl, _, _ in getattr(self, "_planned", [])}
+            for ref, os_ in v.normalized.items():
+                if ref in ("OTHER", "UNCLEAR"):
+                    continue
+                for o in os_:
+                    if o.get("mapping_status") == "UNMAPPED" and o.get("subject") != "OTHER" \
+                            and not is_marker_only(o.get("raw_value")) and (ref, str(o.get("raw_value")).strip()) not in planned:
+                        add(o)
+            return out
+        failed = {c["ref"] for c in checks if c.get("k_after") is not None and not c.get("ok")}
+        anc, node = self.ctx.nz._anc, self.ctx.nz.node
+        for p in plans:
+            if p.ref not in failed:
+                continue
+            # 계획이 내보내도 된다고 한 노드: 허용한 원래 노드 · 넓힌 노드. 그 노드이거나 그보다 넓은 값은 계획 안이다.
+            ok_nodes = {x.disclosure["node_id"] for x in p.decisions if x.action not in (SUPPRESS, GENERALIZE)} | \
+                       {x.to_node for x in p.decisions if x.action == GENERALIZE and x.to_node}
+            ok_nodes = {n for n in ok_nodes if n in node}
+            for d, src in zip(v.disclosures.get(p.ref, []), v.sources.get(p.ref, [])):
+                n = d.get("node_id")
+                if not n or n not in node:
+                    continue
+                if not any(n == a or n in anc(a) for a in ok_nodes):   # 빼기 · 넓히기 안 된 값, 계획에 없던 값
+                    add(src)
+        return out
+
     def release(self, query: str, raw: str, raw_obs: list[dict[str, Any]], raw_ok: bool) -> Release:
         raw_view = view_of(raw_obs, raw, query, self.ctx.nz)
         if self.arm == "C0":
@@ -216,12 +289,22 @@ class ArmRun:
             return Release(raw, raw_view, "RAW", [], [], [], 1.0 if n_dec else None, 0)
         if not raw_ok:
             return Release(REFUSAL_TEXT, _empty_view(), "REFUSAL_EXTRACTION_FAILED", [], [], [], None, 0)
+        # [실험 exp/turn0-normalize] 연구 하네스(ArmRun)에서는 '하나라도 모르면 답 전체 거절' 대신 그 값만 가린다.
+        # k 검사를 받지 못하는 값(사례 번호 없는 대상 정보 · 귀속됐지만 정규화 안 된 값)을 '(비공개)'로 바꿀 목록에 넣고,
+        # 나머지는 평소대로 판정 · 재작성 · 다시 확인한다. 가린 값이 고친 답에 남으면 다시 확인이 막는다(fail-closed는 그대로).
+        # 제품(webdemo의 RuledArmRun)은 원래대로 답 전체를 거절한다.
+        masks: list[dict[str, Any]] = []
+        mask_ok = type(self) is ArmRun
         # [수정본] 사례 번호 없는 대상 정보는 k 검사를 받지 않으므로 내보내지 않는다 (fail-closed)
         if unattributed_sensitive(raw_view):
-            return Release(REFUSAL_TEXT, _empty_view(), "REFUSAL_UNATTRIBUTED", [], [], [], 0.0, 0)
+            if not mask_ok:
+                return Release(REFUSAL_TEXT, _empty_view(), "REFUSAL_UNATTRIBUTED", [], [], [], 0.0, 0)
+            masks += self._mask_list(raw_view, raw, query, "UNATTRIBUTED")
         # [수정본] 사례에 귀속됐지만 정규화에 실패한 공개는 k 검사를 받지 못하므로 내보내지 않는다 (fail-closed)
         if unmapped_attributed(raw_view):
-            return Release(REFUSAL_TEXT, _empty_view(), "REFUSAL_UNMAPPED", [], [], [], 0.0, 0)
+            if not mask_ok:
+                return Release(REFUSAL_TEXT, _empty_view(), "REFUSAL_UNMAPPED", [], [], [], 0.0, 0)
+            masks += self._mask_list(raw_view, raw, query, "UNMAPPED")
         d = self.ctx.defender
         plans = [d.plan_case(ref, self._basis(ref), raw_view.disclosures[ref], raw_view.sources[ref]) for ref in raw_view.case_refs]
         decisions = [x for p in plans for x in p.decisions]
@@ -230,14 +313,16 @@ class ArmRun:
                    for p in plans for x in p.decisions if x.action == GENERALIZE]
         self._planned = planned
         changes = d.change_lines(plans)
+        seen_raw = {c["raw_value"] for c in changes}
+        changes += [m for m in masks if m["raw_value"] not in seen_raw]
         plan_dicts = [p.as_dict() for p in plans]
         # 이미 위험 상태(누적 k ≤ g)인데 이번 답변에 고칠 새 공개가 없으면 원문을 내보내지 않는다 (거절)
         if any(p.risky and not p.decisions for p in plans):
             return Release(REFUSAL_TEXT, _empty_view(), "REFUSAL", plan_dicts, [], [], 0.0, 0)
         if not changes:
             return Release(raw, raw_view, "RAW", plan_dicts, [], [], 1.0 if decisions else None, 0)
-        util = round(sum(x.utility for x in decisions) / len(decisions), 4)
-        attempts, n_ext = [], 0
+        util = round(sum(x.utility for x in decisions) / len(decisions), 4) if decisions else None
+        attempts, n_ext, failed = [], 0, []
         candidates = [("REWRITTEN", None)] * self.ctx.cfg.max_rewrite_retries + [("REWRITTEN_FALLBACK", "deterministic")]
         for mode, kind in candidates:
             if kind is None:
@@ -255,6 +340,32 @@ class ArmRun:
             attempts.append(dict(mode=mode, text=text, ok=ok, checks=checks))
             if ok and v is not None:
                 return Release(text, v, mode, plan_dicts, changes, attempts, util, n_ext)
+            if v is not None:
+                failed.append((mode, text, v, checks))
+        # [실험 exp/turn0-normalize] 모든 시도가 다시 확인에서 막히면, 거절하기 전에 마지막 재작성 답 → 글자 그대로 바꾼 답 순으로
+        # 다시 확인 추출이 짚은 '남은 값'(빼기 · 넓히기 안 된 값, 계획 밖 값, 귀속된 미매핑)만 '(비공개)'로 바꾸고 한 번 더 확인한다.
+        # 글을 더 가리기만 하므로 k는 같거나 커진다. 추가 호출은 많아야 추출 2번.
+        # 연구 하네스(ArmRun)에서만 쓴다. 제품(webdemo의 RuledArmRun)은 다시 확인 실패 때 자기 방식(사례 빼기 · 재시도 안내)을 쓴다.
+        from medical.defense import apply_changes_deterministic
+        order = [f for f in reversed(failed) if f[0] == "REWRITTEN"][:1] + [f for f in failed if f[0] == "REWRITTEN_FALLBACK"][:1]
+        if type(self) is not ArmRun:
+            order = []
+        for mode, text, v, checks in order:
+            patch = self._leftover_changes(plans, v, checks, text, query)
+            if not patch:
+                continue
+            try:
+                text2 = apply_changes_deterministic(text, patch)
+            except ValueError:
+                continue
+            if not text2 or text2 == text:
+                continue
+            ok2, v2, checks2, n2 = self._verify(query, text2)
+            n_ext += n2
+            attempts.append(dict(mode="REWRITTEN_PATCHED", text=text2, ok=ok2, checks=checks2, patched_from=mode,
+                                 patched=[c["raw_value"] for c in patch]))
+            if ok2 and v2 is not None:
+                return Release(text2, v2, "REWRITTEN_PATCHED", plan_dicts, changes, attempts, util, n_ext)
         return Release(REFUSAL_TEXT, _empty_view(), "REFUSAL", plan_dicts, changes, attempts, 0.0 if decisions else None, n_ext)
 
     # ── 한 턴 ───────────────────────────────────────────────
