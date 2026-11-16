@@ -303,9 +303,16 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--mode", choices=["efficiency", "exploration"], default="efficiency")
     ap.add_argument("--budget", type=int, default=10)
     ap.add_argument("--quiet", action="store_true")
+    # [실험 v4] 판정 기준을 바꿔 모의 실행 (기본은 MedicalConfig: g=5 s=4, widen_first 없음).
+    #   이전 발표 수치(옵션 A)는 --suppress-threshold 3, 억제 전 넓히기는 --widen-first PERIOD,AGE
+    ap.add_argument("--generalize-threshold", type=int, default=MedicalConfig.generalize_threshold)
+    ap.add_argument("--suppress-threshold", type=int, default=MedicalConfig.suppress_threshold)
+    ap.add_argument("--widen-first", default=",".join(MedicalConfig.widen_first))
     a = ap.parse_args(argv)
     data = MedicalData()
-    cfg = MedicalConfig(arms=tuple(x for x in a.arms.split(",") if x), fuzzer=a.fuzzer, mode=a.mode, budget_B=a.budget)
+    cfg = MedicalConfig(arms=tuple(x for x in a.arms.split(",") if x), fuzzer=a.fuzzer, mode=a.mode, budget_B=a.budget,
+                        generalize_threshold=a.generalize_threshold, suppress_threshold=a.suppress_threshold,
+                        widen_first=tuple(x.strip() for x in a.widen_first.split(",") if x.strip()))
     llm = OracleRoleLLM(data=data, profile=a.profile)
     out = Path(a.out)
     run_experiment(cfg, llm, out, data=data, planner=plan_all(a.per_type, cfg.seed),

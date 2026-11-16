@@ -152,7 +152,7 @@ def test_clinic_contract_shapes(client):
     wr = {r["caseId"]: r for r in client.get(f"/api/watch/{w}/risk-states").json()}
     assert wr["case-1"]["k"] == 6 and wr["case-1"]["riskLevel"] == "safe"
     wp = client.get(f"/api/watch/{w}/protection-policy").json()
-    assert (wp["arm"], wp["minK"], wp["suppressK"]) == ("C1", 5, 3)
+    assert (wp["arm"], wp["minK"], wp["suppressK"]) == ("C1", 5, 4)            # [v4] 하한 s=4 (k>=5만 공개)
     assert client.get(f"/api/watch/{w}/cases/case-1/policy-decision").json()["currentK"] == 6
     assert client.get("/api/monitor/policy").json()["minK"] == 5
     h = client.get("/api/health").json()

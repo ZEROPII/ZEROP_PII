@@ -27,6 +27,7 @@ def _cfg(a: argparse.Namespace) -> MedicalConfig:
     return MedicalConfig(arms=tuple(x.strip() for x in a.arms.split(",") if x.strip()), trials_per_cell=a.trials_per_cell,
                          documents=a.docs, mode=a.mode, budget_B=a.budget, models=models, k_req=a.k_req,
                          generalize_threshold=a.generalize_threshold, suppress_threshold=a.suppress_threshold,
+                         widen_first=tuple(x.strip() for x in (a.widen_first or "").split(",") if x.strip()),
                          main_experiment=a.main_experiment, rule_extract=a.rule_extract, normalizer=a.normalizer,
                          exclude_patients=_excluded(a.exclude_patients))
 
@@ -58,8 +59,11 @@ def main(argv: list[str] | None = None) -> int:
     rn.add_argument("--mode", choices=["efficiency", "exploration"], default="efficiency")
     rn.add_argument("--budget", type=int, default=10)
     rn.add_argument("--k-req", type=int, default=5)
-    rn.add_argument("--generalize-threshold", type=int, default=5)
-    rn.add_argument("--suppress-threshold", type=int, default=3)
+    rn.add_argument("--generalize-threshold", type=int, default=MedicalConfig.generalize_threshold)
+    rn.add_argument("--widen-first", default=",".join(MedicalConfig.widen_first),
+                    help="원래 값의 k가 s 이하여도 억제 전에 넓혀 볼 단서 종류 (예: PERIOD,AGE). 기본은 쓰지 않음")
+    rn.add_argument("--suppress-threshold", type=int, default=MedicalConfig.suppress_threshold,
+                    help="판정 하한 s (기본 4: k>=5만 허용. 3이면 옵션 A, 대체 허용 k>=4)")
     rn.add_argument("--main-experiment", action="store_true")
     rn.add_argument("--rule-extract", action="store_true", help="LLM 추출 바로잡기 + 나이 · 날짜 · 나열 귀속 규칙 추출 (medical/obs_fix.py, rule_extract.py)")
     rn.add_argument("--normalizer", choices=["v1", "v2"], default="v2", help="v2 = 묶음 정규화 + medical/normalize_ext.py, v1 = 묶음 그대로")

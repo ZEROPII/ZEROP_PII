@@ -2,7 +2,7 @@
 #
 # 쓰는 것 (모두 medical/ 그대로, 수정 없음)
 #   사례 검색 retrieval · 결정적 응답기 OracleRoleLLM(대상 AI·추출기·재작성기) · 정규화 normalize_bridge ·
-#   사건 단위 k GroupRepairKC(kcalc) · Defender(risk_defender 정책 5·3) · Seed v0.13 · 피드백 선택(fuzzer/feedback.py)
+#   사건 단위 k GroupRepairKC(kcalc) · Defender(risk_defender 정책 5·4, [실험 v4] 이전 5·3) · Seed v0.13 · 피드백 선택(fuzzer/feedback.py)
 #
 # 대화 하나(세션) = 질의 환자 1명 × 조회 유형 1개. 세 조건 C0·C1·C1S를 같은 질문으로 나란히 진행한다.
 #   - 질문은 의료진 화면이 고른 Seed 또는 퍼저가 고른 Seed. 화면에 보이는 조건(기본 C1)의 공개 상태로 후보를 만든다.

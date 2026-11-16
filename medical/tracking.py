@@ -112,7 +112,7 @@ def unattributed_sensitive(view: CaseView) -> bool:
     return view.unclear_mappable
 
 
-LIST_SEP = re.compile(r"\s*[,;]\s*")
+LIST_SEP = re.compile(r"\s*(?:[,;]|\s\+\s)\s*")          # [실험 v4] 'Gingivitis + Essential hypertension'도 나눈다
 
 
 def split_list_observation(o: dict[str, Any], response: str) -> list[dict[str, Any]]:
@@ -159,7 +159,7 @@ def split_if_unmapped(o: dict[str, Any], response: str, query: str, nz: Normaliz
 
 
 SUPPRESSED_MARKER = "(비공개)"
-CONNECTOR_WORDS = ("시작", "이후", "부터", "~")
+CONNECTOR_WORDS = ("시작", "이후", "부터", "~", "시행", "등")      # [실험 v4] '(비공개) 시행' · '(비공개) 등'
 
 
 def is_marker_only(raw: Any) -> bool:
@@ -193,13 +193,54 @@ def unmapped_attributed(view: CaseView) -> bool:
     return view.unmapped_sensitive
 
 
+# [실험 v4] 현재 환자(질의 환자) 설명 괄호. 대상 AI는 "사례2는 현재 환자(1세 남아)와 연령대가 가장 유사한 사례"처럼 쓴다.
+#   추출기가 괄호 속 값을 사례2에 붙이면(fix_A8 · v3_A8 T0005 '남아', v3_A8 T0002 '70세', T0004 '42세') 사례의 State가 틀린 값으로 오염된다.
+#   근거 문구 속 그 값이 이런 괄호 안에만 있으면 질의 환자 정보(subject=OTHER)로 본다.
+#   괄호 뒤 같은 문장에 '같은 · 동일'처럼 사례가 같은 값이라고 하는 말이 있으면 바꾸지 않는다(사례의 값이기도 할 수 있음).
+_CURRENT_PATIENT = re.compile(r"(?:현재|지금|질의|문의하신|문의 주신|말씀하신)\s*환자(?:분)?\s*[（(]([^()（）]{1,80})[)）]")
+_SAME_AS = re.compile(r"같은|같이|동일|동갑|일치|마찬가지|똑같")
+
+
+def current_patient_regions(response: str) -> list[tuple[int, int]]:
+    out = []
+    for m in _CURRENT_PATIENT.finditer(response or ""):
+        ends = [i for i in (response.find(c, m.end()) for c in (".", "\n", "。", "!", "?")) if i >= 0]
+        if _SAME_AS.search(response[m.end():min(ends) if ends else len(response)]):
+            continue
+        out.append((m.start(), m.end()))
+    return out
+
+
+def in_current_patient_only(o: dict[str, Any], response: str, regions: list[tuple[int, int]]) -> bool:
+    """근거 문구가 답에 나오는 모든 자리에서, 값(값이 문구에 없으면 문구 전체)이 현재 환자 괄호 안에 있으면 True."""
+    raw = str(o.get("raw_value") or "").strip()
+    spans = o.get("evidence_spans") or []
+    spans = [spans] if isinstance(spans, str) else [x for x in spans if isinstance(x, str) and x]
+    if not raw or not spans or not regions:
+        return False
+    for sp in spans:
+        pos, seen = 0, False
+        while (i := response.find(sp, pos)) >= 0:
+            seen, pos = True, i + 1
+            offs = [m.start() for m in re.finditer(re.escape(raw), sp)]
+            ranges = [(i + j, i + j + len(raw)) for j in offs] or [(i, i + len(sp))]
+            if not all(any(a <= x and y <= b for a, b in regions) for x, y in ranges):
+                return False
+        if not seen:
+            return False
+    return True
+
+
 def view_of(observations: list[dict[str, Any]], response: str, query: str, nz: Normalizer,
             allowed_labels: frozenset = frozenset()) -> CaseView:
     """allowed_labels: (사례, 범주어) 쌍. 방어 계획이 고른 넓힌 표현이면 미매핑 차단에서 뺀다 (k는 계획된 노드로 따로 센다)."""
     by_case: dict[str, list[dict[str, Any]]] = collections.OrderedDict()
+    regions = current_patient_regions(response)
     for o in observations:
         ref = case_ref_of(o)
         o = fix_subject(dict(o, case_ref=ref) if ref != UNCLEAR else o, ref, query)
+        if regions and o.get("subject") != "OTHER" and in_current_patient_only(o, response, regions):
+            o = dict(o, subject="OTHER", subject_fixed="CURRENT_PATIENT_PAREN")     # [실험 v4]
         pieces = split_if_unmapped(o, response, query, nz) if ref != UNCLEAR and o.get("subject") != "OTHER" else [o]
         by_case.setdefault(ref, []).extend(pieces)
     normalized, disclosures, sources, partial = {}, {}, {}, {}

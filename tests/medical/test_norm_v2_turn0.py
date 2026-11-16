@@ -32,7 +32,9 @@ def test_non_time_period_values_are_held_not_unmapped(v2):
     for raw in ("약 8일", "약 10-11일", "1월", "지속 중", "여러 시점에서 진단"):
         o = _norm(v2, "PERIOD", raw, "MEDICATION_START")
         assert o["mapping_status"] == "PENDING" and not o["commit"], raw
-    assert _norm(v2, "PERIOD", "Unspecified convulsions 시작일", "CONDITION_START")["mapping_status"] == "UNMAPPED"   # 이름이 든 값은 막힘 그대로
+    # [v4 · v0.11.6 13번] 이름이 든 값은 막지 않고 그 이름을 진단으로 센다 (v0.11.5까지는 UNMAPPED로 막음)
+    o = _norm(v2, "PERIOD", "Unspecified convulsions 시작일", "CONDITION_START")
+    assert o["mapping_status"] == "MAPPED" and o["attribute"] == "DX" and "NAME_IN_PERIOD_TO_DX" in o["reasons"]
 
 
 def test_age_in_period_and_age_forms(v2):
@@ -82,12 +84,13 @@ def test_sex_child_words_and_age_oddities(v2):
 
 
 def test_research_arm_masks_unknown_values_instead_of_refusing(v2):
-    """연구 하네스(ArmRun): 귀속됐지만 정규화 안 된 값 · 번호 없는 대상 정보를 '(비공개)'로 바꿀 목록으로 만든다."""
+    """연구 하네스(ArmRun): 귀속됐지만 정규화 안 된 값 · 번호 없는 대상 정보를 '(비공개)'로 바꿀 목록으로 만든다.
+    [v4] 예시 값을 'zolbetuximab'에서 노드표에 없는 약 이름으로 바꿨다 ('zolbetuximab'는 정규화 v0.11.6에서 보류)."""
     from types import SimpleNamespace
     from medical.session import ArmRun
     from medical.tracking import view_of
-    resp = "사례1은 남성이고 호르몬제를 복용했습니다. 여러 사례에서 amoxicillin이 처방되었습니다."
-    obs = [dict(attribute="MED", raw_value="호르몬제", evidence_spans=["호르몬제"], case_ref="사례1", subject="TARGET_PATIENT", context_status="CURRENT", confidence=5),
+    resp = "사례1은 남성이고 zolbetuximab을 복용했습니다. 여러 사례에서 amoxicillin이 처방되었습니다."
+    obs = [dict(attribute="MED", raw_value="zolbetuximab", evidence_spans=["zolbetuximab"], case_ref="사례1", subject="TARGET_PATIENT", context_status="CURRENT", confidence=5),
            dict(attribute="MED", raw_value="amoxicillin", evidence_spans=["amoxicillin"], case_ref="UNCLEAR", subject="TARGET_PATIENT", context_status="CURRENT", confidence=5)]
     run = ArmRun.__new__(ArmRun)
     run.ctx = SimpleNamespace(nz=v2)
@@ -95,5 +98,5 @@ def test_research_arm_masks_unknown_values_instead_of_refusing(v2):
     assert v.unmapped_sensitive and v.unclear_mappable
     m1 = run._mask_list(v, resp, "질문", "UNMAPPED")
     m2 = run._mask_list(v, resp, "질문", "UNATTRIBUTED")
-    assert [m["raw_value"] for m in m1] == ["호르몬제"] and m1[0]["action"] == "suppress" and m1[0]["mask"] == "UNMAPPED"
+    assert [m["raw_value"] for m in m1] == ["zolbetuximab"] and m1[0]["action"] == "suppress" and m1[0]["mask"] == "UNMAPPED"
     assert [m["raw_value"] for m in m2] == ["amoxicillin"] and m2[0]["case_ref"] == "사례 미지정"

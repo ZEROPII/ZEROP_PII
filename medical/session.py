@@ -30,7 +30,7 @@ from medical.bundle.kcalc import KCalc
 from medical.bundle.normalize_bridge import Normalizer
 from medical.config import MedicalConfig
 from medical.data import MedicalData
-from medical.defense import GENERALIZE, SUPPRESS, MedicalDefender, format_changes
+from medical.defense import GENERALIZE, SUPPRESS, MedicalDefender, capped_k, format_changes
 from medical.llm import RoleLLM
 from medical.prompts import PROMPTS, REFUSAL_TEXT
 from medical.retrieval import code_sets, fill_case_query, panel_text, query_binding, retrieve
@@ -49,6 +49,14 @@ def _plan_ok_nodes(plans: list[Any]) -> dict[str, set[str]]:
     return {p.ref: {x.disclosure["node_id"] for x in p.decisions if x.action not in (SUPPRESS, GENERALIZE)}
             | {x.to_node for x in p.decisions if x.action == GENERALIZE and x.to_node} for p in plans}
 
+
+
+class Basis(list):
+    """[실험 v4] 판정 기준 State(C1: 그 사례의 누적 공개)와 그 State의 실행 k 상한 k_cap(단조 보정, 없으면 None).
+    값이 더해지면 실제 후보는 줄거나 같다. 그런데 kcalc는 묶음 없는 값들을 '한 사건' · '따로'로 세어 작은 쪽을 쓰므로,
+    값이 늘어 '한 사건' 해석에 맞는 사람이 없어지면 '따로' 해석으로 넘어가 k가 커질 수 있다(v3_A8 T0005 사례5: 4 → 11).
+    연구 하네스(ArmRun)는 사례의 실행 k를 지난 턴 값보다 크게 세지 않고, 계획 · 다시 확인에서도 이 상한을 쓴다."""
+    k_cap: int | None = None
 
 
 def release_need(suppress_threshold: int, k_before: int) -> int:
@@ -191,9 +199,20 @@ class ArmRun:
 
     # ── 공개 게이트 ──────────────────────────────────────────
 
+    def _monotone(self) -> bool:
+        """[실험 v4] 단조 보정은 연구 하네스만 쓴다. 제품(webdemo RuledArmRun)은 ADR-0043(OwnStateKC)의 보정을 쓴다."""
+        return type(self) is ArmRun
+
+    def _k_cap(self, ref: str) -> int | None:
+        c = self.cases.get(ref) if self._monotone() else None
+        ks = [k for k in (c.k_hist if c is not None else []) if k > 0]
+        return min(ks) if ks else None
+
     def _basis(self, ref: str) -> list[dict[str, Any]]:
         if self.arm == "C1" and ref in self.cases:
-            return list(self.cases[ref].committed)
+            b = Basis(self.cases[ref].committed)
+            b.k_cap = self._k_cap(ref)
+            return b
         return []          # C1S: 빈 State. (C0은 게이트를 거치지 않는다)
 
     def _verify(self, query: str, text: str) -> tuple[bool, CaseView | None, list[dict[str, Any]], int]:
@@ -217,8 +236,9 @@ class ArmRun:
         checks, passed = [], True
         for ref in v.case_refs:
             basis = self._basis(ref)
-            k_bef = self.ctx.kc.k(basis)["k"] if basis else self.ctx.p_ref
-            k_aft = self.ctx.kc.k(basis + v.disclosures[ref])["k"] if v.disclosures[ref] else k_bef
+            cap = getattr(basis, "k_cap", None)            # [실험 v4] 단조 보정
+            k_bef = capped_k(self.ctx.kc.k(basis)["k"], cap) if basis else self.ctx.p_ref
+            k_aft = capped_k(self.ctx.kc.k(basis + v.disclosures[ref])["k"], cap) if v.disclosures[ref] else k_bef
             need = release_need(self.ctx.defender.s, k_bef)
             good = (k_aft >= need) if k_aft > 0 else (k_bef == 0)
             checks.append(dict(ref=ref, k_before=k_bef, k_after=k_aft, need=need, ok=good))
@@ -448,6 +468,9 @@ class ArmRun:
         for ref in self.order:
             c = self.cases[ref]
             res = self.ctx.kc.k(c.committed) if c.committed else {"k": self.ctx.p_ref, "flags": [], "state": {}}
+            cap = self._k_cap(ref)
+            if cap is not None and 0 < cap < res["k"]:                           # [실험 v4] 단조 보정
+                res = dict(res, k=cap, flags=list(res.get("flags", [])) + [f"MONOTONE_CAP {res['k']}->{cap}"])
             c.k_hist.append(res["k"])
             cases_out[ref] = dict(k=res["k"], k_candidate=cand_k.get(ref, res["k"]), flags=res["flags"], state=res.get("state", {}),
                                   partial=rel.view.partial.get(ref, False), normalized=rel.view.normalized.get(ref, []))

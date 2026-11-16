@@ -3,7 +3,8 @@
 # [고정]  seed, top_k_retrieval(결정 D3), k_req(위험 기준 5)
 # [개발 기본값, 파일럿에서 고정] budget_B, 재시도 한도, trials_per_cell, query_pool_ratio
 # [미정]  min_confidence(τ_commit), 모델 5개
-# Defender 기준 generalize_threshold=5 · suppress_threshold=3 은 risk_defender(이유진) 기본값과 같다.
+# Defender 기준 generalize_threshold=5 · suppress_threshold=4 (옵션 B, k_req=5와 같은 하한).
+# [실험 v4] 이전 기본값 s=3(옵션 A, risk_defender 이유진 기본값)은 계획기 대체 하한이 k=4라 k_req=5보다 낮았다. --suppress-threshold 3 으로 재현한다.
 
 from __future__ import annotations
 
@@ -54,9 +55,15 @@ class MedicalConfig:
     normalizer: str = "v2"
     # 질의 환자 빼기: 이전 실행(규칙을 만든 기록)의 질의 환자를 새 실행 계획에서 뺀다 (보류 검증용, 환자 id)
     exclude_patients: tuple[str, ...] = ()
-    # Defender (risk_defender 이유진 정책과 같은 기준)
+    # Defender (risk_defender 이유진 정책. [실험 v4] 하한 s=4: 대체 허용이 k>4, 곧 k>=5)
     generalize_threshold: int = 5
-    suppress_threshold: int = 3
+    suppress_threshold: int = 4
+    # [실험 v4] 원래 값의 k가 s 이하여도 억제 전에 넓혀 볼 단서 종류 (옵션, 기본 끔). 예: ("PERIOD", "AGE") — 날짜 → 월 → 연,
+    #   나이 → 5세 → 10세처럼 넓히면 k가 크게 오른다. 넓힌 값도 k>g, 없으면 k>s여야 내보낸다.
+    #   결정적 모의 실행(s=4)에서 C1 위반 0% 그대로, 개인 단서 가림 35.3% → 31.1%, trial 평균 유용성 0.561 → 0.592.
+    #   다만 risk_defender 판정 정책(이유진)을 바꾸고, 같은 정책을 쓰는 대조군 C1S가 더 많이 내보내 위반이 82.1% → 89.2%로 오르며
+    #   제품 시연 재생(T0014, 슬라이드 18)의 C1S 경과도 바뀐다. 그래서 기본값은 끄고 --widen-first PERIOD,AGE 로 켠다.
+    widen_first: tuple[str, ...] = ()
     max_rewrite_retries: int = 2
     # 실행 갈래: C0 방어 없음 / C1 누적 State Defender / C1S 매 턴 빈 State로 판정하는 대조군
     arms: tuple[str, ...] = ("C0", "C1", "C1S")

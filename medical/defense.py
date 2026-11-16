@@ -9,6 +9,11 @@
 #      - 5를 넘는 값이 없으면 처음으로 k > 3이 되는 값               → 그 값으로 일반화
 #      - 그것도 없으면                                              → 억제
 #      앞에서 허용·일반화한 값은 다음 공개를 판단할 때 State에 들어간 것으로 본다.
+# [실험 v4] 기본 하한 s=4 (MedicalConfig): 대체 허용도 k>4, 곧 k>=5만 내보낸다(k_req=5와 같은 하한). 위 (3)은 s=3일 때의 예다.
+# [실험 v4] widen_first에 든 단서 종류(옵션, 기본 없음. 예: PERIOD · AGE)는 원래 값의 k가 s 이하여도 억제하기 전에 넓혀 본다.
+#   날짜 → 월 → 연, 나이 → 5세 → 10세 구간처럼 넓히면 k가 크게 오르는 종류다. 넓힌 값도 k>g, 없으면 k>s여야 내보낸다(판정 기준은 같음).
+# [실험 v4] 단조 보정: 판정 기준 State(basis)가 실행 k 상한(k_cap)을 가지고 오면, 이 State에 값을 더한 k는 그 상한을 넘지 않게 센다
+#   (값이 더해지면 실제 후보는 줄거나 같다. medical/session.py Basis).
 # 바뀐 점은 k를 세는 방법뿐이다: 환자 프로필 대조(risk_defender.calculate_k) 대신 kcalc 사건 단위 계산.
 #   같은 사건 묶음의 진단·나이·날짜는 한 사건이 함께 만족해야 하고, 일반화도 그 사건의 값만 넓힌다.
 # 루트(ANY)까지 올라간 일반화는 제약이 없는 값이라 '말하지 않음'과 같다 → 억제로 기록한다 (설계 §4.21, §6.18).
@@ -28,6 +33,11 @@ from medical.data import MedicalData
 
 ALLOW, GENERALIZE, SUPPRESS = "allow", "generalize", "suppress"
 SUPPRESSED_MARK = "(비공개)"
+
+
+def capped_k(k: int, cap: int | None) -> int:
+    """[실험 v4] 단조 보정. 앞 상태의 실행 k(cap)보다 크게 세지 않는다. k=0(아무도 맞지 않음)은 그대로 둔다."""
+    return min(k, cap) if cap and k > 0 else k
 
 
 @dataclass
@@ -74,11 +84,13 @@ class CasePlan:
 
 
 class MedicalDefender:
-    def __init__(self, kc: KCalc, data: MedicalData, *, generalize_threshold: int = 5, suppress_threshold: int = 3) -> None:
+    def __init__(self, kc: KCalc, data: MedicalData, *, generalize_threshold: int = 5, suppress_threshold: int = 3,
+                 widen_first: tuple[str, ...] = ()) -> None:
         if suppress_threshold > generalize_threshold:
             raise ValueError("suppress_threshold는 generalize_threshold 이하여야 합니다.")
         self.kc, self.data = kc, data
         self.g, self.s = generalize_threshold, suppress_threshold
+        self.widen_first = tuple(widen_first)
 
     def risky(self, k: int) -> bool:
         return k <= self.g      # k = 0 포함 (risk_defender와 같은 판정)
@@ -88,7 +100,8 @@ class MedicalDefender:
         input : basis (판정 기준 State: C1은 그 사례의 누적 공개, C1S는 빈 목록), new (이번 답변의 공개), sources (new와 같은 순서의 Observation)
         output: CasePlan (공개마다 allow / generalize / suppress)
         """
-        k = lambda ds: self.kc.k(ds)["k"]
+        cap = getattr(basis, "k_cap", None)                 # [실험 v4] 단조 보정 (연구 하네스 C1만 넘긴다)
+        k = lambda ds: capped_k(self.kc.k(ds)["k"], cap)
         k_before = k(basis) if basis else len(self.kc.by_pat)
         k_proj = k(basis + new) if new else k_before
         # 누적 상태 기준: 새 공개가 없어도 이미 k ≤ g면 위험 (k_proj는 new가 없으면 k_before와 같다)
@@ -103,7 +116,7 @@ class MedicalDefender:
             max_steps = self.data.depth(node)
             k_raw = k(working + [d])
             chosen: str | None = None
-            if k_raw > self.s:
+            if k_raw > self.s or d["attribute"] in self.widen_first:     # [실험 v4] widen_first: 억제 전에 넓혀 본다
                 chain = self.data.anc(node)                 # [원래 값, 부모, …, 루트]
                 for cand in chain:
                     if k(working + [dict(d, node_id=cand)]) > self.g:

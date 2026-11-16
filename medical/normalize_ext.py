@@ -40,6 +40,28 @@ v0.11.5-exp [실험, 2026-11-16] — 한국어 의료 이름 사전(9-1번, 진�
   한국어 이름은 영어 이름으로 바꾼 뒤 영어로 말했을 때와 같은 규칙으로 찾는다. 사전에 없는 말은 그대로 미매핑이다
   (연구 하네스는 이런 값을 답 전체 거절 대신 그 값만 가린다: medical/session.py).
   성별 '여아' · '남아', 나이 칸의 연도 범위('1985-2025' → 보류), '48세 (진단 당시 37-42세)' → 앞의 나이.
+
+v0.11.6-exp [실험 v4, 2026-11-16] — fix_A8 · v3_A8 실행에서 사례에 귀속됐는데 정규화되지 않은 값 87개(귀속 관찰 4,469개 중 1.9%)를 보고
+넣은 규칙이다. 원칙은 같다: 기록보다 구체적으로 세지 않는다. 어느 노드인지 정할 수 없는 말은 막지 않고 보류(PENDING)한다.
+12. 기간 칸의 상대 기간('진단 후 약 2-3년 경과 후', '약 9년 6개월', '약 13년 후', '약 3년 간격') · 연대('1960년대')
+    → 보류. 날짜 노드가 없다(7번과 같음). '1984년부터 1993년까지' → '1984년~1993년'(1번 규칙).
+13. 기간 칸에 들어간 사건 이름('Chronic sinusitis, unspecified 진단 시작일') → 그 이름을 진단(없으면 시술)으로 센다.
+    v0.11.5까지는 막았다. 이름이 답에 나왔으므로 세는 쪽이 맞다. 이름도 못 찾으면 그대로 미매핑(막힘).
+14. 범주 이름: '고혈압 치료제' → ATC C, '호흡기 질환 치료제' → ATC R, '구강 건강 관련 약물' → ATC A01, '호흡기 질환' → ICD 10장,
+    '골절 관련 진단' → '골절'(ICD 19장), '전당뇨병' → Prediabetes, '전립선절제술' → prostatectomy, '투석' → hemodialysis(노드표의 투석 시술은 이것 하나).
+    여러 장 · 계통에 걸쳐 하나로 정할 수 없는 말('호흡기 감염'은 COVID-19가 22장, '대사 이상'은 전당뇨가 18장, '대사질환 약물',
+    '생검', '복부 시술', '약물 관리', 'unspecified', 'Oral Tablet')은 보류한다(5번 규칙에서 공통 상위가 뿌리인 경우와 같음).
+15. 관리 계획: 'Care plan for diabetes self-management' → 'diabetes self management plan', 뒤에 붙은 괄호 속 활동 목록
+    ('… 생활 습관 교육 (식이 조절, 스트레스 관리)')은 떼고 앞 이름으로 찾는다. 한국어 관리 계획 이름(당뇨병 자가 관리, 암 환자 종합 관리,
+    투석 치료 관리, 고혈압 관리를 위한 생활 습관 교육)을 더했다. 활동만 나열한 값('혈당 모니터링, 식이 관리, 정기적 검사')은 보류.
+    '무릎 골관절염의 진행 억제 및 기능 유지'처럼 목표 문장 앞에 진단 이름이 있으면 그 진단으로 센다.
+16. 지역 문장: 'Massachusetts 주 내 Watertown 지역' → Watertown, '매사추세츠 주' → Massachusetts,
+    '… Boston 인근 지역'처럼 도시 '근처'라고 한 말은 그 도시가 아니므로 주(Massachusetts)로만 센다.
+17. '(비공개)'를 뺀 나머지가 이름인 값('(비공개) 등 대사질환 약물')은 나머지를 정규화한다(숫자가 남는 값은 그대로 둔다).
+18. 이전 실행 9개(cmp_A · cmp_B · rev5)에서 남은 값: '진단 후 1-3년 내' · '2회 시행' → 보류, 'Ischemic heart disease 진단 후 6일' ·
+    '… 첫 시행일' · 'N NERVOUS SYSTEM DRUGS 첫 처방 시작일' → 이름을 진단 · 시술 · 약으로 센다, '60~70세대' → 시작 쪽 10세 구간(8-1번),
+    '기록에 명시된 거주지 정보 없음' → 보류, 'Injury' · '외상' → ICD 19장, 일반 낱말만으로 된 관리 계획('감염성 질환 관리',
+    '장기간 약물 관리 및 생활습관 교육') · '대수술' · '호르몬제' · 'anxiety management medication' → 보류.
 """
 from __future__ import annotations
 
@@ -47,7 +69,7 @@ import re
 
 from medical.bundle.normalize_bridge import Normalizer
 
-VERSION = "medical/normalize_ext v0.11.5-exp"
+VERSION = "medical/normalize_ext v0.11.6-exp"
 _TOKEN = re.compile(r"[a-z0-9]+(?:\.[0-9]+)?")
 _SEX = {"남": "남성", "남자": "남성", "여": "여성", "여자": "여성", "남아": "남성", "여아": "여성", "소년": "남성", "소녀": "여성",
         "남자아이": "남성", "여자아이": "여성", "남성 환자": "남성", "여성 환자": "여성"}
@@ -57,7 +79,8 @@ PARTIAL_ATTRS = ("DX", "PROC", "MED", "PLAN")
 KO_GENERAL = {
     "DX": {
         "고혈압": "DX_ICD_SECTION_I10-I1A", "당뇨": "DX_ICD_SECTION_E08-E13", "당뇨병": "DX_ICD_SECTION_E08-E13",
-        "골절": "DX_ICD_CHAPTER_19", "신부전": "DX_ICD_SECTION_N17-N19",
+        "골절": "DX_ICD_CHAPTER_19", "신부전": "DX_ICD_SECTION_N17-N19", "injury": "DX_ICD_CHAPTER_19", "외상": "DX_ICD_CHAPTER_19",
+        "부상": "DX_ICD_CHAPTER_19",
         "만성 신장병": "DX_ICD_SECTION_N17-N19", "심장질환": "DX_ICD_CHAPTER_9", "심장 질환": "DX_ICD_CHAPTER_9",
         "급성 기관지염": "DX_ICD_CODE_J20", "인후염": "DX_ICD_CODE_J02", "급성 인후염": "DX_ICD_CODE_J02",
         "연쇄구균성 인후염": "DX_ICD_CODE_J020", "대사증후군": "DX_ICD_CODE_E8881",
@@ -119,6 +142,8 @@ KO_EN = {
         "공복혈당장애": "Prediabetes", "급성 인두염": "Acute pharyngitis", "코로나19": "covid-19", "코로나": "covid-19",
         "요로감염": "urinary tract infection", "요로 감염": "urinary tract infection", "심부전": "heart failure", "협심증": "angina",
         "골절상": "Fracture of bone", "자궁외임신": "Tubal pregnancy", "유산": "miscarriage", "계류유산": "Blighted ovum",
+        # v0.11.6 (14)
+        "전당뇨병": "Prediabetes", "당뇨병 전 단계": "Prediabetes", "호흡기 질환": "DX_ICD_CHAPTER_10", "호흡기계 질환": "DX_ICD_CHAPTER_10",
     },
     "MED": {
         "아세트아미노펜": "acetaminophen", "타이레놀": "acetaminophen", "이부프로펜": "ibuprofen", "나프록센": "naproxen", "아목시실린": "amoxicillin",
@@ -136,15 +161,30 @@ KO_EN = {
         "이뇨제": "MED_ATC_C03", "베타차단제": "MED_ATC_C07", "흡입기": "MED_ATC_R03", "천식약": "MED_ATC_R03", "항우울제": "MED_ATC_N06A",
         "항불안제": "MED_ATC_N05B", "수면제": "MED_ATC_N05C", "피임약": "MED_ATC_G03A", "경구 피임약": "MED_ATC_G03A",
         "구강 건강 관리 약물": "MED_ATC_A01", "구강 관리 약물": "MED_ATC_A01", "마약성 진통제": "MED_ATC_N02A", "오피오이드": "MED_ATC_N02A",
+        # v0.11.6 (14). 끝의 '치료제 · 약물 · 약'은 떼고 찾는다(_ko_en)
+        "구강 건강 관련": "MED_ATC_A01", "구강 건강": "MED_ATC_A01", "구강 관련": "MED_ATC_A01", "고혈압": "MED_ATC_C",
+        "호흡기 질환": "MED_ATC_R", "호흡기": "MED_ATC_R", "호르몬 피임": "MED_ATC_G03A", "호르몬 피임제": "MED_ATC_G03A",
     },
     "PROC": {
         "관상동맥중재술": "coronary", "관상동맥 중재술": "coronary", "경피적 관상동맥 중재술": "coronary", "관상동맥 스텐트": "coronary", "발치": "extraction",
         "치아 발치": "extraction", "대장내시경": "colonoscopy", "대장 내시경": "colonoscopy", "혈액투석": "hemodialysis",
+        # v0.11.6 (14). 노드표의 투석 시술은 hemodialysis 하나다
+        "혈액 투석": "hemodialysis", "투석": "hemodialysis", "투석 치료": "hemodialysis", "전립선절제술": "prostatectomy",
+        "전립선 절제술": "prostatectomy", "근치적 전립선절제술": "prostatectomy",
     },
     "PLAN": {
-        "물리치료": "Physiotherapy", "호흡 치료": "Respiratory therapy", "호흡치료": "Respiratory therapy",
+        "물리치료": "Physiotherapy", "호흡 치료": "Respiratory therapy", "호흡치료": "Respiratory therapy", "호흡기 치료": "Respiratory therapy",
         "당뇨 자가관리": "Diabetes self management plan", "자가 관리": "Self-care interventions", "상처 관리": "wound care",
         "골절 관리": "fracture care", "화상 관리": "burn care",
+        # v0.11.6 (15)
+        "고혈압 관리를 위한 생활 습관 교육": "Lifestyle education regarding hypertension",
+        "고혈압 관리를 위한 생활습관 교육": "Lifestyle education regarding hypertension",
+        "고혈압 생활 습관 교육": "Lifestyle education regarding hypertension", "고혈압 생활습관 교육": "Lifestyle education regarding hypertension",
+        "당뇨병 자가 관리": "Diabetes self management plan", "당뇨병 자가관리": "Diabetes self management plan",
+        "당뇨 자가 관리": "Diabetes self management plan", "diabetes self-management": "Diabetes self management plan",
+        "암 환자 종합 관리": "Cancer care plan", "암 환자 관리": "Cancer care plan", "암 관리": "Cancer care plan",
+        "암 치료 관리": "Cancer care plan", "암 치료 계획": "Cancer care plan", "cancer management": "Cancer care plan",
+        "투석 치료 관리": "Dialysis care plan", "투석 관리": "Dialysis care plan", "투석 치료 계획": "Dialysis care plan",
     },
 }
 _COMPOSITE = re.compile(r"\s*(?:·|&|\s및\s|/)\s*")
@@ -154,6 +194,33 @@ _AGE_AT = re.compile(r"^(\d{1,3})\s*세(\s*(당시|때|시|무렵|경))?(\s*(진
 _AGE_SPAN = re.compile(r"^(\d{1,3})\s*세?\s*(?:[~\-]|부터)\s*(\d{1,3})\s*세\s*(사이|까지)?(\s*(당시|때|에))?$")
 _NOT_PLACE = {"기록됨", "비공개", "확인됨", "기록 있음", "정보 없음", "미상"}
 _NOT_SPECIFIC = {"기타", "기타 질환", "기타 진단", "여러 질환", "다수", "없음", "미상"}
+# v0.11.6 (12 · 14 · 15) 어느 노드인지 정할 수 없는 말 → 보류
+_REL_DURATION = re.compile(r"^((진단|발병|시작|처방|시술|수술|치료|투약)\s*(후|뒤|이후)\s*)?(약|대략|총|최소|최대)?\s*"
+                           r"\d{1,3}(\.\d+)?(\s*[-~]\s*\d{1,3}(\.\d+)?)?\s*(년|개월|달|주|주일|일|시간)"
+                           r"(\s*\d{1,2}\s*(개월|달))?(간|째)?(\s*(동안|정도|경과|간격|후|뒤|만에|이후|이상|이내|내|안|가량|후에|뒤에))*$")
+_COUNT_ONLY = re.compile(r"^\d{1,3}\s*(회|번|차례)(\s*(시행|처방|진단|방문|입원|수술))?$")                     # 18. '2회 시행'
+_NO_PLACE = re.compile(r"(정보|기록|거주지)\s*(없음|미상|불명)|명시되지|확인되지|알 수 없")                    # 18.
+_DECADE = re.compile(r"^\d{3}0\s*년대(\s*(초|중|후|말|초반|중반|후반))?$")
+_NAME_IN_PERIOD = re.compile(r"^(?P<name>.*[A-Za-z가-힣].*?)\s*(첫\s*)?(진단\s*|발병\s*|처방\s*|시술\s*|시행\s*|수술\s*)?"
+                             r"(시작일|진단일|발병일|처방일|시술일|시행일|수술일|시작|날짜|시점|일자|당일)$")
+_NAME_THEN = re.compile(r"^(?P<name>.*[A-Za-z가-힣].*?)\s*(진단|발병|처방|시술|시행|수술|시작)\s*(?P<rest>(후|뒤|이후)\s*.*)$")   # 18.
+_PLAN_GENERIC = {"장기간", "장기", "약물", "관리", "생활습관", "생활", "습관", "교육", "단계적", "단계적으로", "시술", "치료", "계획",
+                 "통한", "통해", "구강", "감염성", "질환", "종합", "정기적", "추적", "모니터링", "환자", "지속적", "지속적인", "필요", "기반"}
+_VAGUE = {
+    "DX": {"호흡기 감염", "호흡기감염", "호흡기 감염증", "대사 이상", "대사이상", "대사질환", "대사 질환", "unspecified", "nos",
+           "만성 질환", "만성질환", "기저 질환", "기저질환", "감염", "감염증", "염증"},
+    "MED": {"대사질환 약물", "대사 질환 약물", "대사질환 치료제", "약물 관리", "약물 치료", "약물", "투약", "복약 관리",
+            "oral tablet", "oral solution", "oral capsule", "chewable tablet", "injectable solution", "장기 복용 약물",
+            "호르몬제", "호르몬 약물", "호르몬 요법", "anxiety management medication", "anxiety medication"},
+    "PROC": {"복부 시술", "생검", "조직 검사", "조직검사", "시술", "수술", "검사", "처치", "대수술", "수술적 치료", "외과 수술",
+             "외과적 치료"},
+    "PLAN": {"관리 계획", "치료 계획", "케어 플랜", "care plan"},
+}
+_PLAN_ACTIVITY = {"혈당 모니터링", "식이 관리", "식이 조절", "식이 제한", "식이요법", "약물 복용 순응도 관리", "복약 순응도 관리",
+                  "정기적 검사", "정기 검사", "정기적 모니터링", "운동", "운동 요법", "운동 및 체중 관리", "체중 관리", "스트레스 관리",
+                  "투석 일정 준수", "수분 및 전해질 관리", "부작용 관리", "치료 계획 수립 및 추적", "생활 습관 교육", "금연", "절주",
+                  "혈압 모니터링", "자가 모니터링", "교육", "추적 관찰", "정기 추적"}
+_KO_STATE = {"매사추세츠": "Massachusetts", "매사추세츠주": "Massachusetts"}
 _SUPPRESSED = "(비공개)"
 
 
@@ -169,6 +236,8 @@ class NormalizerV2(Normalizer):
             s = re.sub(r"[\s,]*(지속\s*중|지속|계속|현재까지)$", "", s)                  # 6. '… 시작, 지속'
             s = re.sub(r"^(\d{4})(년)?\s*-\s*(\d{4})(년)?$", r"\1~\3", s)               # 6. '2016-2022'
             s = re.sub(r"^(\d{4}년\s*\d{1,2}월)\s*-\s*(\d{4}년\s*\d{1,2}월)$", r"\1~\2", s)
+            s = re.sub(r"^(.+?\d)\s*(?:년)?\s*부터\s*(\d.+?)\s*까지$", lambda m: m.group(0) if "~" in m.group(0) else
+                       re.sub(r"\s*부터\s*", "~", re.sub(r"\s*까지$", "", m.group(0))), s)          # 12. '1984년부터 1993년까지'
         s = re.sub(r"\s*(시작|부터|이후|경부터)$", "", s)
         if "~" in s and role and _SUPPRESSED not in s:
             left, right = [x.strip() for x in s.split("~", 1)]
@@ -227,6 +296,13 @@ class NormalizerV2(Normalizer):
                     yield part.strip(), "COMPOSITE_SPLIT"
         if att == "PLAN" and re.search(r"\s+care plan$", s, re.I):                     # 10.
             yield re.sub(r"\s+care plan$", "", s, flags=re.I), "CARE_PLAN_SUFFIX"
+        m = re.match(r"^care plan for\s+(.+)$", s, re.I) if att == "PLAN" else None      # 15. 'Care plan for diabetes self-management'
+        if m:
+            x = m.group(1).strip()
+            for cand in (x, x.replace("-", " ")):
+                yield cand + " plan", "CARE_PLAN_FOR"
+                yield cand + " care plan", "CARE_PLAN_FOR"
+                yield cand, "CARE_PLAN_FOR"
         if att == "SEX" and s in _SEX:
             yield _SEX[s], "SEX_SHORT"
 
@@ -235,6 +311,10 @@ class NormalizerV2(Normalizer):
         r0 = str(raw).strip()
         if _SUPPRESSED not in r0:                                                       # 8.
             r0 = re.sub(r"(\d)0세대$", r"\g<1>0대", r0)
+            m10 = re.fullmatch(r"(\d)0\s*(?:세|대)?\s*[~\-]\s*(\d)0\s*(?:세)?대", r0)                           # 18. '60~70세대'
+            if m10 and int(m10.group(1)) < int(m10.group(2)):
+                self._age_note = "AGE_RANGE_START"
+                return f"AGE10_{m10.group(1)}0"
             r0 = re.sub(r"(\d)\s*(세|살)\s*([~\-])", r"\1\3", r0)
             r0 = re.sub(r"^(\d{1,3})\s*(세|살)?\s*부터\s*(\d{1,3})\s*(세|살)?\s*(사이|까지)?$", r"\1-\3세", r0)
             m = re.fullmatch(r"(약|대략)\s*(\d{1,3})\s*(세|살)|(\d{1,3})\s*(세|살)\s*(경|쯤|무렵|전후)", r0)
@@ -269,9 +349,13 @@ class NormalizerV2(Normalizer):
         if _SUPPRESSED in s:
             return set(), ""
         parts = [s] + ([p.strip() for p in _COMPOSITE.split(s) if p.strip()] if _COMPOSITE.search(s) else [])
+        m = re.match(r"^care plan for\s+(.+)$", s, re.I) if att == "PLAN" else None       # 15.
+        if m:
+            parts[1:1] = [m.group(1).strip(), m.group(1).strip().replace("-", " ")]
         for part in parts:                                                              # 9. 한국어 일반 이름
             key = part.lower()
-            nid = KO_GENERAL.get(att, {}).get(key) or KO_GENERAL.get(att, {}).get(re.sub(r"\s*(시술|치료|처치)$", "", key))
+            nid = (KO_GENERAL.get(att, {}).get(key) or KO_GENERAL.get(att, {}).get(re.sub(r"\s*(시술|치료|처치)$", "", key))
+                   or KO_GENERAL.get(att, {}).get(re.sub(r"\s*관련(\s*(진단|질환|병력|문제))?$", "", key)))     # 14. '골절 관련 진단'
             if nid and nid in self.node:
                 return {nid}, "KO_GENERAL" if part == s else "KO_GENERAL_PART"
         for part in parts:                                                              # 9-1. 한국어 의료 이름 → 영어 이름
@@ -349,7 +433,107 @@ class NormalizerV2(Normalizer):
                 if out2.get("mapping_status") == "MAPPED":
                     out2["reasons"].append(f"ATTR_{att}_TO_{other}")
                     return out2
+        if out.get("mapping_status") == "UNMAPPED":
+            alt = self._v0116(ob, att, raw, response_text, query_text)
+            if alt is not None:
+                return alt
         return out
+
+    # 12 ~ 17. v0.11.6: 기존 규칙으로 미매핑일 때만 본다 (이미 읽히는 값은 바꾸지 않는다) -----------------------------
+    def _v0116(self, ob, att, raw, response_text, query_text):
+        sub = lambda **kw: self.normalize(dict(ob, **kw), response_text, query_text)
+
+        def keep(out, why):
+            out = dict(out)
+            out["raw_value"] = ob.get("raw_value")
+            out["reasons"] = list(out.get("reasons") or []) + [why]
+            return out
+
+        if _SUPPRESSED in raw:                                                           # 17.
+            rest = self._suppressed_rest(raw) if att in PARTIAL_ATTRS else None
+            if rest:
+                out = sub(raw_value=rest)
+                if out.get("mapping_status") != "UNMAPPED":
+                    return keep(out, "SUPPRESSED_REST")
+            return None
+        if att == "PERIOD":                                                              # 12 · 13.
+            if _REL_DURATION.match(raw):
+                return self._hold(ob, response_text, query_text, "DURATION_NOT_DATE")
+            if _DECADE.match(raw):
+                return self._hold(ob, response_text, query_text, "DECADE_NO_NODE")
+            if _COUNT_ONLY.match(raw):
+                return self._hold(ob, response_text, query_text, "COUNT_NOT_DATE")
+            m = _NAME_IN_PERIOD.match(raw)
+            m2 = _NAME_THEN.match(raw)
+            if m2 and not _REL_DURATION.match(re.sub(r"^(후|뒤|이후)\s*", "진단 후 ", m2.group("rest"))):
+                m2 = None
+            for mm in (m, m2):
+                if mm is None or re.search(r"\d{4}", raw):
+                    continue
+                name = re.sub(r"[,\s]*\b(unspecified|nos)$", "", mm.group("name").strip(" ,"), flags=re.I).strip(" ,")
+                for other in ("DX", "PROC", "MED"):
+                    out = sub(attribute=other, raw_value=name)
+                    if out.get("mapping_status") == "MAPPED":
+                        return keep(out, f"NAME_IN_PERIOD_TO_{other}")
+            return None
+        if att == "REGION":                                                              # 16.
+            if _NO_PLACE.search(raw):
+                return self._hold(ob, response_text, query_text, "NOT_A_PLACE")
+            fixed = self._region_text(raw)
+            if fixed and fixed != raw:
+                out = super().normalize(dict(ob, raw_value=fixed), response_text, query_text)
+                if out.get("mapping_status") == "MAPPED":
+                    return keep(out, "REGION_SENTENCE")
+            return None
+        if att not in PARTIAL_ATTRS:
+            return None
+        if re.sub(r"\s+", " ", raw.lower()) in _VAGUE.get(att, ()):                       # 14.
+            return self._hold(ob, response_text, query_text, "VAGUE_CATEGORY")
+        if att == "PLAN":                                                                # 15.
+            head = re.sub(r"\s*[（(][^()（）]*[)）]\s*$", "", raw).strip()
+            parts = [p.strip() for p in re.split(r"\s*(?:,|;|·|\s및\s)\s*", head) if p.strip()]
+            if parts and all(p in _PLAN_ACTIVITY for p in parts):
+                return self._hold(ob, response_text, query_text, "PLAN_ACTIVITY_ONLY")
+            words = [re.sub(r"(을|를|의|과|와|으로|로|및|에|을 통한)$", "", w) for w in re.split(r"[\s,·()（）]+", raw) if w]
+            if words and all(w in _PLAN_GENERIC or w in ("및", "") for w in words):                       # 18.
+                return self._hold(ob, response_text, query_text, "PLAN_GENERIC_WORDS")
+            if head and head != raw:
+                out = sub(raw_value=head)
+                if out.get("mapping_status") == "MAPPED":
+                    return keep(out, "PLAN_PAREN_DETAIL")
+            m = re.match(r"^(.+?)의\s*(진행\s*억제|진행\s*예방|악화\s*방지|관리|치료|예방|조절|기능\s*유지|재발\s*방지)", raw)
+            if m:
+                out = sub(attribute="DX", raw_value=m.group(1).strip())
+                if out.get("mapping_status") == "MAPPED":
+                    return keep(out, "DX_IN_PLAN_GOAL")
+        return None
+
+    @staticmethod
+    def _suppressed_rest(raw):
+        """17. '(비공개) 등 대사질환 약물' → '대사질환 약물'. 숫자가 남거나 연결어뿐이면 None (그대로 둔다)."""
+        s = re.sub(r"\s+", " ", raw.replace(_SUPPRESSED, " ")).strip(" ,·")
+        s = re.sub(r"^(등|및|외|포함)\s+", "", s).strip(" ,·")
+        m = re.fullmatch(r"[（(]\s*([^()（）]+?)\s*[)）]", s)                                         # '(비공개) (호흡기 치료)'
+        if m:
+            s = m.group(1).strip()
+        if not s or re.search(r"\d", s) or s in ("시작", "이후", "부터", "시행", "등", "~", "지속", "종료"):
+            return None
+        return s
+
+    @staticmethod
+    def _region_text(raw):
+        """16. 'Massachusetts 주 내 Watertown 지역' → 'Watertown, Massachusetts', '매사추세츠 주' → 'Massachusetts',
+        '… Boston 인근 지역' → 'Massachusetts' (도시 '근처'는 그 도시가 아니다)."""
+        s = raw.strip()
+        for ko, en in _KO_STATE.items():
+            s = s.replace(ko, en)
+        near = bool(re.search(r"인근|근처|주변|부근|근교", s))
+        s = re.sub(r"\s*(지역|일대|인근|근처|주변|부근|근교)\s*", " ", s).strip()
+        m = re.fullmatch(r"(?P<state>[A-Za-z][A-Za-z ]*?)\s*주\s*(?:내|의)?\s*(?P<city>[A-Za-z][A-Za-z .'-]*?)?\s*", s)
+        if m:
+            state, city = m.group("state").strip(), (m.group("city") or "").strip()
+            return f"{city}, {state}" if city and not near else state
+        return None if near else (s if s != raw.strip() else None)
 
     def _hold(self, ob, response_text, query_text, why):
         """시간 · 나이 · 장소 값이 없는 말은 보류(PENDING): 근거 · 대상 확인은 원래 순서대로 먼저 한다."""

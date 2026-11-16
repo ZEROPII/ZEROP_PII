@@ -77,10 +77,14 @@ def build_context(cfg: MedicalConfig, llm: RoleLLM, out: Path, *, paths: Medical
     versions = dict(ontology_version="v0.10", matching_rule_version="kcalc v0.9.1 / normalize_bridge v0.11.1" + (f" + {NORM_EXT_VERSION}" if cfg.normalizer == "v2" else ""),
                     reference_version=f"events:{_sha(paths.events)[:12]}|split_seed:{cfg.seed}|ratio:{cfg.query_pool_ratio}|P_ref:{len(store)}",
                     seed_registry="v0.13-med", case_query_registry="v0.2-med", harness="medical v0.2 (bundle harness_reference v0.2 + C1/C1S)",
-                    defender=f"risk_defender policy g={cfg.generalize_threshold} s={cfg.suppress_threshold} on kcalc", rewriter=REWRITER_VERSION, prompts=PROMPT_VERSION,
-                    event_grouping="repair v1 (묶음 단독 k=0이면 나눔, 단독 불일치 값은 k에서 제외) + v3-exp 작은 k 해석(실행 k만)")
+                    defender=f"risk_defender policy g={cfg.generalize_threshold} s={cfg.suppress_threshold} on kcalc"
+                             + (f" + v4-exp widen_first={','.join(cfg.widen_first)}" if cfg.widen_first else ""),
+                    rewriter=REWRITER_VERSION, prompts=PROMPT_VERSION,
+                    event_grouping="repair v1 (묶음 단독 k=0이면 나눔, 단독 불일치 값은 k에서 제외) + v3-exp 작은 k 해석(실행 k만)"
+                                   " + v4-exp 단조 보정(연구 하네스 실행 k만)")
     ctx = Context(cfg=cfg, data=data, kc=kc, nz=nz,
-                  defender=MedicalDefender(kc, data, generalize_threshold=cfg.generalize_threshold, suppress_threshold=cfg.suppress_threshold),
+                  defender=MedicalDefender(kc, data, generalize_threshold=cfg.generalize_threshold, suppress_threshold=cfg.suppress_threshold,
+                                           widen_first=cfg.widen_first),
                   docs=docs, store_sets={p: code_sets(data.by_pat[p]) for p in store},
                   seeds=load_seeds(paths, cfg.main_experiment), case_queries=load_case_queries(paths, cfg.main_experiment),
                   llm=llm, versions=versions)
