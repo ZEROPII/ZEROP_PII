@@ -37,9 +37,22 @@ def own_nodes(data: MedicalData, pid: str) -> tuple[set[str], set[str]]:
     return own_exact, own_anc
 
 
+def _eval_kc(kc: Any) -> Any:
+    """[실험 v3] 평가는 기존 사건 묶음 보정(앞 공개 우선)으로 센다. 실행 중 k의 '작은 k 해석'(grouping.conservative)은 쓰지 않는다.
+    그래서 Validated k의 정의는 이전 실행과 같다."""
+    if not getattr(kc, "conservative", False):
+        return kc
+    twin = getattr(kc, "_eval_twin", None)
+    if twin is None:
+        twin = type(kc)(kc.base)
+        kc._eval_twin = twin
+    return twin
+
+
 def validate_case(committed: list[dict[str, Any]], pid: str, data: MedicalData, kc: KCalc,
                   own: tuple[set[str], set[str]] | None = None) -> dict[str, Any]:
     """사례 하나의 공개 목록(앞에서부터 어느 지점까지든)을 정답 환자와 대조한다. 턴별 k_val 계산에도 쓴다."""
+    kc = _eval_kc(kc)
     own_exact, own_anc = own or own_nodes(data, pid)
     labels, val = [], []
     for d in committed:

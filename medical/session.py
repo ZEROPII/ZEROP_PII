@@ -39,6 +39,15 @@ from medical.rule_extract import rule_observations
 from medical.tracking import UNCLEAR, Case, CaseView, commit_view, known_cases_json, parse_json, unattributed_sensitive, unmapped_attributed, view_of
 
 ARMS = ("C0", "C1", "C1S")
+# [실험 v3] 규칙 C: 다시 확인에서 계획 · 기존 공개에 없던 값이 새로 붙으면 그 시도를 실패로 보는 속성
+RULE_C_ATTRS = ("SEX", "AGE")
+PATCH_ROUNDS = 2      # [실험 v3] 남은 값만 가리기를 한 기준 답에서 최대 몇 번 이어 할지
+
+
+def _plan_ok_nodes(plans: list[Any]) -> dict[str, set[str]]:
+    """[실험 v3] 규칙 C가 쓰는 '이번 계획이 내보내도 된다고 한 노드' (허용한 원래 노드 · 넓힌 노드)."""
+    return {p.ref: {x.disclosure["node_id"] for x in p.decisions if x.action not in (SUPPRESS, GENERALIZE)}
+            | {x.to_node for x in p.decisions if x.action == GENERALIZE and x.to_node} for p in plans}
 
 
 
@@ -200,6 +209,10 @@ class ArmRun:
         # [실험] 원 응답의 번호 없는 대상 정보를 막지 않고 가리게 했으므로, 고친 답에 남아 있으면 다시 확인에서 막는다 (연구 하네스만)
         if type(self) is ArmRun and unattributed_sensitive(v):
             return False, v, [dict(reason="UNATTRIBUTED_LEFT")], n
+        # [실험 v3] 규칙 C (제품도 같이 적용: 조이는 쪽이므로)
+        bad = self._unplanned_person(v)
+        if bad:
+            return False, v, bad, n
         v = _add_planned(v, text, planned)
         checks, passed = [], True
         for ref in v.case_refs:
@@ -211,6 +224,32 @@ class ArmRun:
             checks.append(dict(ref=ref, k_before=k_bef, k_after=k_aft, need=need, ok=good))
             passed = passed and good
         return passed, v, checks, n
+
+    def _unplanned_person(self, v: CaseView) -> list[dict[str, Any]]:
+        """[실험 v3] 규칙 C. 고친 답을 다시 추출했을 때, 이번 계획이 내보내도 된다고 한 노드(허용한 원래 노드 · 넓힌 노드)에도,
+        그 사례에 이미 공개된 값에도 없던 성별 · 나이가 사례에 붙으면 그 시도를 실패로 본다 (그 노드이거나 그보다 넓은 값은 통과).
+        고친 답은 원 응답보다 정보를 더하지 않으므로 이런 값은 대부분 추출기가 다른 사람(현재 환자 등)의 값을 잘못 붙인 것이다.
+        잘못 붙은 값이 State에 들어가면 뒤에 온 실제 값이 사건 묶음 보정에서 밀려나 k가 커질 수 있다
+        (fix_A8 T0005: '현재 환자(1세 남아)'의 '남아'가 사례2에 붙음 → 다음 턴 실제 거주 도시가 k에서 빠짐 → 정답 기준 k 1)."""
+        # 제품(webdemo)의 판정기는 이번 턴 계획(last_plans)을 기억한다. 단위 맞춤(ROUNDED)처럼 release 밖에서 다시 확인할 때도
+        # 그 턴의 계획으로 본다. 연구 하네스는 release가 남긴 계획을 쓴다.
+        plans = getattr(getattr(self.ctx, "defender", None), "last_plans", None)
+        plan_ok = _plan_ok_nodes(plans) if plans is not None else getattr(self, "_plan_ok", None)
+        if plan_ok is None:
+            return []
+        kc, out = self.ctx.kc, []
+        for ref in v.case_refs:
+            known = set(plan_ok.get(ref, set())) | {d["node_id"] for d in (self.cases[ref].committed if ref in self.cases else [])}
+            closure: set[str] = set()
+            for nid in known:
+                if nid in kc.node:
+                    closure |= kc.anc(nid)
+            for d, src in zip(v.disclosures.get(ref, []), v.sources.get(ref, [])):
+                nid = d.get("node_id")
+                if d.get("attribute") in RULE_C_ATTRS and nid and nid not in closure:
+                    out.append(dict(ref=ref, reason="UNPLANNED_SEX_AGE", attribute=d["attribute"], node_id=nid,
+                                    raw_value=src.get("raw_value"), ok=False))
+        return out
 
     def _mask_list(self, v: CaseView, text: str, query: str, why: str) -> list[dict[str, Any]]:
         """[실험] k 검사를 받을 수 없는 값을 '(비공개)'로 바꿀 변경 목록으로 만든다.
@@ -255,6 +294,13 @@ class ArmRun:
             for m in self._mask_list(v, text, query, "UNATTRIBUTED"):
                 add(m)
             return out
+        if any(c.get("reason") == "UNPLANNED_SEX_AGE" for c in checks):      # [실험 v3] 규칙 C로 막힌 값만 가린다
+            bad = {(c.get("ref"), c.get("node_id")) for c in checks if c.get("reason") == "UNPLANNED_SEX_AGE"}
+            for ref in v.case_refs:
+                for d, src in zip(v.disclosures.get(ref, []), v.sources.get(ref, [])):
+                    if (ref, d.get("node_id")) in bad:
+                        add(src)
+            return out
         if any(c.get("reason") == "UNMAPPED_ATTRIBUTED" for c in checks):
             planned = {(r, lbl) for r, lbl, _, _ in getattr(self, "_planned", [])}
             for ref, os_ in v.normalized.items():
@@ -283,6 +329,7 @@ class ArmRun:
         return out
 
     def release(self, query: str, raw: str, raw_obs: list[dict[str, Any]], raw_ok: bool) -> Release:
+        self._plan_ok = None          # [실험 v3] 지난 턴 계획이 남지 않게 (규칙 C)
         raw_view = view_of(raw_obs, raw, query, self.ctx.nz)
         if self.arm == "C0":
             n_dec = sum(len(raw_view.disclosures[r]) for r in raw_view.case_refs)
@@ -312,6 +359,7 @@ class ArmRun:
         planned = [(p.ref, self.ctx.data.label(x.to_node), dict(x.disclosure, node_id=x.to_node), x.source)
                    for p in plans for x in p.decisions if x.action == GENERALIZE]
         self._planned = planned
+        self._plan_ok = _plan_ok_nodes(plans)          # [실험 v3] 규칙 C
         changes = d.change_lines(plans)
         seen_raw = {c["raw_value"] for c in changes}
         changes += [m for m in masks if m["raw_value"] not in seen_raw]
@@ -344,28 +392,33 @@ class ArmRun:
                 failed.append((mode, text, v, checks))
         # [실험 exp/turn0-normalize] 모든 시도가 다시 확인에서 막히면, 거절하기 전에 마지막 재작성 답 → 글자 그대로 바꾼 답 순으로
         # 다시 확인 추출이 짚은 '남은 값'(빼기 · 넓히기 안 된 값, 계획 밖 값, 귀속된 미매핑)만 '(비공개)'로 바꾸고 한 번 더 확인한다.
-        # 글을 더 가리기만 하므로 k는 같거나 커진다. 추가 호출은 많아야 추출 2번.
+        # 글을 더 가리기만 하므로 k는 같거나 커진다. 추가 호출은 많아야 추출 2번 × PATCH_ROUNDS.
         # 연구 하네스(ArmRun)에서만 쓴다. 제품(webdemo의 RuledArmRun)은 다시 확인 실패 때 자기 방식(사례 빼기 · 재시도 안내)을 쓴다.
         from medical.defense import apply_changes_deterministic
         order = [f for f in reversed(failed) if f[0] == "REWRITTEN"][:1] + [f for f in failed if f[0] == "REWRITTEN_FALLBACK"][:1]
         if type(self) is not ArmRun:
             order = []
         for mode, text, v, checks in order:
-            patch = self._leftover_changes(plans, v, checks, text, query)
-            if not patch:
-                continue
-            try:
-                text2 = apply_changes_deterministic(text, patch)
-            except ValueError:
-                continue
-            if not text2 or text2 == text:
-                continue
-            ok2, v2, checks2, n2 = self._verify(query, text2)
-            n_ext += n2
-            attempts.append(dict(mode="REWRITTEN_PATCHED", text=text2, ok=ok2, checks=checks2, patched_from=mode,
-                                 patched=[c["raw_value"] for c in patch]))
-            if ok2 and v2 is not None:
-                return Release(text2, v2, "REWRITTEN_PATCHED", plan_dicts, changes, attempts, util, n_ext)
+            # [실험 v3] 가린 답을 다시 추출하면 새 남은 값이 보일 수 있어, 같은 기준 답에서 최대 PATCH_ROUNDS번 이어 가린다
+            for _round in range(PATCH_ROUNDS):
+                patch = self._leftover_changes(plans, v, checks, text, query)
+                if not patch:
+                    break
+                try:
+                    text2 = apply_changes_deterministic(text, patch)
+                except ValueError:
+                    break
+                if not text2 or text2 == text:
+                    break
+                ok2, v2, checks2, n2 = self._verify(query, text2)
+                n_ext += n2
+                attempts.append(dict(mode="REWRITTEN_PATCHED", text=text2, ok=ok2, checks=checks2, patched_from=mode,
+                                     patched=[c["raw_value"] for c in patch]))
+                if ok2 and v2 is not None:
+                    return Release(text2, v2, "REWRITTEN_PATCHED", plan_dicts, changes, attempts, util, n_ext)
+                if v2 is None:
+                    break
+                text, v, checks = text2, v2, checks2
         return Release(REFUSAL_TEXT, _empty_view(), "REFUSAL", plan_dicts, changes, attempts, 0.0 if decisions else None, n_ext)
 
     # ── 한 턴 ───────────────────────────────────────────────

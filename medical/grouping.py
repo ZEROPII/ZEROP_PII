@@ -15,20 +15,32 @@
 #     ('같은 약을 다른 때 또 처방'으로 읽는다). 새 하위 묶음조차 acc와 맞지 않는 값은 앞 공개와 모순이므로 k 계산에서 뺀다.
 #   앞에 나온 공개를 우선한다. 사건 묶음이 처음부터 맞으면 아무것도 바꾸지 않는다 (kcalc 결과와 같음).
 # 기록(case_committed)은 추출 결과 그대로 두고, k를 계산할 때만 보정한다. 무엇을 나눴거나 뺐는지는 flags에 남긴다.
+#
+# [실험 exp/turn0-normalize v3] 작은 k 쪽 해석 (conservative=True, 실행 중 k에만 · build_context가 켠다)
+#   앞에 나온 값을 우선하면, 추출기가 잘못 붙인 값이 먼저 들어온 경우 뒤에 온 실제 값이 '모순'으로 빠져 k가 커진다
+#   (fix_A8 T0005 사례2: 틀린 성별 SEX_MALE이 먼저 들어와 실제 거주 도시가 빠짐 → 실행 k 7, 정답 기준 1).
+#   그래서 보정 때문에 값이 빠지거나 묶음이 나뉘면, 앞 공개의 값을 하나씩 '틀렸을 수 있는 값'으로 빼 보고(같은 값은 모든 묶음에서)
+#   다시 맞춘 해석 중 k가 가장 작은 것을 쓴다. 묶음이 나뉘기만 했으면 묶음 없는 값만, 값이 모순으로 빠졌으면 묶음 안 값도 빼 본다. 어느 값이 틀렸는지 모를 때는 후보가 적은 쪽(더 조심하는 쪽)으로 센다.
+#   환자 단위 값(성별 · 지역)이 서로 모순이면(남성과 여성, 서로 다른 도시) kcalc는 둘 다 버려 k가 커지므로,
+#   한쪽씩 남긴 해석을 모두 세어 작은 k를 쓴다.
+#   값이 서로 맞으면(보정이 필요 없으면) 아무것도 바꾸지 않는다. 평가(Validated k)는 기존 보정 그대로 쓴다.
 
 from __future__ import annotations
 
 from typing import Any
 
 CODE_ATTRS = ("DX", "MED", "PROC", "PLAN")
+PATIENT_ATTRS = ("SEX", "REGION")
+MAX_ALTERNATIVES = 48          # 작은 k 해석을 찾을 때 빼 볼 값의 최대 수 (같은 속성 · 노드는 한 번)
 _ORDER = {a: i for i, a in enumerate(CODE_ATTRS + ("AGE", "PERIOD"))}
 
 
 class GroupRepairKC:
     """KCalc를 감싸 k·candidates·reduce 전에 사건 묶음을 보정한다. 나머지 속성(by_pat·node·anc …)은 그대로 넘긴다."""
 
-    def __init__(self, base: Any) -> None:
+    def __init__(self, base: Any, conservative: bool = False) -> None:
         self.base = base
+        self.conservative = conservative
         self._cache: dict[tuple, tuple[list[dict[str, Any]], list[str]]] = {}
         # 같은 공개 묶음의 k를 여러 번 센다(갈래·사례·확인 단계마다). 결과는 공개 묶음(순서 포함)으로 정해지므로 기억해 둔다
         self._kcache: dict[tuple, tuple[dict[str, Any], frozenset[str]]] = {}
@@ -49,10 +61,78 @@ class GroupRepairKC:
         key = tuple((d["attribute"], d["node_id"], d.get("event_group")) for d in disclosures)
         if key in self._cache:
             return self._cache[key]
-        if not disclosures or self._pos(disclosures):
-            res = (list(disclosures), [])
-            self._cache[key] = res
-            return res
+        if self.conservative and disclosures:
+            alts = self._patient_alternatives(disclosures)
+            if alts:
+                res = self._smallest([(alt, [note]) for alt, note in alts])
+            else:
+                res = self._solve(disclosures)
+        else:
+            res = self._solve(disclosures)
+        self._cache[key] = res
+        return res
+
+    # ── [실험 v3] 작은 k 쪽 해석 ──
+    def _solve(self, ds: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+        if not ds or self._pos(ds):
+            return list(ds), []
+        acc, notes = self._greedy(ds)
+        if not self.conservative or not any(n.startswith(("CONFLICT_DROPPED", "REGROUPED")) for n in notes):
+            return acc, notes
+        best_k, best = self.base.k(acc)["k"] if acc else len(self.base.by_pat), (acc, notes)
+        # 빼 볼 값: 묶음 없는 값. 값이 '모순'으로 빠졌으면(CONFLICT_DROPPED: 따로 떼어 놓아도 앞 공개와 맞지 않음) 묶음 안 값도.
+        # 묶음이 나뉘기만 했으면(REGROUPED: 같은 약을 여러 번 처방한 것을 한 줄로 합친 경우 등) 묶음 안 값은 빼 보지 않는다.
+        dropped = any(n.startswith("CONFLICT_DROPPED") for n in notes)
+        pool = [d for d in ds if not d.get("event_group")] + ([d for d in ds if d.get("event_group")] if dropped else [])
+        seen: set[tuple[str, str]] = set()
+        for d in pool:
+            if (d["attribute"], d["node_id"]) in seen:
+                continue
+            seen.add((d["attribute"], d["node_id"]))
+            if len(seen) > MAX_ALTERNATIVES:
+                break
+            alt = [x for x in ds if (x["attribute"], x["node_id"]) != (d["attribute"], d["node_id"])]
+            acc2, notes2 = (list(alt), []) if self._pos(alt) else self._greedy(alt)
+            k2 = self.base.k(acc2)["k"] if acc2 else len(self.base.by_pat)
+            if 0 < k2 < best_k:
+                best_k, best = k2, (acc2, notes2 + [f"CONSERVATIVE_DROP {d['attribute']}:{d['node_id']}"])
+        return best
+
+    def _patient_alternatives(self, ds: list[dict[str, Any]]) -> list[tuple[list[dict[str, Any]], str]]:
+        """환자 단위 값(성별 · 지역)이 서로 모순(상하위 아님)이면, 가장 구체적인 값 하나와 그 상위만 남긴 해석들."""
+        anc = self.base.anc
+        choices: list[list[tuple[str, set[str]]]] = []
+        for att in PATIENT_ATTRS:
+            nodes = list(dict.fromkeys(d["node_id"] for d in ds if d["attribute"] == att and d["node_id"] in self.base.node))
+            if len(nodes) < 2:
+                continue
+            if all(a in anc(b) or b in anc(a) for i, a in enumerate(nodes) for b in nodes[i + 1:]):
+                continue
+            leaves = [n for n in nodes if not any(n != m and n in anc(m) for m in nodes)]
+            choices.append([(att, {m for m in nodes if m in anc(leaf)}) for leaf in leaves])
+        if not choices:
+            return []
+        out: list[tuple[list[dict[str, Any]], str]] = [([x for x in ds], "")]
+        for opts in choices:
+            nxt = []
+            for alt, note in out:
+                for att, keep in opts:
+                    alt2 = [x for x in alt if x["attribute"] != att or x["node_id"] in keep]
+                    nxt.append((alt2, (note + " " if note else "") + f"PATIENT_CONFLICT keep {att}:{'|'.join(sorted(keep))}"))
+            out = nxt
+        return out
+
+    def _smallest(self, alts: list[tuple[list[dict[str, Any]], list[str]]]) -> tuple[list[dict[str, Any]], list[str]]:
+        best_k, best = None, None
+        for alt, pre in alts:
+            acc, notes = self._solve(alt)
+            k = self.base.k(acc)["k"] if acc else len(self.base.by_pat)
+            if k > 0 and (best_k is None or k < best_k):
+                best_k, best = k, (acc, pre + notes)
+        return best if best is not None else self._solve(alts[0][0])
+
+    def _greedy(self, disclosures: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[str]]:
+        """기존 보정 (앞에 나온 공개 우선)."""
         notes: list[str] = []
         acc: list[dict[str, Any]] = []
         groups: dict[str, list[dict[str, Any]]] = {}
@@ -75,9 +155,7 @@ class GroupRepairKC:
             for i, sg in enumerate(subs):
                 name = g if i == 0 else f"{g}~{i + 1}"
                 acc += [dict(d, event_group=name) for d in sg]
-        res = (acc, notes)
-        self._cache[key] = res
-        return res
+        return acc, notes
 
     def _split(self, acc: list[dict[str, Any]], g: str, items: list[dict[str, Any]]):
         seen, uniq = set(), []
