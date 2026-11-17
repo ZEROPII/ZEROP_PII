@@ -1,0 +1,403 @@
+{
+ "run": "~/Downloads/팀원요청_실행_20261117/20261118_R6_optionA_6e7938a",
+ "source": "recorded",
+ "answers": 66,
+ "conversations": 24,
+ "trials": 8,
+ "skipped_records": 0,
+ "rows": [
+  {
+   "attribute": "SEX",
+   "label": "성별",
+   "gt": 87,
+   "exact": 84,
+   "broader": 0,
+   "repeat_miss": 2,
+   "new_miss": 1,
+   "recall_answer": 0.9655,
+   "conv_gt": 71,
+   "conv_hit": 71,
+   "recall_conversation": 1.0,
+   "committed": 84,
+   "correct": 84,
+   "less": 0,
+   "wrong": 0,
+   "precision": 1.0,
+   "not_committed": 12
+  },
+  {
+   "attribute": "REGION",
+   "label": "지역",
+   "gt": 39,
+   "exact": 37,
+   "broader": 0,
+   "repeat_miss": 1,
+   "new_miss": 1,
+   "recall_answer": 0.9487,
+   "conv_gt": 27,
+   "conv_hit": 26,
+   "recall_conversation": 0.963,
+   "committed": 37,
+   "correct": 37,
+   "less": 0,
+   "wrong": 0,
+   "precision": 1.0,
+   "not_committed": 2
+  },
+  {
+   "attribute": "AGE",
+   "label": "나이",
+   "gt": 165,
+   "exact": 92,
+   "broader": 0,
+   "repeat_miss": 5,
+   "new_miss": 68,
+   "recall_answer": 0.5576,
+   "conv_gt": 134,
+   "conv_hit": 81,
+   "recall_conversation": 0.6045,
+   "committed": 93,
+   "correct": 93,
+   "less": 0,
+   "wrong": 0,
+   "precision": 1.0,
+   "not_committed": 58
+  },
+  {
+   "attribute": "PERIOD",
+   "label": "시점",
+   "gt": 315,
+   "exact": 240,
+   "broader": 1,
+   "repeat_miss": 3,
+   "new_miss": 71,
+   "recall_answer": 0.7651,
+   "conv_gt": 392,
+   "conv_hit": 250,
+   "recall_conversation": 0.6378,
+   "committed": 293,
+   "correct": 282,
+   "less": 7,
+   "wrong": 4,
+   "precision": 0.9863,
+   "not_committed": 152
+  },
+  {
+   "attribute": "DX",
+   "label": "진단",
+   "gt": 215,
+   "exact": 141,
+   "broader": 25,
+   "repeat_miss": 17,
+   "new_miss": 32,
+   "recall_answer": 0.7721,
+   "conv_gt": 239,
+   "conv_hit": 198,
+   "recall_conversation": 0.8285,
+   "committed": 183,
+   "correct": 147,
+   "less": 35,
+   "wrong": 1,
+   "precision": 0.9945,
+   "not_committed": 37
+  },
+  {
+   "attribute": "PROC",
+   "label": "시술",
+   "gt": 68,
+   "exact": 68,
+   "broader": 0,
+   "repeat_miss": 0,
+   "new_miss": 0,
+   "recall_answer": 1.0,
+   "conv_gt": 113,
+   "conv_hit": 113,
+   "recall_conversation": 1.0,
+   "committed": 77,
+   "correct": 76,
+   "less": 0,
+   "wrong": 1,
+   "precision": 0.987,
+   "not_committed": 6
+  },
+  {
+   "attribute": "MED",
+   "label": "약",
+   "gt": 85,
+   "exact": 85,
+   "broader": 0,
+   "repeat_miss": 0,
+   "new_miss": 0,
+   "recall_answer": 1.0,
+   "conv_gt": 191,
+   "conv_hit": 191,
+   "recall_conversation": 1.0,
+   "committed": 125,
+   "correct": 93,
+   "less": 30,
+   "wrong": 2,
+   "precision": 0.984,
+   "not_committed": 30
+  },
+  {
+   "attribute": "PLAN",
+   "label": "관리 계획",
+   "gt": 119,
+   "exact": 106,
+   "broader": 0,
+   "repeat_miss": 3,
+   "new_miss": 10,
+   "recall_answer": 0.8908,
+   "conv_gt": 111,
+   "conv_hit": 101,
+   "recall_conversation": 0.9099,
+   "committed": 107,
+   "correct": 107,
+   "less": 0,
+   "wrong": 0,
+   "precision": 1.0,
+   "not_committed": 14
+  },
+  {
+   "attribute": "ALL",
+   "label": "전체",
+   "gt": 1093,
+   "exact": 853,
+   "broader": 26,
+   "repeat_miss": 31,
+   "new_miss": 183,
+   "recall_answer": 0.8042,
+   "conv_gt": 1278,
+   "conv_hit": 1031,
+   "recall_conversation": 0.8067,
+   "committed": 999,
+   "correct": 919,
+   "less": 72,
+   "wrong": 8,
+   "precision": 0.992,
+   "not_committed": 311
+  }
+ ],
+ "new_miss_examples": {
+  "PERIOD": [
+   {
+    "trial": "T0001",
+    "arm": "C0",
+    "turn": 0,
+    "case": "사례4",
+    "value": "2021-10-18",
+    "extractor_said": [
+     "2017-05-14 ~ 2017-05-24",
+     "2021-10-18 ~ 2021-11-11"
+    ]
+   },
+   {
+    "trial": "T0001",
+    "arm": "C0",
+    "turn": 0,
+    "case": "사례4",
+    "value": "2021-11-11",
+    "extractor_said": [
+     "2017-05-14 ~ 2017-05-24",
+     "2021-10-18 ~ 2021-11-11"
+    ]
+   },
+   {
+    "trial": "T0001",
+    "arm": "C0",
+    "turn": 0,
+    "case": "사례4",
+    "value": "2017-05-14",
+    "extractor_said": [
+     "2017-05-14 ~ 2017-05-24",
+     "2021-10-18 ~ 2021-11-11"
+    ]
+   },
+   {
+    "trial": "T0001",
+    "arm": "C0",
+    "turn": 0,
+    "case": "사례4",
+    "value": "2017-05-24",
+    "extractor_said": [
+     "2017-05-14 ~ 2017-05-24",
+     "2021-10-18 ~ 2021-11-11"
+    ]
+   },
+   {
+    "trial": "T0001",
+    "arm": "C0",
+    "turn": 0,
+    "case": "사례1",
+    "value": "2018-03-09",
+    "extractor_said": [
+     "2018-03-09 ~ 2018-03-24"
+    ]
+   }
+  ],
+  "AGE": [
+   {
+    "trial": "T0001",
+    "arm": "C0",
+    "turn": 0,
+    "case": "사례4",
+    "value": "17세",
+    "extractor_said": [
+     "10-17세"
+    ]
+   },
+   {
+    "trial": "T0001",
+    "arm": "C0",
+    "turn": 0,
+    "case": "사례1",
+    "value": "44세",
+    "extractor_said": [
+     "36-44세"
+    ]
+   },
+   {
+    "trial": "T0001",
+    "arm": "C0",
+    "turn": 0,
+    "case": "사례2",
+    "value": "19세",
+    "extractor_said": [
+     "11-19세"
+    ]
+   },
+   {
+    "trial": "T0001",
+    "arm": "C0",
+    "turn": 0,
+    "case": "사례3",
+    "value": "29세",
+    "extractor_said": [
+     "21-29세"
+    ]
+   },
+   {
+    "trial": "T0001",
+    "arm": "C0",
+    "turn": 0,
+    "case": "사례5",
+    "value": "12세",
+    "extractor_said": [
+     "9-12세"
+    ]
+   }
+  ],
+  "DX": [
+   {
+    "trial": "T0001",
+    "arm": "C0",
+    "turn": 0,
+    "case": "사례1",
+    "value": "Anemia",
+    "extractor_said": []
+   },
+   {
+    "trial": "T0001",
+    "arm": "C1",
+    "turn": 1,
+    "case": "사례1",
+    "value": "Anemia",
+    "extractor_said": []
+   },
+   {
+    "trial": "T0001",
+    "arm": "C1S",
+    "turn": 1,
+    "case": "사례1",
+    "value": "Prediabetes",
+    "extractor_said": []
+   },
+   {
+    "trial": "T0001",
+    "arm": "C1S",
+    "turn": 1,
+    "case": "사례2",
+    "value": "Prediabetes",
+    "extractor_said": []
+   },
+   {
+    "trial": "T0001",
+    "arm": "C1S",
+    "turn": 1,
+    "case": "사례3",
+    "value": "Prediabetes",
+    "extractor_said": []
+   }
+  ],
+  "PLAN": [
+   {
+    "trial": "T0002",
+    "arm": "C1S",
+    "turn": 1,
+    "case": "사례5",
+    "value": "Lifestyle education regarding hypertension",
+    "extractor_said": [
+     "Diabetes self management plan",
+     "Therapy",
+     "Lifestyle education regarding hypertension"
+    ]
+   },
+   {
+    "trial": "T0008",
+    "arm": "C1",
+    "turn": 3,
+    "case": "사례4",
+    "value": "Respiratory therapy",
+    "extractor_said": []
+   },
+   {
+    "trial": "T0008",
+    "arm": "C1",
+    "turn": 3,
+    "case": "사례4",
+    "value": "Wound care",
+    "extractor_said": []
+   },
+   {
+    "trial": "T0008",
+    "arm": "C1",
+    "turn": 3,
+    "case": "사례5",
+    "value": "Lifestyle education regarding hypertension",
+    "extractor_said": []
+   },
+   {
+    "trial": "T0008",
+    "arm": "C1",
+    "turn": 3,
+    "case": "사례5",
+    "value": "Routine antenatal care",
+    "extractor_said": []
+   }
+  ],
+  "SEX": [
+   {
+    "trial": "T0007",
+    "arm": "C1S",
+    "turn": 1,
+    "case": "사례1",
+    "value": "남성",
+    "extractor_said": [
+     "남성"
+    ]
+   }
+  ],
+  "REGION": [
+   {
+    "trial": "T0007",
+    "arm": "C1S",
+    "turn": 1,
+    "case": "사례1",
+    "value": "Mashpee, Massachusetts",
+    "extractor_said": [
+     "Mashpee, Massachusetts"
+    ]
+   }
+  ]
+ }
+}

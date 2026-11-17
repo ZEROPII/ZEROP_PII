@@ -1,0 +1,85 @@
+From 87613f94a859c002763610d7a8d85b6cb9ad86c9 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Tue, 17 Nov 2026 23:30:00 +0900
+Subject: [PATCH] =?UTF-8?q?[=EC=88=98=EC=A0=95=EB=B3=B8]=20fix(medical):?=
+ =?UTF-8?q?=20=EB=91=90=20=EA=B8=80=EC=9E=90=20=EC=9D=B4=ED=95=98=20?=
+ =?UTF-8?q?=EA=B7=BC=EA=B1=B0=EB=8A=94=20=EA=B0=92=20=EC=B9=98=ED=99=98?=
+ =?UTF-8?q?=EC=97=90=20=EC=93=B0=EC=A7=80=20=EC=95=8A=EB=8A=94=EB=8B=A4=20?=
+ =?UTF-8?q?(=ED=8C=80=EC=9B=90=20=EA=B0=80=EC=9D=B4=EB=93=9C=20R3)?=
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+재작성이 두 번 실패해 값 치환(apply_changes_deterministic)으로 갈 때, 원래 값이 답에 없으면
+근거 문장으로 바꾼다. 한두 글자 근거로 바꾸면 답의 다른 곳까지 함께 바뀐다 (11-05 요청 1번).
+
+- MIN_SPAN_CHARS 2 → 3. 원래 값이 답에 그대로 있으면 길이와 상관없이 원래 값으로 가린다
+  (두 글자 값 '남성'도 가려진다).
+- 글자열 하나로 온 근거를 목록 하나로 바로잡는 것(normalize_spans, webdemo textguard.clean_spans)과
+  길이 상한(MAX_GROWTH)은 631f4dc에 이미 있다. 제품 경로(webdemo/backend/review.py)도 같은 함수를 부른다.
+- 이전 실제 LLM 실행 5개(v3_A8 · F1 · F2 · F3 · F4)에서 값 치환을 쓴 84턴, 바꿀 항목 1,395개 중
+  두 글자 근거로만 바뀌는 항목은 0개다. 이전 결과에는 영향이 없다.
+
+테스트
+- tests/medical 164 passed (161 + 3)
+- tests/test_webdemo.py 15 passed, tests/medicloak/test_medicloak.py 66 passed
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_01J5RXHyY7Av7VSHZ3RBymGy
+---
+ medical/defense.py                          |  2 +-
+ tests/medical/test_deterministic_rewrite.py | 28 +++++++++++++++++++--
+ 2 files changed, 27 insertions(+), 3 deletions(-)
+
+diff --git a/medical/defense.py b/medical/defense.py
+index 6b5262b..0691d73 100644
+--- a/medical/defense.py
++++ b/medical/defense.py
+@@ -159,7 +159,7 @@ def format_changes(changes: list[dict[str, Any]]) -> str:
+     return "\n".join(lines)
+ 
+ 
+-MIN_SPAN_CHARS = 2          # 한 글자짜리 근거는 근거가 될 수 없으므로 치환에 쓰지 않는다
++MIN_SPAN_CHARS = 3          # 한두 글자짜리 근거는 값 치환에 쓰지 않는다 (답의 다른 곳까지 바뀜). 원래 값이 답에 있으면 길이와 상관없이 그 값으로 가린다
+ MAX_GROWTH = 20             # 치환 결과가 원문의 이 배수(+ 상수)를 넘으면 폭주로 보고 실패시킨다
+ GROWTH_SLACK = 2000
+ 
+diff --git a/tests/medical/test_deterministic_rewrite.py b/tests/medical/test_deterministic_rewrite.py
+index 16ab022..0526a1f 100644
+--- a/tests/medical/test_deterministic_rewrite.py
++++ b/tests/medical/test_deterministic_rewrite.py
+@@ -34,5 +34,29 @@ def test_growth_guard_raises_instead_of_exploding():
+     assert len(out) < 20 * len(resp) + 2000
+ 
+ 
+-def test_min_span_constant_is_two():
+-    assert MIN_SPAN_CHARS == 2
++def test_min_span_constant_is_three():
++    assert MIN_SPAN_CHARS == 3
++
++
++def test_two_character_spans_are_not_replaced():
++    """[R3] 두 글자 근거는 값 치환에 쓰지 않는다. 원래 값이 답에 없을 때 두 글자 조각으로 바꾸면 답의 다른 곳까지 바뀐다."""
++    resp = "환자는 서울 거주입니다. 서울 소재 병원 기록입니다."
++    ch = [dict(raw_value="Seoul", action="suppress", to_label=None, evidence_spans=["서울"])]
++    assert apply_changes_deterministic(resp, ch) == resp
++
++
++def test_two_character_raw_value_is_still_replaced():
++    """[R3] 원래 값이 답에 그대로 있으면 길이와 상관없이 원래 값으로 가린다 (두 글자 값도 가려진다)."""
++    resp = "성별은 남성입니다."
++    ch = [dict(raw_value="남성", action="suppress", to_label=None, evidence_spans=["남성"])]
++    out = apply_changes_deterministic(resp, ch)
++    assert "남성" not in out and SUPPRESSED_MARK in out
++
++
++def test_string_span_replaced_as_one_piece():
++    """[R3] 11-05 T0002: 추출기가 근거를 글자열 하나로 주어도 글자 단위로 쪼개지지 않고 한 덩어리로 바뀐다."""
++    resp = "사례1은 naproxen 220 MG 정제를 처방받았습니다. 사례2는 lisinopril을 복용합니다."
++    ch = [dict(raw_value="naproxen sodium 220 MG Oral Tablet", action="suppress", to_label=None,
++               evidence_spans="naproxen 220 MG 정제")]
++    out = apply_changes_deterministic(resp, ch)
++    assert "naproxen" not in out and "lisinopril" in out and len(out) < len(resp) + 20
+-- 
+2.43.0
+

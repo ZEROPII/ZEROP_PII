@@ -1,0 +1,433 @@
+{
+ "run": "~/Downloads/팀원요청_실행_20261117/20261116_R1_optionA_e3020ba",
+ "source": "recorded",
+ "answers": 67,
+ "conversations": 8,
+ "trials": 8,
+ "skipped_records": 0,
+ "rows": [
+  {
+   "attribute": "SEX",
+   "label": "성별",
+   "gt": 79,
+   "exact": 66,
+   "broader": 0,
+   "repeat_miss": 10,
+   "new_miss": 3,
+   "recall_answer": 0.8354,
+   "conv_gt": 38,
+   "conv_hit": 35,
+   "recall_conversation": 0.9211,
+   "committed": 72,
+   "correct": 72,
+   "less": 0,
+   "wrong": 0,
+   "precision": 1.0,
+   "not_committed": 11
+  },
+  {
+   "attribute": "REGION",
+   "label": "지역",
+   "gt": 38,
+   "exact": 38,
+   "broader": 0,
+   "repeat_miss": 0,
+   "new_miss": 0,
+   "recall_answer": 1.0,
+   "conv_gt": 23,
+   "conv_hit": 23,
+   "recall_conversation": 1.0,
+   "committed": 44,
+   "correct": 43,
+   "less": 1,
+   "wrong": 0,
+   "precision": 1.0,
+   "not_committed": 5
+  },
+  {
+   "attribute": "AGE",
+   "label": "나이",
+   "gt": 137,
+   "exact": 91,
+   "broader": 0,
+   "repeat_miss": 11,
+   "new_miss": 35,
+   "recall_answer": 0.6642,
+   "conv_gt": 81,
+   "conv_hit": 62,
+   "recall_conversation": 0.7654,
+   "committed": 99,
+   "correct": 99,
+   "less": 0,
+   "wrong": 0,
+   "precision": 1.0,
+   "not_committed": 46
+  },
+  {
+   "attribute": "PERIOD",
+   "label": "시점",
+   "gt": 186,
+   "exact": 142,
+   "broader": 0,
+   "repeat_miss": 2,
+   "new_miss": 42,
+   "recall_answer": 0.7634,
+   "conv_gt": 144,
+   "conv_hit": 121,
+   "recall_conversation": 0.8403,
+   "committed": 180,
+   "correct": 174,
+   "less": 6,
+   "wrong": 0,
+   "precision": 1.0,
+   "not_committed": 45
+  },
+  {
+   "attribute": "DX",
+   "label": "진단",
+   "gt": 195,
+   "exact": 147,
+   "broader": 27,
+   "repeat_miss": 8,
+   "new_miss": 13,
+   "recall_answer": 0.8923,
+   "conv_gt": 111,
+   "conv_hit": 108,
+   "recall_conversation": 0.973,
+   "committed": 192,
+   "correct": 147,
+   "less": 44,
+   "wrong": 1,
+   "precision": 0.9948,
+   "not_committed": 25
+  },
+  {
+   "attribute": "PROC",
+   "label": "시술",
+   "gt": 75,
+   "exact": 60,
+   "broader": 0,
+   "repeat_miss": 15,
+   "new_miss": 0,
+   "recall_answer": 0.8,
+   "conv_gt": 49,
+   "conv_hit": 49,
+   "recall_conversation": 1.0,
+   "committed": 80,
+   "correct": 79,
+   "less": 0,
+   "wrong": 1,
+   "precision": 0.9875,
+   "not_committed": 11
+  },
+  {
+   "attribute": "MED",
+   "label": "약",
+   "gt": 149,
+   "exact": 142,
+   "broader": 0,
+   "repeat_miss": 5,
+   "new_miss": 2,
+   "recall_answer": 0.953,
+   "conv_gt": 123,
+   "conv_hit": 122,
+   "recall_conversation": 0.9919,
+   "committed": 160,
+   "correct": 156,
+   "less": 4,
+   "wrong": 0,
+   "precision": 1.0,
+   "not_committed": 39
+  },
+  {
+   "attribute": "PLAN",
+   "label": "관리 계획",
+   "gt": 30,
+   "exact": 27,
+   "broader": 0,
+   "repeat_miss": 1,
+   "new_miss": 2,
+   "recall_answer": 0.9,
+   "conv_gt": 28,
+   "conv_hit": 26,
+   "recall_conversation": 0.9286,
+   "committed": 27,
+   "correct": 27,
+   "less": 0,
+   "wrong": 0,
+   "precision": 1.0,
+   "not_committed": 3
+  },
+  {
+   "attribute": "ALL",
+   "label": "전체",
+   "gt": 889,
+   "exact": 713,
+   "broader": 27,
+   "repeat_miss": 52,
+   "new_miss": 97,
+   "recall_answer": 0.8324,
+   "conv_gt": 597,
+   "conv_hit": 546,
+   "recall_conversation": 0.9146,
+   "committed": 854,
+   "correct": 797,
+   "less": 55,
+   "wrong": 2,
+   "precision": 0.9977,
+   "not_committed": 185
+  }
+ ],
+ "new_miss_examples": {
+  "PERIOD": [
+   {
+    "trial": "T0001",
+    "arm": "C1",
+    "turn": 0,
+    "case": "사례4",
+    "value": "2016-11-21",
+    "extractor_said": [
+     "2017-05-14 ~ 2017-05-24",
+     "2021-10-18 ~ 2021-11-11",
+     "2016-11-21 ~ 2024-01-08"
+    ]
+   },
+   {
+    "trial": "T0001",
+    "arm": "C1",
+    "turn": 0,
+    "case": "사례4",
+    "value": "2021-10-18",
+    "extractor_said": [
+     "2017-05-14 ~ 2017-05-24",
+     "2021-10-18 ~ 2021-11-11",
+     "2016-11-21 ~ 2024-01-08"
+    ]
+   },
+   {
+    "trial": "T0001",
+    "arm": "C1",
+    "turn": 0,
+    "case": "사례4",
+    "value": "2021-11-11",
+    "extractor_said": [
+     "2017-05-14 ~ 2017-05-24",
+     "2021-10-18 ~ 2021-11-11",
+     "2016-11-21 ~ 2024-01-08"
+    ]
+   },
+   {
+    "trial": "T0001",
+    "arm": "C1",
+    "turn": 0,
+    "case": "사례4",
+    "value": "2022-08-05",
+    "extractor_said": [
+     "2017-05-14 ~ 2017-05-24",
+     "2021-10-18 ~ 2021-11-11",
+     "2016-11-21 ~ 2024-01-08"
+    ]
+   },
+   {
+    "trial": "T0001",
+    "arm": "C1",
+    "turn": 0,
+    "case": "사례4",
+    "value": "2022-08-06",
+    "extractor_said": [
+     "2017-05-14 ~ 2017-05-24",
+     "2021-10-18 ~ 2021-11-11",
+     "2016-11-21 ~ 2024-01-08"
+    ]
+   }
+  ],
+  "AGE": [
+   {
+    "trial": "T0001",
+    "arm": "C1",
+    "turn": 0,
+    "case": "사례4",
+    "value": "17세",
+    "extractor_said": [
+     "10-17세"
+    ]
+   },
+   {
+    "trial": "T0001",
+    "arm": "C1",
+    "turn": 0,
+    "case": "사례3",
+    "value": "29세",
+    "extractor_said": [
+     "21-29세"
+    ]
+   },
+   {
+    "trial": "T0001",
+    "arm": "C1",
+    "turn": 0,
+    "case": "사례5",
+    "value": "12세",
+    "extractor_said": [
+     "9-12세"
+    ]
+   },
+   {
+    "trial": "T0001",
+    "arm": "C1",
+    "turn": 0,
+    "case": "사례1",
+    "value": "44세",
+    "extractor_said": [
+     "36-44세"
+    ]
+   },
+   {
+    "trial": "T0001",
+    "arm": "C1",
+    "turn": 0,
+    "case": "사례2",
+    "value": "19세",
+    "extractor_said": [
+     "11-19세"
+    ]
+   }
+  ],
+  "MED": [
+   {
+    "trial": "T0001",
+    "arm": "C1",
+    "turn": 0,
+    "case": "사례2",
+    "value": "vitamin B12 5 MG/ML Injectable Solution",
+    "extractor_said": [
+     "acetaminophen 325 MG Oral Tablet",
+     "sodium fluoride 0.0272 MG/MG Oral Gel",
+     "vitamin B12 5 MG/ML Injectable Solution"
+    ]
+   },
+   {
+    "trial": "T0004",
+    "arm": "C1",
+    "turn": 0,
+    "case": "사례3",
+    "value": "ibuprofen 200 MG Oral Tablet",
+    "extractor_said": [
+     "sodium fluoride 0.0272 MG/MG Oral Gel"
+    ]
+   }
+  ],
+  "PLAN": [
+   {
+    "trial": "T0001",
+    "arm": "C1",
+    "turn": 1,
+    "case": "사례2",
+    "value": "Diabetes self management plan",
+    "extractor_said": [
+     "Respiratory therapy",
+     "Physiotherapy care plan",
+     "Diabetes self management plan"
+    ]
+   },
+   {
+    "trial": "T0001",
+    "arm": "C1",
+    "turn": 1,
+    "case": "사례3",
+    "value": "Diabetes self management plan",
+    "extractor_said": [
+     "Diabetes self management plan"
+    ]
+   }
+  ],
+  "DX": [
+   {
+    "trial": "T0001",
+    "arm": "C1",
+    "turn": 1,
+    "case": "사례4",
+    "value": "Sprain of ankle",
+    "extractor_said": [
+     "Gingivitis",
+     "Acute bronchitis",
+     "Chronic sinusitis"
+    ]
+   },
+   {
+    "trial": "T0002",
+    "arm": "C1",
+    "turn": 0,
+    "case": "사례1",
+    "value": "Gingival disease",
+    "extractor_said": [
+     "Gingivitis/Gingival disease",
+     "Carcinoma in situ of prostate"
+    ]
+   },
+   {
+    "trial": "T0002",
+    "arm": "C1",
+    "turn": 0,
+    "case": "사례1",
+    "value": "Gingivitis",
+    "extractor_said": [
+     "Gingivitis/Gingival disease",
+     "Carcinoma in situ of prostate"
+    ]
+   },
+   {
+    "trial": "T0002",
+    "arm": "C1",
+    "turn": 0,
+    "case": "사례2",
+    "value": "Gingival disease",
+    "extractor_said": [
+     "Gingivitis/Gingival disease",
+     "Loss of teeth"
+    ]
+   },
+   {
+    "trial": "T0002",
+    "arm": "C1",
+    "turn": 0,
+    "case": "사례2",
+    "value": "Gingivitis",
+    "extractor_said": [
+     "Gingivitis/Gingival disease",
+     "Loss of teeth"
+    ]
+   }
+  ],
+  "SEX": [
+   {
+    "trial": "T0003",
+    "arm": "C1",
+    "turn": 0,
+    "case": "사례2",
+    "value": "남성",
+    "extractor_said": [
+     "남"
+    ]
+   },
+   {
+    "trial": "T0003",
+    "arm": "C1",
+    "turn": 0,
+    "case": "사례3",
+    "value": "남성",
+    "extractor_said": [
+     "남"
+    ]
+   },
+   {
+    "trial": "T0003",
+    "arm": "C1",
+    "turn": 3,
+    "case": "사례1",
+    "value": "남성",
+    "extractor_said": []
+   }
+  ]
+ }
+}

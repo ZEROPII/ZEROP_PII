@@ -1,0 +1,32 @@
+{
+ "commit": "6e7938a112b6a17f922ff77a7a52d6b79bbf76ea",
+ "branch": "fix/r3-evidence-span-min3",
+ "tracked_changes": false,
+ "command": "python3 '~/Downloads/팀원요청_실행_20261117/도구/run_logged_v2.py' run --arms C0,C1,C1S --limit 8 --budget 7 --suppress-threshold 3 --normalizer v2 --docs template --model claude-haiku-4-5-20251001 --out '~/Downloads/팀원요청_실행_20261117/20261118_R6_optionA_6e7938a'",
+ "medical_command": "python3 -m medical run --arms C0,C1,C1S --limit 8 --budget 7 --suppress-threshold 3 --normalizer v2 --docs template --model claude-haiku-4-5-20251001 --out '~/Downloads/팀원요청_실행_20261117/20261118_R6_optionA_6e7938a'",
+ "cwd": "~/Downloads/UNCLEAR_검증_20261113/ZEROP_PII",
+ "started_at": "2026-11-18T00:05:05+0900",
+ "finished_at": "2026-11-18T01:10:31+0900",
+ "status": "완료",
+ "settings": {
+  "suppress_threshold": "3",
+  "generalize_threshold": "5 (기본값)",
+  "k_req": "5 (기본값)",
+  "arms": "C0,C1,C1S",
+  "limit": "8",
+  "budget": "7",
+  "widen_first": "없음 (기본값)",
+  "normalizer": "v2",
+  "docs": "template",
+  "model": "claude-haiku-4-5-20251001",
+  "concurrency": 1
+ },
+ "python": "3.11.5",
+ "machine": "Darwin arm64",
+ "llm_usage": {
+  "calls": 756,
+  "input_tokens": 1245587,
+  "output_tokens": 485500,
+  "list_price_usd": 3.67
+ }
+}

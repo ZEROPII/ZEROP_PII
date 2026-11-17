@@ -1,0 +1,174 @@
+{
+ "run": "~/Downloads/팀원요청_실행_20261117/20261118_R6_optionA_6e7938a",
+ "simulation": null,
+ "turns": 8,
+ "k_req": 5,
+ "arms": {
+  "C0": {
+   "n": 8,
+   "violation": 8,
+   "violation_rate": 1.0,
+   "k1": 8,
+   "any_turn": 8,
+   "agree_with_trial_record": 8,
+   "validated_violation": 8,
+   "validated_n": 8,
+   "violation_any_case": 8,
+   "decisions": {
+    "privacy": {
+     "n": 0,
+     "allow": 0,
+     "generalize": 0,
+     "suppress": 0,
+     "refused": 0
+    },
+    "medical": {
+     "n": 0,
+     "allow": 0,
+     "generalize": 0,
+     "suppress": 0,
+     "refused": 0
+    }
+   },
+   "c0_released": {
+    "privacy": 114,
+    "medical": 181
+   }
+  },
+  "C1S": {
+   "n": 8,
+   "violation": 8,
+   "violation_rate": 1.0,
+   "k1": 3,
+   "any_turn": 8,
+   "agree_with_trial_record": 8,
+   "validated_violation": 8,
+   "validated_n": 8,
+   "violation_any_case": 8,
+   "decisions": {
+    "privacy": {
+     "n": 225,
+     "allow": 68,
+     "generalize": 1,
+     "suppress": 156,
+     "refused": 31
+    },
+    "medical": {
+     "n": 259,
+     "allow": 178,
+     "generalize": 15,
+     "suppress": 66,
+     "refused": 23
+    }
+   },
+   "by_segment": {
+    "0": {
+     "privacy": {
+      "n": 90,
+      "allow": 32,
+      "generalize": 0,
+      "suppress": 58
+     },
+     "medical": {
+      "n": 165,
+      "allow": 119,
+      "generalize": 6,
+      "suppress": 40
+     }
+    },
+    "1+": {
+     "privacy": {
+      "n": 135,
+      "allow": 36,
+      "generalize": 1,
+      "suppress": 98
+     },
+     "medical": {
+      "n": 94,
+      "allow": 59,
+      "generalize": 9,
+      "suppress": 26
+     }
+    }
+   }
+  },
+  "C1": {
+   "n": 8,
+   "violation": 1,
+   "violation_rate": 0.125,
+   "k1": 0,
+   "any_turn": 1,
+   "agree_with_trial_record": 8,
+   "validated_violation": 1,
+   "validated_n": 8,
+   "violation_any_case": 3,
+   "decisions": {
+    "privacy": {
+     "n": 501,
+     "allow": 135,
+     "generalize": 15,
+     "suppress": 351,
+     "refused": 51
+    },
+    "medical": {
+     "n": 449,
+     "allow": 256,
+     "generalize": 40,
+     "suppress": 153,
+     "refused": 35
+    }
+   },
+   "by_segment": {
+    "0": {
+     "privacy": {
+      "n": 90,
+      "allow": 32,
+      "generalize": 0,
+      "suppress": 58
+     },
+     "medical": {
+      "n": 165,
+      "allow": 119,
+      "generalize": 6,
+      "suppress": 40
+     }
+    },
+    "1+": {
+     "privacy": {
+      "n": 411,
+      "allow": 103,
+      "generalize": 15,
+      "suppress": 293
+     },
+     "medical": {
+      "n": 284,
+      "allow": 137,
+      "generalize": 34,
+      "suppress": 113
+     }
+    }
+   }
+  }
+ },
+ "c1_medical_suppress": {
+  "n": 449,
+  "suppress": 153,
+  "rate": 0.34075723830734966
+ },
+ "modes": {
+  "C0:RAW": 10,
+  "C1:REWRITTEN_PATCHED": 8,
+  "C1:REWRITTEN": 29,
+  "C1S:REWRITTEN_PATCHED": 3,
+  "C1S:REWRITTEN": 11,
+  "C1:REWRITTEN_FALLBACK": 6,
+  "C1:RAW": 7,
+  "C1S:RAW": 4,
+  "C1:REFUSAL": 3,
+  "C1S:REFUSAL": 1,
+  "C1S:REWRITTEN_FALLBACK": 1
+ },
+ "raw_check": {
+  "같음": 11
+ }
+}

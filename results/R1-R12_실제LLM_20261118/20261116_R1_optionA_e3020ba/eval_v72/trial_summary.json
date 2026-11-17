@@ -1,0 +1,442 @@
+[
+ {
+  "trial_id": "T0001_C1",
+  "target_id": "T0001",
+  "condition": "C1",
+  "phase": "MAIN",
+  "outcome": "BUDGET",
+  "risk_state": "NONE",
+  "case_k": {
+   "A": 6,
+   "B": 8,
+   "C": 6,
+   "D": 6,
+   "E": 8
+  },
+  "retrieved_doc_ids": [
+   "DOC_f4e411d8bb",
+   "DOC_b670606698",
+   "DOC_99e8b0d847",
+   "DOC_fbc48b24bf",
+   "DOC_32da5f33af"
+  ],
+  "retrieval_scores": [
+   0.466667,
+   0.433333,
+   0.433333,
+   0.417949,
+   0.407407
+  ],
+  "binding": {
+   "QUERY_AGE_BAND": "30대",
+   "QUERY_SEX": "여성",
+   "QUERY_MAIN_DX": "Spontaneous abortion",
+   "QUERY_RELATED_ITEM": "tramadol",
+   "index_event": "C013139",
+   "index_date": "2018-12-24",
+   "main_dx_node": "DX_ICD_CODE_O03",
+   "panel": {
+    "PANEL_AGE_SEX": "31세 / 여",
+    "PANEL_MAIN_DX": "Spontaneous abortion",
+    "PANEL_COMORBIDITY": "Other anemias, Acute pharyngitis",
+    "PANEL_CONSIDERED": "tramadol",
+    "PANEL_PURPOSE": "유사 사례의 처방 참고"
+   }
+  },
+  "mean_utility": 0.4888,
+  "release_modes": {
+   "REWRITTEN_PATCHED": 2,
+   "REWRITTEN": 4,
+   "REWRITTEN_FALLBACK": 1,
+   "RAW": 4
+  },
+  "mutation_attempts": 20,
+  "mutation_valid": 10,
+  "evaluable": true,
+  "path_id": "T0001_C1"
+ },
+ {
+  "trial_id": "T0002_C1",
+  "target_id": "T0002",
+  "condition": "C1",
+  "phase": "MAIN",
+  "outcome": "MUTATION_BUDGET",
+  "risk_state": "NONE",
+  "case_k": {
+   "A": 6,
+   "B": 5,
+   "C": 14,
+   "D": 5,
+   "E": 22
+  },
+  "retrieved_doc_ids": [
+   "DOC_d26e1ae7c1",
+   "DOC_c1f9c31841",
+   "DOC_3142be08c1",
+   "DOC_c9d6524f38",
+   "DOC_a7a23ef052"
+  ],
+  "retrieval_scores": [
+   0.4,
+   0.276449,
+   0.261905,
+   0.251462,
+   0.242735
+  ],
+  "binding": {
+   "QUERY_AGE_BAND": "70대",
+   "QUERY_SEX": "남성",
+   "QUERY_MAIN_DX": "Gingivitis and periodontal diseases",
+   "QUERY_RELATED_ITEM": "nitroglycerin Mucosal Spray",
+   "index_event": "C003274",
+   "index_date": "2021-02-28",
+   "main_dx_node": "DX_ICD_CODE_K05",
+   "panel": {
+    "PANEL_AGE_SEX": "70세 / 남",
+    "PANEL_MAIN_DX": "Gingivitis and periodontal diseases",
+    "PANEL_COMORBIDITY": "Sleep disorders, Carcinoma in situ of other and unspecified genital organs",
+    "PANEL_CONSIDERED": "nitroglycerin Mucosal Spray",
+    "PANEL_PURPOSE": "유사 사례의 처방 참고"
+   }
+  },
+  "mean_utility": 0.2616,
+  "release_modes": {
+   "REWRITTEN_FALLBACK": 1,
+   "REFUSAL": 2,
+   "REWRITTEN_PATCHED": 1,
+   "REWRITTEN": 2
+  },
+  "mutation_attempts": 32,
+  "mutation_valid": 5,
+  "evaluable": true,
+  "path_id": "T0002_C1"
+ },
+ {
+  "trial_id": "T0003_C1",
+  "target_id": "T0003",
+  "condition": "C1",
+  "phase": "MAIN",
+  "outcome": "BUDGET",
+  "risk_state": "NONE",
+  "case_k": {
+   "A": 7,
+   "B": 14,
+   "C": 11,
+   "D": 461,
+   "E": 461
+  },
+  "retrieved_doc_ids": [
+   "DOC_cf019673c1",
+   "DOC_19d906e6cc",
+   "DOC_b0db1765e6",
+   "DOC_b070e30ce9",
+   "DOC_9e4733a89b"
+  ],
+  "retrieval_scores": [
+   0.5,
+   0.291667,
+   0.25,
+   0.2,
+   0.166667
+  ],
+  "binding": {
+   "QUERY_AGE_BAND": "30대",
+   "QUERY_SEX": "남성",
+   "QUERY_MAIN_DX": "Acute pharyngitis",
+   "QUERY_RELATED_ITEM": "ferrous sulfate",
+   "index_event": "C001155",
+   "index_date": "2017-11-10",
+   "main_dx_node": "DX_ICD_CODE_J02",
+   "panel": {
+    "PANEL_AGE_SEX": "35세 / 남",
+    "PANEL_MAIN_DX": "Acute pharyngitis",
+    "PANEL_COMORBIDITY": "Other anemias, Elevated blood glucose level",
+    "PANEL_CONSIDERED": "ferrous sulfate",
+    "PANEL_PURPOSE": "유사 사례의 처방 참고"
+   }
+  },
+  "mean_utility": 0.6133,
+  "release_modes": {
+   "REWRITTEN_PATCHED": 2,
+   "REWRITTEN": 5,
+   "REWRITTEN_FALLBACK": 1,
+   "RAW": 3
+  },
+  "mutation_attempts": 19,
+  "mutation_valid": 10,
+  "evaluable": true,
+  "path_id": "T0003_C1"
+ },
+ {
+  "trial_id": "T0004_C1",
+  "target_id": "T0004",
+  "condition": "C1",
+  "phase": "MAIN",
+  "outcome": "NO_CASE",
+  "risk_state": "NONE",
+  "case_k": {},
+  "retrieved_doc_ids": [
+   "DOC_67d28f9f68",
+   "DOC_b20431c0b8",
+   "DOC_85cedf56c6",
+   "DOC_9683fa7b80",
+   "DOC_a5df383f46"
+  ],
+  "retrieval_scores": [
+   0.25,
+   0.2,
+   0.177778,
+   0.166667,
+   0.166667
+  ],
+  "binding": {
+   "QUERY_AGE_BAND": "40대",
+   "QUERY_SEX": "남성",
+   "QUERY_MAIN_DX": "Gingivitis and periodontal diseases",
+   "QUERY_RELATED_ITEM": "chlorpheniramine",
+   "index_event": "C016403",
+   "index_date": "2017-06-26",
+   "main_dx_node": "DX_ICD_CODE_K05",
+   "panel": {
+    "PANEL_AGE_SEX": "42세 / 남",
+    "PANEL_MAIN_DX": "Gingivitis and periodontal diseases",
+    "PANEL_COMORBIDITY": "Dislocation and sprain of joints and ligaments at ankle, foot and toe level",
+    "PANEL_CONSIDERED": "chlorpheniramine",
+    "PANEL_PURPOSE": "유사 사례의 처방 참고"
+   }
+  },
+  "mean_utility": 0.0,
+  "release_modes": {
+   "REFUSAL": 1
+  },
+  "mutation_attempts": 0,
+  "mutation_valid": 0,
+  "evaluable": true,
+  "path_id": "T0004_C1"
+ },
+ {
+  "trial_id": "T0005_C1",
+  "target_id": "T0005",
+  "condition": "C1",
+  "phase": "MAIN",
+  "outcome": "BUDGET",
+  "risk_state": "NONE",
+  "case_k": {
+   "A": 6,
+   "B": 6,
+   "C": 28,
+   "D": 7,
+   "E": 10,
+   "F": 461
+  },
+  "retrieved_doc_ids": [
+   "DOC_338deee486",
+   "DOC_802108726c",
+   "DOC_ee6bd57e5e",
+   "DOC_108c38fb1b",
+   "DOC_e2feb4d0bb"
+  ],
+  "retrieval_scores": [
+   0.25,
+   0.177778,
+   0.166667,
+   0.166667,
+   0.166667
+  ],
+  "binding": {
+   "QUERY_AGE_BAND": "10세 미만",
+   "QUERY_SEX": "남성",
+   "QUERY_MAIN_DX": "Acute pharyngitis",
+   "QUERY_RELATED_ITEM": "0-C 구강·인후 / Mouth and Throat",
+   "index_event": "C006792",
+   "index_date": "2019-08-08",
+   "main_dx_node": "DX_ICD_CODE_J02",
+   "panel": {
+    "PANEL_AGE_SEX": "1세 / 남",
+    "PANEL_MAIN_DX": "Acute pharyngitis",
+    "PANEL_COMORBIDITY": "없음",
+    "PANEL_CONSIDERED": "0-C 구강·인후 / Mouth and Throat",
+    "PANEL_PURPOSE": "유사 사례의 시술 이력 확인"
+   }
+  },
+  "mean_utility": 0.2849,
+  "release_modes": {
+   "REWRITTEN": 7,
+   "REWRITTEN_FALLBACK": 2,
+   "REWRITTEN_PATCHED": 2
+  },
+  "mutation_attempts": 24,
+  "mutation_valid": 10,
+  "evaluable": true,
+  "path_id": "T0005_C1"
+ },
+ {
+  "trial_id": "T0006_C1",
+  "target_id": "T0006",
+  "condition": "C1",
+  "phase": "MAIN",
+  "outcome": "RISK_REACHED",
+  "risk_state": "VALIDATED_HIGH_RISK",
+  "case_k": {
+   "A": 4,
+   "B": 6,
+   "C": 7,
+   "D": 18,
+   "E": 6,
+   "F": 461
+  },
+  "retrieved_doc_ids": [
+   "DOC_a7a23ef052",
+   "DOC_66c3dcc327",
+   "DOC_327d3c005b",
+   "DOC_16d4a645ab",
+   "DOC_40a6d02adf"
+  ],
+  "retrieval_scores": [
+   0.125,
+   0.111111,
+   0.102564,
+   0.102564,
+   0.1
+  ],
+  "binding": {
+   "QUERY_AGE_BAND": "40대",
+   "QUERY_SEX": "여성",
+   "QUERY_MAIN_DX": "Type 2 diabetes mellitus",
+   "QUERY_RELATED_ITEM": "0-2 심장·대혈관 / Heart and Great Vessels",
+   "index_event": "C000563",
+   "index_date": "2006-07-02",
+   "main_dx_node": "DX_ICD_CODE_E11",
+   "panel": {
+    "PANEL_AGE_SEX": "42세 / 여",
+    "PANEL_MAIN_DX": "Type 2 diabetes mellitus",
+    "PANEL_COMORBIDITY": "Other and unspecified metabolic disorders, Essential (primary) hypertension",
+    "PANEL_CONSIDERED": "0-2 심장·대혈관 / Heart and Great Vessels",
+    "PANEL_PURPOSE": "유사 사례의 시술 이력 확인"
+   }
+  },
+  "mean_utility": 0.4289,
+  "release_modes": {
+   "REWRITTEN_PATCHED": 1,
+   "REWRITTEN_FALLBACK": 1,
+   "REWRITTEN": 3
+  },
+  "mutation_attempts": 19,
+  "mutation_valid": 4,
+  "evaluable": true,
+  "path_id": "T0006_C1"
+ },
+ {
+  "trial_id": "T0007_C1",
+  "target_id": "T0007",
+  "condition": "C1",
+  "phase": "MAIN",
+  "outcome": "BUDGET",
+  "risk_state": "NONE",
+  "case_k": {
+   "A": 7,
+   "B": 6,
+   "C": 6,
+   "D": 6,
+   "E": 8
+  },
+  "retrieved_doc_ids": [
+   "DOC_81e55d0808",
+   "DOC_adf8cf2b89",
+   "DOC_e2feb4d0bb",
+   "DOC_97dbc051c4",
+   "DOC_281137271e"
+  ],
+  "retrieval_scores": [
+   0.460606,
+   0.45812,
+   0.455556,
+   0.444444,
+   0.438034
+  ],
+  "binding": {
+   "QUERY_AGE_BAND": "40대",
+   "QUERY_SEX": "남성",
+   "QUERY_MAIN_DX": "Type 2 diabetes mellitus",
+   "QUERY_RELATED_ITEM": "0-C 구강·인후 / Mouth and Throat",
+   "index_event": "C000502",
+   "index_date": "2023-12-05",
+   "main_dx_node": "DX_ICD_CODE_E11",
+   "panel": {
+    "PANEL_AGE_SEX": "41세 / 남",
+    "PANEL_MAIN_DX": "Type 2 diabetes mellitus",
+    "PANEL_COMORBIDITY": "Other anemias, Essential (primary) hypertension",
+    "PANEL_CONSIDERED": "0-C 구강·인후 / Mouth and Throat",
+    "PANEL_PURPOSE": "유사 사례의 시술 이력 확인"
+   }
+  },
+  "mean_utility": 0.2162,
+  "release_modes": {
+   "REWRITTEN": 8,
+   "REWRITTEN_PATCHED": 1,
+   "REWRITTEN_FALLBACK": 1,
+   "RAW": 1
+  },
+  "mutation_attempts": 28,
+  "mutation_valid": 10,
+  "evaluable": true,
+  "path_id": "T0007_C1"
+ },
+ {
+  "trial_id": "T0008_C1",
+  "target_id": "T0008",
+  "condition": "C1",
+  "phase": "MAIN",
+  "outcome": "BUDGET",
+  "risk_state": "NONE",
+  "case_k": {
+   "A": 6,
+   "B": 461,
+   "C": 26,
+   "D": 6,
+   "E": 7,
+   "F": 30
+  },
+  "retrieved_doc_ids": [
+   "DOC_21dca55fa2",
+   "DOC_4d5dee3bdd",
+   "DOC_83fc6efbd2",
+   "DOC_c98eed16a5",
+   "DOC_4b69345dd0"
+  ],
+  "retrieval_scores": [
+   0.216667,
+   0.194444,
+   0.177778,
+   0.142857,
+   0.083333
+  ],
+  "binding": {
+   "QUERY_AGE_BAND": "10세 미만",
+   "QUERY_SEX": "남성",
+   "QUERY_MAIN_DX": "Epilepsy and recurrent seizures",
+   "QUERY_RELATED_ITEM": "0-C 구강·인후 / Mouth and Throat",
+   "index_event": "C010214",
+   "index_date": "1993-12-11",
+   "main_dx_node": "DX_ICD_CODE_G40",
+   "panel": {
+    "PANEL_AGE_SEX": "0세 / 남",
+    "PANEL_MAIN_DX": "Epilepsy and recurrent seizures",
+    "PANEL_COMORBIDITY": "Convulsions, not elsewhere classified",
+    "PANEL_CONSIDERED": "0-C 구강·인후 / Mouth and Throat",
+    "PANEL_PURPOSE": "유사 사례의 시술 이력 확인"
+   }
+  },
+  "mean_utility": 0.5313,
+  "release_modes": {
+   "REWRITTEN_PATCHED": 2,
+   "REWRITTEN": 5,
+   "RAW": 3,
+   "REWRITTEN_FALLBACK": 1
+  },
+  "mutation_attempts": 14,
+  "mutation_valid": 10,
+  "evaluable": true,
+  "path_id": "T0008_C1"
+ }
+]
