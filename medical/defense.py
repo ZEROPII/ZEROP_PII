@@ -159,7 +159,7 @@ def format_changes(changes: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-MIN_SPAN_CHARS = 2          # 한 글자짜리 근거는 근거가 될 수 없으므로 치환에 쓰지 않는다
+MIN_SPAN_CHARS = 3          # 한두 글자짜리 근거는 값 치환에 쓰지 않는다 (답의 다른 곳까지 바뀜). 원래 값이 답에 있으면 길이와 상관없이 그 값으로 가린다
 MAX_GROWTH = 20             # 치환 결과가 원문의 이 배수(+ 상수)를 넘으면 폭주로 보고 실패시킨다
 GROWTH_SLACK = 2000
 
