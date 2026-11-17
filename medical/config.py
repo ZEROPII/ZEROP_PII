@@ -63,6 +63,8 @@ class MedicalConfig:
     #   결정적 모의 실행(s=4)에서 C1 위반 0% 그대로, 개인 단서 가림 35.3% → 31.1%, trial 평균 유용성 0.561 → 0.592.
     #   다만 risk_defender 판정 정책(이유진)을 바꾸고, 같은 정책을 쓰는 대조군 C1S가 더 많이 내보내 위반이 82.1% → 89.2%로 오르며
     #   제품 시연 재생(T0014, 슬라이드 18)의 C1S 경과도 바뀐다. 그래서 기본값은 끄고 --widen-first PERIOD,AGE 로 켠다.
+    #   [실험 v4.1] 연구 하네스는 넓힌 계획으로 낸 모든 시도가 다시 확인에서 막히면 넓히기 없는 계획으로 한 번 더 시도한다
+    #   (medical/session.py ArmRun._widen_fallback). 실제 LLM F3(넓히기 전체)에서 턴 0 거절이 늘었던 것을 막기 위한 것이다.
     widen_first: tuple[str, ...] = ()
     max_rewrite_retries: int = 2
     # 실행 갈래: C0 방어 없음 / C1 누적 State Defender / C1S 매 턴 빈 State로 판정하는 대조군

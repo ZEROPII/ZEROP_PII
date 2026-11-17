@@ -59,6 +59,11 @@ class Basis(list):
     k_cap: int | None = None
 
 
+def _plan_key(plans: list) -> list:
+    """[실험 v4.1] 계획 비교용: 사례마다 공개별 (판정, 내보낼 노드)."""
+    return [(p.ref, [(x.action, x.to_node) for x in p.decisions]) for p in plans]
+
+
 def release_need(suppress_threshold: int, k_before: int) -> int:
     """릴리스 후 최소 k. 계획기의 fallback 하한(defense: k > s 허용)과 같은 경계를 쓴다.
 
@@ -372,8 +377,44 @@ class ArmRun:
             if not mask_ok:
                 return Release(REFUSAL_TEXT, _empty_view(), "REFUSAL_UNMAPPED", [], [], [], 0.0, 0)
             masks += self._mask_list(raw_view, raw, query, "UNMAPPED")
+        plans = self._plan_all(raw_view)
+        rel = self._release_plans(query, raw, raw_view, masks, plans)
+        return self._widen_fallback(query, raw, raw_view, masks, plans, rel)
+
+    def _plan_all(self, raw_view: CaseView, no_widen: bool = False) -> list:
+        """사례마다 계획. no_widen=True면 억제 전 넓히기(widen_first)를 잠시 끄고 계획한다 ([실험 v4.1] 되돌리기용)."""
         d = self.ctx.defender
-        plans = [d.plan_case(ref, self._basis(ref), raw_view.disclosures[ref], raw_view.sources[ref]) for ref in raw_view.case_refs]
+        saved = getattr(d, "widen_first", ())
+        if no_widen:
+            d.widen_first = ()
+        try:
+            return [d.plan_case(ref, self._basis(ref), raw_view.disclosures[ref], raw_view.sources[ref]) for ref in raw_view.case_refs]
+        finally:
+            if no_widen:
+                d.widen_first = saved
+
+    def _widen_fallback(self, query: str, raw: str, raw_view: CaseView, masks: list, plans: list, rel: Release) -> Release:
+        """[실험 v4.1] 넓히기 되돌리기 (연구 하네스 ArmRun만).
+        억제 전 넓히기(widen_first)를 켜면 넓혀 써야 할 값이 크게 늘어(F3 턴 0: 3개 → 63개) 재작성이 다 바꾸지 못하고,
+        고친 답에 원래 이름 · 날짜가 남아 다시 확인에서 막힌다(F3 NO_CASE 2). 넓힌 계획으로 낸 모든 시도가 막혀 거절하게 되면,
+        넓히기 없는 계획(v4 기본과 같음)으로 한 번 더 재작성 · 다시 확인한다. 넓히기가 통과한 턴에서만 이득을 얻고,
+        막힌 턴은 기본 정책 수준으로 돌아간다. 판정 기준(k>g, 없으면 k>s)과 다시 확인 하한은 그대로다."""
+        widen = tuple(getattr(self.ctx.defender, "widen_first", ()) or ())
+        if not widen or type(self) is not ArmRun or rel.mode != "REFUSAL" or not rel.attempts:
+            return rel
+        plans2 = self._plan_all(raw_view, no_widen=True)
+        if _plan_key(plans2) == _plan_key(plans):
+            return rel                                   # 넓히기가 바꾼 판정이 없으면 다시 해도 같다
+        rel2 = self._release_plans(query, raw, raw_view, masks, plans2)
+        for p in rel2.plans:
+            p["widen_fallback"] = True
+        attempts = [dict(a, phase="widen") for a in rel.attempts] + [dict(a, phase="no_widen") for a in rel2.attempts]
+        return Release(rel2.text, rel2.view, rel2.mode, rel2.plans, rel2.changes, attempts, rel2.utility,
+                       rel.extraction_tries + rel2.extraction_tries)
+
+    def _release_plans(self, query: str, raw: str, raw_view: CaseView, masks: list, plans: list) -> Release:
+        """계획(plans)대로 재작성 · 다시 확인 · 남은 값 가리기를 하고 공개 또는 거절한다."""
+        d = self.ctx.defender
         decisions = [x for p in plans for x in p.decisions]
         # [수정본] 방어가 넓히기로 정한 공개 (범주어 · 계획된 노드). 검증이 이 범주어를 막지 않고, k는 계획된 노드로 센다
         planned = [(p.ref, self.ctx.data.label(x.to_node), dict(x.disclosure, node_id=x.to_node), x.source)
