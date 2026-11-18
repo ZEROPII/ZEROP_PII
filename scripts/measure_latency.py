@@ -3,6 +3,7 @@
 
     python scripts/measure_latency.py                          실제 LLM(.env), 유형마다 2명, 갈래 C0 · C1, 8턴(턴 0~7)
     python scripts/measure_latency.py --per-type 1             호출을 줄여 먼저 확인
+    python scripts/measure_latency.py --suppress-threshold 4   억제 기준 s를 바꿔 잼 (기본 3 = 옵션 A, 4 = 옵션 B)
     python scripts/measure_latency.py --llm oracle --per-type all   LLM 없음: k 계산 · 판정 시간만 (호출 0)
     python scripts/measure_latency.py --summarize runs/latency/<폴더>  기록으로 표만 다시 만들기
 
@@ -423,6 +424,9 @@ def summarize(out: Path) -> dict[str, Any]:
         if s:
             L.append(f"- LLM 클라이언트 설정: 요청 간 최소 간격 {s.get('llm_min_interval_sec')}초 · timeout {s.get('llm_timeout_sec')}초 · "
                      f"재시도 {s.get('llm_max_retries')}번 · 동시 호출 1")
+        cf = meta.get("config") or {}
+        L.append(f"- 판정 기준: s={m.get('suppress_threshold', cf.get('suppress_threshold'))} · "
+                 f"g={m.get('generalize_threshold', cf.get('generalize_threshold'))} · k_req={m.get('k_req', cf.get('k_req'))}")
         L.append(f"- 실행 조건: 갈래 {m.get('arms')} · 유형마다 {m.get('per_type')}명(질의 환자 {m.get('trials')}명) · "
                  f"턴 0~{m.get('budget')} · 퍼저 {m.get('fuzzer')} · 규칙 추출 {'켬' if m.get('rule_extract') else '끔'} · "
                  f"답 형식 {m.get('answer_style')}")
@@ -547,6 +551,43 @@ def summarize(out: Path) -> dict[str, Any]:
         L.append(f"\n- {arm}: 턴 평균 {r['mean'] / 1000:.2f}초 중 LLM 호출 {r['llm_wall_mean']:.2f}초"
                  f"(서버 응답 시간 합 {r['llm_latency_mean']:.2f}초, 차이는 요청 간격 대기 · 실패한 재시도). 공개 방식 {r['modes']}")
 
+    # 5-1) 방어 갈래의 턴 전체를 그대로 나간 턴 · 고친 턴 · 거절 턴으로 나눔 (발표 '안전한 턴' · '고친 턴')
+    res["turn_split"], res["stages"] = {}, {}
+    split_rows: list[str] = []
+    for arm in sorted({t["arm"] for t in turns if t["arm"] != "C0"}):
+        ts = [t for t in turns if t["arm"] == arm and not t.get("shared_answer")]
+        for key, name, pick in (("raw", "그대로 나간 턴 (RAW)", lambda m: m == "RAW"),
+                                ("changed", "고친 턴 (재작성 · 값 치환)", lambda m: m.startswith("REWRITTEN")),
+                                ("refusal", "거절 턴", lambda m: m.startswith("REFUSAL"))):
+            xs = [t["total_ms"] for t in ts if pick(str(t.get("mode") or ""))]
+            if xs:
+                s = stats(xs)
+                res["turn_split"][f"{arm}:{key}"] = s
+                split_rows.append(row(f"{arm} · {name}", s))
+    if split_rows:
+        L.append("\n### 5-1. 방어 갈래의 턴 전체 시간: 그대로 나간 턴 · 고친 턴 · 거절 턴 (턴 1 이후)\n")
+        L.append("| 갈래 · 턴 | 턴 수 | 평균 | 중앙값 | p95 | 최대 |")
+        L.append("| --- | --- | --- | --- | --- | --- |")
+        L += split_rows
+
+    # 5-2) 단계별 (계획 · 추출 · 재작성 · 검증): 그 단계가 있었던 턴만, 턴 1 이후
+    stage_rows: list[str] = []
+    for arm in sorted({t["arm"] for t in turns if t["arm"] != "C0"}):
+        ts = [t for t in turns if t["arm"] == arm and not t.get("shared_answer")]
+        for key, name, unit, val in (("plan", "계획 (판정)", "ms", lambda t: t.get("decide_ms") if t.get("plan_calls") else None),
+                                     ("extract", "추출", "s", lambda t: t["llm"].get("extract", {}).get("wall_ms") or None),
+                                     ("rewrite", "재작성", "s", lambda t: t["llm"].get("rewrite", {}).get("wall_ms") or None),
+                                     ("verify", "검증 (다시 확인)", "s", lambda t: t.get("verify_ms") or None)):
+            s = stats([val(t) for t in ts])
+            if s["n"]:
+                res["stages"][f"{arm}:{key}"] = dict(s, unit=unit)
+                stage_rows.append(row(f"{arm} · {name}", s, unit, extra=f" {'ms' if unit == 'ms' else '초'} |"))
+    if stage_rows:
+        L.append("\n### 5-2. 단계별 시간 (계획 · 추출 · 재작성 · 검증, 그 단계가 있었던 턴만, 턴 1 이후)\n")
+        L.append("| 갈래 · 단계 | 턴 수 | 평균 | 중앙값 | p95 | 최대 | 단위 |")
+        L.append("| --- | --- | --- | --- | --- | --- | --- |")
+        L += stage_rows
+
     # 6) 턴 0
     if prefixes:
         L.append("\n## 6. 턴 0 (사례 검색 첫 답)\n")
@@ -569,6 +610,22 @@ def summarize(out: Path) -> dict[str, Any]:
     L.append("- 추출 형식이 틀리면 같은 답을 다시 추출한다(최대 3번). 재작성은 두 번까지 시도하고 매번 다시 확인 추출을 한다.")
     L.append("- 바꿀 것이 있는 턴은 판정을 두 번 한다(최소 공개 단위만 바꾸면 되는지 먼저 보고, 아니면 공개 단계에서 다시).")
     L.append("- 정규화 · 기록용 k(사례마다 후보 수와 방어 전 후보 수)는 '기타'에 들어간다. 호출은 한 번에 하나씩(동시 호출 1)이라 병렬로 겹치는 시간은 없다.")
+    # 8) 호출 수 · 토큰 · 정가 기준 비용
+    tin = sum(u.get("input_tokens") or 0 for u in usage)
+    tout = sum(u.get("output_tokens") or 0 for u in usage)
+    models = sorted({str(u.get("model")) for u in usage if u.get("model")})
+    haiku45 = bool(models) and all(x.startswith("claude-haiku-4-5") for x in models)
+    price = round(tin / 1e6 * 1.0 + tout / 1e6 * 5.0, 2) if haiku45 else None
+    calls = collections.Counter(u.get("role") for u in usage)
+    res["cost"] = dict(calls=len(usage), failed_calls=len(errors), by_role=dict(calls), input_tokens=tin, output_tokens=tout,
+                       models=models, list_price_usd=price)
+    L.append("\n## 8. 호출 수 · 토큰 · 정가 기준 비용\n")
+    L.append(f"- 호출 {len(usage)}회 (" + " · ".join(f"{r} {calls[r]}" for r in sorted(calls, key=lambda r: ROLE_ORDER.index(r) if r in ROLE_ORDER else 99))
+             + f") · 실패 호출 {len(errors)}회")
+    L.append(f"- 토큰: 입력 {tin:,} · 출력 {tout:,} · 모델 {', '.join(models) or '-'}")
+    L.append(f"- 정가 기준 비용: " + (f"약 ${price:.2f} (Claude Haiku 4.5 입력 $1 · 출력 $5, 100만 토큰당). 실제 청구 금액은 대시보드에서 확인"
+                                     if price is not None else "모델이 Claude Haiku 4.5가 아니어서 계산하지 않음"))
+
     text = "\n".join(L) + "\n"
     (out / "시간요약.md").write_text(text, encoding="utf-8")
     (out / "시간요약.json").write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -583,6 +640,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--per-type", default="2", help="질의 유형마다 질의 환자 수 (all = 전원)")
     ap.add_argument("--arms", default="C0,C1")
     ap.add_argument("--budget", type=int, default=7, help="이어지는 턴 수. 7이면 턴 0~7 (발표 결과 ①·③의 8턴)")
+    ap.add_argument("--suppress-threshold", type=int, default=3,
+                    help="억제 기준 s. 기본 3 = 옵션 A(공개 기준 k≥4), 4 = 옵션 B. 제품 기본값(medical/config.py)과 따로 정해 run_meta에 남긴다")
     ap.add_argument("--fuzzer", choices=("uniform", "feedback"), default="uniform")
     ap.add_argument("--mode", choices=("efficiency", "exploration"), default="efficiency")
     ap.add_argument("--answer-style", choices=("on", "off"), default="on")
@@ -617,9 +676,12 @@ def main(argv: list[str] | None = None) -> int:
     out = Path(a.out or ROOT / "runs" / "latency" / f"{time.strftime('%Y%m%d_%H%M%S')}_{a.llm}")
     out.mkdir(parents=True, exist_ok=True)
     data = MedicalData()
-    cfg = MedicalConfig(arms=arms, fuzzer=a.fuzzer, mode=a.mode, budget_B=a.budget, rule_extract=not a.no_rule_extract)
+    cfg = MedicalConfig(arms=arms, fuzzer=a.fuzzer, mode=a.mode, budget_B=a.budget, rule_extract=not a.no_rule_extract,
+                        suppress_threshold=a.suppress_threshold)
     role_models = {r: m for r, m in dict(extractor=a.extractor_model, rewriter=a.rewriter_model).items() if m}
     measurement: dict[str, Any] = dict(command=" ".join(["python", "scripts/measure_latency.py", *(argv if argv is not None else sys.argv[1:])]),
+                                       suppress_threshold=cfg.suppress_threshold, generalize_threshold=cfg.generalize_threshold,
+                                       k_req=cfg.k_req,
                                        llm=a.llm, arms=list(arms), per_type=a.per_type, budget=a.budget, fuzzer=a.fuzzer, mode=a.mode,
                                        rule_extract=cfg.rule_extract, answer_style=ANSWER_STYLE_ID if a.answer_style == "on" else "off",
                                        concurrency=1, path="RedTeamJob._group과 같음: make_prefix → RuledArmRun(live=True).run()",
@@ -665,7 +727,8 @@ def main(argv: list[str] | None = None) -> int:
         (out / "run_meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
 
     save_meta(False)
-    print(f"[측정] 질의 환자 {len(plan)}명 × 갈래 {','.join(arms)} · 턴 0~{a.budget} · LLM {a.llm}"
+    print(f"[측정] 질의 환자 {len(plan)}명 × 갈래 {','.join(arms)} · 턴 0~{a.budget} · "
+          f"s={cfg.suppress_threshold} g={cfg.generalize_threshold} k_req={cfg.k_req} · LLM {a.llm}"
           + (f" (모델 {measurement['models_configured']['target']}"
              + "".join(f", {r} {m}" for r, m in role_models.items()) + ")" if a.llm == "real" else ""))
     doc_patient = {dd["doc_id"]: p for p, dd in ctx.docs.items()}

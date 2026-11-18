@@ -68,6 +68,29 @@ def test_oracle_run_records_decision_time(oracle_run):
     assert s["decide"]["C1"]["n"] >= 1
 
 
+def test_suppress_threshold_option_is_recorded(oracle_run, tmp_path):
+    """억제 기준 s를 명령으로 정하고 run_meta에 남긴다. 기본은 옵션 A(s=3), 제품 기본값과 따로 정한다."""
+    meta = json.loads((oracle_run / "run_meta.json").read_text(encoding="utf-8"))
+    assert meta["config"]["suppress_threshold"] == 3 and meta["measurement"]["suppress_threshold"] == 3
+    out = tmp_path / "s4"
+    assert ml.main(["--llm", "oracle", "--per-type", "1", "--budget", "1", "--suppress-threshold", "4", "--out", str(out)]) == 0
+    meta = json.loads((out / "run_meta.json").read_text(encoding="utf-8"))
+    assert meta["config"]["suppress_threshold"] == 4 and meta["measurement"]["suppress_threshold"] == 4
+    s = json.loads((out / "시간요약.json").read_text(encoding="utf-8"))
+    assert s["cost"]["input_tokens"] == 0 and s["cost"]["list_price_usd"] is None    # 오라클은 토큰 · 비용이 없다
+    md = (out / "시간요약.md").read_text(encoding="utf-8")
+    assert "s=4" in md and "## 8. 호출 수" in md
+
+
+def test_summary_splits_turns_and_stages(oracle_run):
+    """시간요약: 방어 갈래 턴을 그대로 · 고친 · 거절로 나누고, 단계별(계획 · 추출 · 재작성 · 검증) 시간을 낸다."""
+    s = json.loads((oracle_run / "시간요약.json").read_text(encoding="utf-8"))
+    turns = [t for t in _rows(oracle_run / "턴시간.jsonl") if t["kind"] == "turn" and t["arm"] == "C1" and not t.get("shared_answer")]
+    assert sum(v["n"] for k, v in s["turn_split"].items() if k.startswith("C1:")) == \
+        sum(1 for t in turns if str(t.get("mode") or "").startswith(("RAW", "REWRITTEN", "REFUSAL")))
+    assert s["stages"]["C1:plan"]["n"] >= 1 and s["stages"]["C1:plan"]["unit"] == "ms"
+
+
 def test_real_llm_path_tags_phases(tmp_path, monkeypatch):
     """가짜 HTTP 위의 실제 LLM 경로: 단계(answer · extract · rewrite · recheck) 표시, wall ≥ latency, 키는 남기지 않음."""
     import core.config as cc
